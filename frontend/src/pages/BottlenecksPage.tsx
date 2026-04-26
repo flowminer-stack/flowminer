@@ -19,7 +19,7 @@ import {
   Cell,
 } from 'recharts';
 import { useMiningStore } from '@/store';
-import { useEventLogData } from '@/hooks/useProcessMining';
+import { useEventLogData, useQueueAnalysis } from '@/hooks/useProcessMining';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
 import { WhatIfSlider, AutomationCandidates } from '@/components/Bottlenecks/WhatIfAndAutomation';
@@ -63,6 +63,7 @@ export default function BottlenecksPage() {
     });
   };
   const { bottlenecks, bottlenecksLoading, error, fetchBottlenecks } = useMiningStore();
+  const { data: queueData, loading: queueLoading } = useQueueAnalysis(eventLogId);
   const [search, setSearch] = useState('');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [dbsmSort, setDbsmSort] = useState<'desc' | 'asc' | null>(null);
@@ -248,6 +249,192 @@ export default function BottlenecksPage() {
           </div>
         </div>
       )}
+
+      {/* Queue Analysis (M/M/c) */}
+      <div className="mt-8">
+        <h2 className="text-[14px] font-semibold text-fg">
+          <HintTooltip text="Queue mining fits an M/M/c queueing model per activity to estimate waiting-time components. (Senderovich et al., 2015)">
+            Queue Analysis
+          </HintTooltip>
+        </h2>
+
+        {queueLoading && (
+          <div className="mt-4 flex items-center gap-2 text-[12px] text-fg-muted">
+            <div className="h-3 w-3 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+            Running M/M/c queue model…
+          </div>
+        )}
+
+        {!queueLoading && queueData && queueData.per_activity.length > 0 && (
+          <div className="mt-4 space-y-3">
+            {queueData.per_activity.slice(0, 8).map((qa) => {
+              const pct = Math.round(qa.utilization * 100);
+              const healthColor =
+                qa.queue_health === 'saturated'
+                  ? 'bg-danger'
+                  : qa.queue_health === 'strained'
+                  ? 'bg-warning'
+                  : 'bg-success';
+              const healthText =
+                qa.queue_health === 'saturated'
+                  ? 'text-danger'
+                  : qa.queue_health === 'strained'
+                  ? 'text-warning'
+                  : 'text-success';
+
+              const decomp = qa.wait_decomposition;
+              const totalDecomp =
+                decomp.resource_contention_s +
+                decomp.inter_batch_wait_s +
+                decomp.external_dependency_s +
+                decomp.processing_s;
+
+              const pContention = totalDecomp > 0 ? (decomp.resource_contention_s / totalDecomp) * 100 : 0;
+              const pBatch = totalDecomp > 0 ? (decomp.inter_batch_wait_s / totalDecomp) * 100 : 0;
+              const pExternal = totalDecomp > 0 ? (decomp.external_dependency_s / totalDecomp) * 100 : 0;
+              const pProcessing = totalDecomp > 0 ? (decomp.processing_s / totalDecomp) * 100 : 0;
+
+              const waitDelta =
+                qa.expected_wait_time_s !== null
+                  ? qa.actual_avg_wait_time_s - qa.expected_wait_time_s
+                  : null;
+
+              return (
+                <div key={qa.activity} className="card p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-[13px] font-semibold text-fg">
+                          {qa.activity}
+                        </span>
+                        <span
+                          className={clsx(
+                            'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize',
+                            qa.queue_health === 'saturated' && 'bg-danger/10 text-danger',
+                            qa.queue_health === 'strained' && 'bg-warning/10 text-warning',
+                            qa.queue_health === 'healthy' && 'bg-success/10 text-success',
+                          )}
+                        >
+                          {qa.queue_health}
+                        </span>
+                        {!qa.stability && (
+                          <span className="shrink-0 rounded-full bg-danger/10 px-2 py-0.5 text-[10px] font-medium text-danger">
+                            unstable
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Utilization bar */}
+                      <div className="mt-2 flex items-center gap-2">
+                        <div className="flex-1 overflow-hidden rounded-full bg-tint" style={{ height: 6 }}>
+                          <div
+                            className={clsx('h-full rounded-full transition-all', healthColor)}
+                            style={{ width: `${Math.min(pct, 100)}%` }}
+                          />
+                        </div>
+                        <span className={clsx('shrink-0 text-[11px] font-medium tabular-nums', healthText)}>
+                          {pct}%
+                        </span>
+                        <span className="shrink-0 text-[10px] text-fg-faint">
+                          utilization ({qa.estimated_servers}c)
+                        </span>
+                      </div>
+
+                      {/* Wait decomposition stacked bar */}
+                      {totalDecomp > 0 && (
+                        <div className="mt-2">
+                          <div className="flex overflow-hidden rounded-sm" style={{ height: 8 }}>
+                            <HintTooltip text={`Resource contention: ${formatDuration(decomp.resource_contention_s)}`}>
+                              <div
+                                className="bg-danger/70 transition-all"
+                                style={{ width: `${pContention}%`, height: '100%' }}
+                              />
+                            </HintTooltip>
+                            <HintTooltip text={`Inter-batch wait: ${formatDuration(decomp.inter_batch_wait_s)}`}>
+                              <div
+                                className="bg-warning/70 transition-all"
+                                style={{ width: `${pBatch}%`, height: '100%' }}
+                              />
+                            </HintTooltip>
+                            <HintTooltip text={`External dependency: ${formatDuration(decomp.external_dependency_s)}`}>
+                              <div
+                                className="bg-accent/70 transition-all"
+                                style={{ width: `${pExternal}%`, height: '100%' }}
+                              />
+                            </HintTooltip>
+                            <HintTooltip text={`Processing: ${formatDuration(decomp.processing_s)}`}>
+                              <div
+                                className="bg-tint-strong transition-all"
+                                style={{ width: `${pProcessing}%`, height: '100%' }}
+                              />
+                            </HintTooltip>
+                          </div>
+                          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-fg-faint">
+                            <span className="flex items-center gap-1">
+                              <span className="inline-block h-2 w-2 rounded-sm bg-danger/70" />
+                              Contention {formatDuration(decomp.resource_contention_s)}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <span className="inline-block h-2 w-2 rounded-sm bg-warning/70" />
+                              Batch {formatDuration(decomp.inter_batch_wait_s)}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <span className="inline-block h-2 w-2 rounded-sm bg-accent/70" />
+                              External {formatDuration(decomp.external_dependency_s)}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <span className="inline-block h-2 w-2 rounded-sm bg-tint-strong" />
+                              Processing {formatDuration(decomp.processing_s)}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Right column: metrics */}
+                    <div className="shrink-0 space-y-1 text-right text-[11px]">
+                      <div className="text-fg-muted">
+                        Actual wait:{' '}
+                        <span className="font-medium text-fg-secondary">
+                          {formatDuration(qa.actual_avg_wait_time_s)}
+                        </span>
+                      </div>
+                      {qa.expected_wait_time_s !== null && (
+                        <div className="text-fg-muted">
+                          Expected:{' '}
+                          <span className="font-medium text-fg-secondary">
+                            {formatDuration(qa.expected_wait_time_s)}
+                          </span>
+                        </div>
+                      )}
+                      {waitDelta !== null && (
+                        <div
+                          className={clsx(
+                            'text-[10px]',
+                            waitDelta > 0 ? 'text-danger' : 'text-success',
+                          )}
+                        >
+                          {waitDelta > 0 ? '+' : ''}
+                          {formatDuration(waitDelta)} vs model
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Legend note */}
+            <p className="text-[11px] text-fg-faint">
+              M/M/c Erlang-C model per activity. Utilization = lambda / (c * mu). (Senderovich et al., 2015)
+            </p>
+          </div>
+        )}
+
+        {!queueLoading && (!queueData || queueData.per_activity.length === 0) && (
+          <p className="mt-4 text-[12px] text-fg-muted">No queue analysis data available.</p>
+        )}
+      </div>
 
       {/* Bottleneck details */}
       <div className="mt-6">

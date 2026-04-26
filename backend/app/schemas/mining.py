@@ -864,3 +864,36 @@ class DriftResponse(BaseModel):
     windows: list[DriftWindow]
     drifts: list[DriftPoint]
     summary: DriftSummary
+
+
+# --- Queue Mining (M/M/c) ---
+
+
+class WaitDecomposition(BaseModel):
+    resource_contention_s: float = Field(..., description="Estimated wait due to resource contention (M/M/c Erlang-C model)")
+    inter_batch_wait_s: float = Field(..., description="Estimated wait due to inter-batch arrival clustering")
+    external_dependency_s: float = Field(..., description="Residual wait (external dependencies / other)")
+    processing_s: float = Field(..., description="Mean activity service/processing time")
+
+
+class QueueActivity(BaseModel):
+    activity: str = Field(..., description="Activity name")
+    arrival_rate_per_hour: float = Field(..., description="Arrival rate lambda (arrivals/hour)")
+    service_rate_per_hour: float = Field(..., description="Service rate mu (completions/hour per server)")
+    estimated_servers: int = Field(..., description="Estimated server count c (distinct resources)")
+    utilization: float = Field(..., description="Traffic intensity rho = lambda / (c * mu), clamped to 0.999")
+    expected_wait_time_s: float | None = Field(default=None, description="E[Wq] from M/M/c Erlang-C formula (seconds); null if unstable")
+    actual_avg_wait_time_s: float = Field(..., description="Observed average waiting time before this activity (seconds)")
+    wait_decomposition: WaitDecomposition
+    queue_health: str = Field(..., description="healthy (rho<0.7) | strained (0.7-0.9) | saturated (>0.9)")
+    stability: bool = Field(..., description="True if rho < 1 (system is stable)")
+
+
+class QueueSummary(BaseModel):
+    max_utilization_activity: str | None = Field(default=None, description="Activity with highest utilization")
+    system_throughput_cases_per_hour: float = Field(..., description="Overall case throughput (cases/hour)")
+
+
+class QueueMiningResponse(BaseModel):
+    per_activity: list[QueueActivity]
+    summary: QueueSummary

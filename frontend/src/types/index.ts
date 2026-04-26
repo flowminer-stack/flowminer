@@ -961,6 +961,38 @@ export interface DriftResponse {
   summary: DriftSummary;
 }
 
+// ─── Queue Mining (M/M/c) ────────────────────────────────────────────────────
+
+export interface WaitDecomposition {
+  resource_contention_s: number;
+  inter_batch_wait_s: number;
+  external_dependency_s: number;
+  processing_s: number;
+}
+
+export interface QueueActivity {
+  activity: string;
+  arrival_rate_per_hour: number;
+  service_rate_per_hour: number;
+  estimated_servers: number;
+  utilization: number;
+  expected_wait_time_s: number | null;
+  actual_avg_wait_time_s: number;
+  wait_decomposition: WaitDecomposition;
+  queue_health: 'healthy' | 'strained' | 'saturated';
+  stability: boolean;
+}
+
+export interface QueueSummary {
+  max_utilization_activity: string | null;
+  system_throughput_cases_per_hour: number;
+}
+
+export interface QueueMiningResponse {
+  per_activity: QueueActivity[];
+  summary: QueueSummary;
+}
+
 // ─── UI ──────────────────────────────────────────────────────────────────────
 
 export interface Notification {
