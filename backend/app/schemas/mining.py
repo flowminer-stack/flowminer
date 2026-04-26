@@ -140,9 +140,19 @@ class WaitingTime(BaseModel):
     frequency: int = Field(..., description="Number of transitions observed")
 
 
+class DBSMScore(BaseModel):
+    activity: str = Field(..., description="Activity name")
+    dbsm_score: float = Field(..., description="DBSM composite score 0-100")
+    delay_component: float = Field(..., description="Delay component score 0-100")
+    pressure_component: float = Field(..., description="Resource pressure component score 0-100")
+    impact_component: float = Field(..., description="Cycle-time impact component score 0-100")
+    rank: int = Field(..., description="Rank by DBSM score (1 = worst)")
+
+
 class BottleneckResponse(BaseModel):
     bottlenecks: list[Bottleneck]
     waiting_times: list[WaitingTime]
+    dbsm_scores: list[DBSMScore] = Field(default_factory=list)
 
 
 # --- Conformance Checking ---

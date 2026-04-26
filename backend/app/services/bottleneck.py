@@ -34,14 +34,30 @@ class BottleneckService:
         - Waiting time = transition time between activities.
 
         Returns:
-            dict with "bottlenecks" and "waiting_times" lists.
+            dict with "bottlenecks", "waiting_times", and "dbsm_scores" lists.
         """
         if df.empty:
-            return {"bottlenecks": [], "waiting_times": []}
+            return {"bottlenecks": [], "waiting_times": [], "dbsm_scores": []}
 
         # Rust fast path (replaces iterrows bottleneck)
         rs_result = _rs_bottlenecks(df)
         if rs_result is not None:
+            # Compute DBSM on top of Rust result if not already present
+            if not rs_result.get("dbsm_scores"):
+                try:
+                    sorted_df = df.sort_values([CASE_COL, TIMESTAMP_COL]).copy()
+                    sorted_df["_next_ts"] = sorted_df.groupby(CASE_COL)[TIMESTAMP_COL].shift(-1)
+                    sorted_df["_next_activity"] = sorted_df.groupby(CASE_COL)[ACTIVITY_COL].shift(-1)
+                    sorted_df["_duration_seconds"] = (
+                        sorted_df["_next_ts"] - sorted_df[TIMESTAMP_COL]
+                    ).dt.total_seconds()
+                    valid = sorted_df.dropna(subset=["_duration_seconds"]).copy()
+                    activity_stats = self._compute_activity_stats(valid)
+                    waiting_times = rs_result.get("waiting_times", [])
+                    rs_result["dbsm_scores"] = self.compute_dbsm_scores(valid, activity_stats, waiting_times)
+                except Exception as e:
+                    logger.warning(f"DBSM computation on Rust result failed: {e}")
+                    rs_result["dbsm_scores"] = []
             return rs_result
 
         try:
@@ -65,14 +81,116 @@ class BottleneckService:
             # --- Waiting time analysis (per transition) ---
             waiting_times = self._compute_waiting_times(valid)
 
+            # --- DBSM single-score ranking ---
+            dbsm_scores = self.compute_dbsm_scores(valid, activity_stats, waiting_times)
+
             return {
                 "bottlenecks": bottlenecks,
                 "waiting_times": waiting_times,
+                "dbsm_scores": dbsm_scores,
             }
 
         except Exception as e:
             logger.error(f"Error in bottleneck analysis: {e}", exc_info=True)
             raise
+
+    def compute_dbsm_scores(
+        self,
+        df: pd.DataFrame,
+        activity_stats: list,
+        waiting_times: list,
+    ) -> list:
+        """
+        Compute DBSM (Dynamic Bottleneck Scoring Method) scores per activity.
+
+        Blends three components into a single 0-100 score:
+        - Delay (40%): avg duration vs overall median duration
+        - Resource pressure (30%): tail-to-median ratio (or waiting-time ratio)
+        - Cycle-time impact (30%): share of total log duration consumed
+
+        Returns:
+            list of dicts sorted by dbsm_score descending with ranks assigned.
+        """
+        if not activity_stats:
+            return []
+
+        # --- Pre-compute globals ---
+        all_avg_durations = [s["avg_duration"] for s in activity_stats]
+        overall_median = float(np.median(all_avg_durations)) if all_avg_durations else 1.0
+        if overall_median == 0:
+            overall_median = 1.0
+
+        # Total log duration = sum of (avg_duration * frequency) across all activities
+        total_log_duration = sum(
+            s["avg_duration"] * s["frequency"] for s in activity_stats
+        )
+        if total_log_duration == 0:
+            total_log_duration = 1.0
+
+        # Build a lookup from activity -> activity_stats dict (for p95/median)
+        stats_by_activity: dict = {s["activity"]: s for s in activity_stats}
+
+        # Compute p95 duration per activity from raw df
+        p95_by_activity: dict = {}
+        grouped = df.groupby(ACTIVITY_COL)["_duration_seconds"]
+        for activity, durations in grouped:
+            p95_by_activity[str(activity)] = float(np.percentile(durations.values, 95))
+
+        # Build waiting-time lookup: activity -> avg wait as source
+        # Use (activity_avg_wait / overall_avg_wait) * 50, capped at 100
+        avg_wait_by_activity: dict = {}
+        overall_avg_wait = 0.0
+        if waiting_times:
+            all_waits = [wt["avg_waiting"] for wt in waiting_times]
+            overall_avg_wait = float(np.mean(all_waits)) if all_waits else 0.0
+            for wt in waiting_times:
+                src = wt["source"]
+                if src not in avg_wait_by_activity:
+                    avg_wait_by_activity[src] = wt["avg_waiting"]
+                else:
+                    # Take the max wait among all outgoing transitions
+                    avg_wait_by_activity[src] = max(avg_wait_by_activity[src], wt["avg_waiting"])
+
+        results = []
+        for stat in activity_stats:
+            activity = stat["activity"]
+            avg_dur = stat["avg_duration"]
+            median_dur = stat["median_duration"] if stat["median_duration"] > 0 else 1.0
+            freq = stat["frequency"]
+            activity_total = avg_dur * freq
+
+            # --- Delay component (40%) ---
+            delay = min(100.0, (avg_dur / overall_median) * 50.0)
+
+            # --- Resource pressure component (30%) ---
+            p95 = p95_by_activity.get(activity, avg_dur)
+            if overall_avg_wait > 0 and activity in avg_wait_by_activity:
+                pressure = min(100.0, (avg_wait_by_activity[activity] / overall_avg_wait) * 50.0)
+            else:
+                pressure = min(100.0, (p95 / median_dur) * 25.0)
+
+            # --- Cycle-time impact component (30%) ---
+            impact = min(100.0, (activity_total / total_log_duration) * 200.0)
+
+            dbsm = round(0.4 * delay + 0.3 * pressure + 0.3 * impact, 1)
+
+            results.append(
+                {
+                    "activity": activity,
+                    "dbsm_score": dbsm,
+                    "delay_component": round(delay, 1),
+                    "pressure_component": round(pressure, 1),
+                    "impact_component": round(impact, 1),
+                    "rank": 0,  # filled in below
+                }
+            )
+
+        # Sort descending by score, assign ranks 1..N
+        results.sort(key=lambda r: r["dbsm_score"], reverse=True)
+        for i, r in enumerate(results):
+            r["rank"] = i + 1
+
+        return results
 
     def _compute_activity_stats(self, valid: pd.DataFrame) -> list:
         """
