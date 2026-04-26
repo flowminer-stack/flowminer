@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
+  Sparkles,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import clsx from 'clsx';
@@ -22,6 +23,7 @@ import LoadingSpinner from '@/components/common/LoadingSpinner';
 import Modal from '@/components/common/Modal';
 import PageHeader from '@/components/common/PageHeader';
 import ConnectorForm from '@/components/Connectors/ConnectorForm';
+import ExtractionCopilot from '@/components/Connectors/ExtractionCopilot';
 import { useUIStore } from '@/store';
 
 const typeIcons: Record<string, React.ElementType> = {
@@ -72,6 +74,7 @@ export default function ConnectorsPage() {
   const [connectorList, setConnectorList] = useState<Connector[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showCopilot, setShowCopilot] = useState(false);
 
   useEffect(() => {
     loadConnectors();
@@ -174,13 +177,23 @@ export default function ConnectorsPage() {
         icon={Plug}
         description="Connect external data sources to import event logs automatically"
         actions={
-          <button
-            className="btn-primary"
-            onClick={() => setShowCreateModal(true)}
-          >
-            <Plus size={18} />
-            New Connector
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              className="btn-ghost flex items-center gap-1.5"
+              onClick={() => setShowCopilot(true)}
+              title="Open the AI copilot to generate event-log extraction SQL"
+            >
+              <Sparkles size={16} />
+              Extraction Copilot
+            </button>
+            <button
+              className="btn-primary"
+              onClick={() => setShowCreateModal(true)}
+            >
+              <Plus size={18} />
+              New Connector
+            </button>
+          </div>
         }
       />
 
@@ -311,6 +324,12 @@ export default function ConnectorsPage() {
           onTest={handleTestNewConnector}
         />
       </Modal>
+
+      {/* Extraction Copilot Modal */}
+      <ExtractionCopilot
+        isOpen={showCopilot}
+        onClose={() => setShowCopilot(false)}
+      />
     </div>
   );
 }

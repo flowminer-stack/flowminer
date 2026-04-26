@@ -1585,6 +1585,32 @@ export const ai = {
     });
     return r.data;
   },
+
+  /**
+   * Multi-turn event-log extraction copilot. Sends the current conversation
+   * history plus optional schema_hint and objective; returns a structured
+   * response with an assistant message and optional SQL/pandas steps.
+   */
+  extractLog: async (body: {
+    schema_hint?: string;
+    objective?: string;
+    history: Array<{ role: 'user' | 'assistant'; content: string }>;
+  }): Promise<{
+    assistant_message: string;
+    suggested_steps: Array<{
+      label: string;
+      rationale: string;
+      sql: string | null;
+      pandas: string | null;
+      columns_used: string[];
+    }>;
+    requires_user_input: boolean;
+    confidence: number;
+    fallback_used: boolean;
+  }> => {
+    const r = await api.post('/ai/extract-log', body);
+    return r.data;
+  },
 };
 
 // Response shape for /ai/explain-variant — structured delta stats
