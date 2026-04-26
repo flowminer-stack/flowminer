@@ -300,9 +300,19 @@ export interface WaitingTime {
   frequency: number;
 }
 
+export interface DBSMScore {
+  activity: string;
+  dbsm_score: number;
+  delay_component: number;
+  pressure_component: number;
+  impact_component: number;
+  rank: number;
+}
+
 export interface BottleneckResponse {
   bottlenecks: Bottleneck[];
   waiting_times: WaitingTime[];
+  dbsm_scores?: DBSMScore[];
 }
 
 export interface ConformanceResponse {

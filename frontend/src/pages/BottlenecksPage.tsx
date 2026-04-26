@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { AlertTriangle, Clock, BarChart3, ArrowRight, Search, X, Activity, Target } from 'lucide-react';
+import { AlertTriangle, Clock, BarChart3, ArrowRight, Search, X, Activity, Target, ChevronDown, ChevronUp } from 'lucide-react';
+import type { DBSMScore } from '@/types';
 import HintTooltip from '@/components/common/Tooltip';
 import clsx from 'clsx';
 import ExportButtons from '@/components/common/ExportButtons';
@@ -63,6 +64,7 @@ export default function BottlenecksPage() {
   const { bottlenecks, bottlenecksLoading, error, fetchBottlenecks } = useMiningStore();
   const [search, setSearch] = useState('');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
+  const [dbsmSort, setDbsmSort] = useState<'desc' | 'asc' | null>(null);
 
   useEffect(() => {
     if (eventLogId) {
@@ -74,13 +76,27 @@ export default function BottlenecksPage() {
   const waitingTimes = bottlenecks?.waiting_times ?? [];
   const criticalBottlenecks = bottleneckItems.filter((b) => b.is_bottleneck);
 
+  const dbsmByActivity = useMemo<Map<string, DBSMScore>>(() => {
+    const map = new Map<string, DBSMScore>();
+    (bottlenecks?.dbsm_scores ?? []).forEach((s) => map.set(s.activity, s));
+    return map;
+  }, [bottlenecks?.dbsm_scores]);
+
   const filteredItems = useMemo(() => {
-    return bottleneckItems.filter((b) => {
+    const filtered = bottleneckItems.filter((b) => {
       const matchesSearch = !search || b.activity.toLowerCase().includes(search.toLowerCase());
       const matchesSeverity = severityFilter === 'all' || b.severity === severityFilter;
       return matchesSearch && matchesSeverity;
     });
-  }, [bottleneckItems, search, severityFilter]);
+    if (dbsmSort !== null) {
+      filtered.sort((a, b) => {
+        const scoreA = dbsmByActivity.get(a.activity)?.dbsm_score ?? -1;
+        const scoreB = dbsmByActivity.get(b.activity)?.dbsm_score ?? -1;
+        return dbsmSort === 'desc' ? scoreB - scoreA : scoreA - scoreB;
+      });
+    }
+    return filtered;
+  }, [bottleneckItems, search, severityFilter, dbsmSort, dbsmByActivity]);
 
   if (bottlenecksLoading) {
     return (
@@ -228,6 +244,31 @@ export default function BottlenecksPage() {
             {filteredItems.length} of {bottleneckItems.length}
           </span>
           <div className="ml-auto flex flex-wrap items-center gap-2">
+            {/* DBSM sort toggle */}
+            {dbsmByActivity.size > 0 && (
+              <button
+                onClick={() =>
+                  setDbsmSort((prev) =>
+                    prev === null ? 'desc' : prev === 'desc' ? 'asc' : null,
+                  )
+                }
+                className={clsx(
+                  'flex items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] transition-all',
+                  dbsmSort !== null
+                    ? 'border-accent bg-accent/10 text-accent'
+                    : 'border-line bg-surface-1 text-fg-muted hover:text-fg',
+                )}
+              >
+                DBSM
+                {dbsmSort === 'desc' ? (
+                  <ChevronDown size={10} />
+                ) : dbsmSort === 'asc' ? (
+                  <ChevronUp size={10} />
+                ) : (
+                  <ChevronDown size={10} className="opacity-40" />
+                )}
+              </button>
+            )}
             {/* Severity filter */}
             <div className="flex rounded-lg border border-line bg-surface-1 p-0.5 gap-0.5">
               {(['all', 'critical', 'high', 'medium', 'low'] as const).map((s) => (
@@ -285,6 +326,15 @@ export default function BottlenecksPage() {
           )}
           {filteredItems.map((bottleneck) => {
             const colors = severityColors[bottleneck.severity];
+            const dbsm = dbsmByActivity.get(bottleneck.activity);
+            const dbsmBarColor =
+              dbsm === undefined
+                ? ''
+                : dbsm.dbsm_score >= 70
+                  ? 'bg-danger'
+                  : dbsm.dbsm_score >= 30
+                    ? 'bg-warning'
+                    : 'bg-success';
             return (
               <div
                 key={bottleneck.activity}
@@ -315,6 +365,28 @@ export default function BottlenecksPage() {
                       <span>
                         Frequency: <span className="font-medium text-fg-secondary">{bottleneck.frequency.toLocaleString()}</span>
                       </span>
+                    </div>
+                    {/* DBSM score bar */}
+                    <div className="mt-3 flex items-center gap-2">
+                      <HintTooltip text="DBSM Score (0-100): blends delay (40%), resource pressure (30%), and cycle-time impact (30%) into a single bottleneck severity. Source: Dynamic Bottleneck Scoring Method (2024).">
+                        <span className="text-[11px] text-fg-muted">DBSM</span>
+                      </HintTooltip>
+                      {dbsm !== undefined ? (
+                        <>
+                          <div className="h-1.5 w-28 overflow-hidden rounded-full bg-tint">
+                            <div
+                              className={clsx('h-full rounded-full transition-all', dbsmBarColor)}
+                              style={{ width: `${dbsm.dbsm_score}%` }}
+                            />
+                          </div>
+                          <span className="text-[11px] font-medium tabular-nums text-fg-secondary">
+                            {dbsm.dbsm_score}
+                          </span>
+                          <span className="text-[10px] text-fg-faint">#{dbsm.rank}</span>
+                        </>
+                      ) : (
+                        <span className="text-[11px] text-fg-faint">&mdash;</span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
