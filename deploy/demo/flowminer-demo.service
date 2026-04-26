@@ -10,10 +10,13 @@
 # what keeps individual containers alive between unit starts, and
 # the demo seeder inside the backend lifespan hook is what
 # repopulates the database on every boot.
+#
+# Demo behaviour is enabled by ``DEMO_MODE=1`` in /srv/flowminer/.env
+# — there is no separate compose override.
 
 [Unit]
 Description=FlowMiner demo stack (docker compose)
-Documentation=https://github.com/flowminer/flowminer
+Documentation=https://github.com/flowminer-stack/flowminer
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
@@ -25,23 +28,14 @@ WorkingDirectory=/srv/flowminer
 # --- Startup ---
 # docker compose returns 0 as soon as the containers are created;
 # healthchecks then bring services into the running state.
-ExecStart=/usr/bin/docker compose \
-    -f docker-compose.yml \
-    -f docker-compose.demo.yml \
-    up -d --remove-orphans
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
 # --- Shutdown ---
-ExecStop=/usr/bin/docker compose \
-    -f docker-compose.yml \
-    -f docker-compose.demo.yml \
-    down
+ExecStop=/usr/bin/docker compose down
 # --- Reload ---
 # `systemctl reload flowminer-demo` pulls the latest images (e.g. after
 # a git pull) and rebuilds without a full stop — useful for rolling
 # updates that don't interrupt the demo.
-ExecReload=/usr/bin/docker compose \
-    -f docker-compose.yml \
-    -f docker-compose.demo.yml \
-    up -d --build
+ExecReload=/usr/bin/docker compose up -d --build
 
 TimeoutStartSec=180
 TimeoutStopSec=60

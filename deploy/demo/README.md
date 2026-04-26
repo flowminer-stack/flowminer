@@ -17,8 +17,8 @@ on a dedicated VPS. The demo is a full FlowMiner instance with:
   chat panel works with no credentials.
 
 None of this changes the normal self-host path: the demo is a single
-env flag (`DEMO_MODE=1`) + a compose override layered on top of the
-stock `docker-compose.yml`.
+env flag — `DEMO_MODE=1` in `.env` — on top of the stock
+`docker-compose.yml`. No compose override, no extra files.
 
 ## Server sizing
 
@@ -41,7 +41,7 @@ newgrp docker  # or log out/in
 
 # Clone the repo
 sudo mkdir -p /srv/flowminer && sudo chown "$USER":"$USER" /srv/flowminer
-git clone https://github.com/flowminer/flowminer /srv/flowminer
+git clone https://github.com/flowminer-stack/flowminer /srv/flowminer
 cd /srv/flowminer
 ```
 
@@ -70,9 +70,14 @@ FLOWMINER_LLM_PROVIDER=openrouter
 OPENROUTER_API_KEY=sk-or-v1-...replace-with-real-key...
 OPENROUTER_MODEL=anthropic/claude-haiku-4-5
 
-# ─ Production mode ──────────────────────────────────────────
+# ─ Production mode + demo behaviour ─────────────────────────
 ENV=production
+DEMO_MODE=1
 ```
+
+`DEMO_MODE=1` is the only flag that turns this into a demo. It
+arms the seeder, the write-guard middleware, and the anonymous
+`/auth/demo` login. Leave it unset for a normal self-host stack.
 
 The OpenRouter key owns all AI spend on the demo. Set a budget cap
 in the OpenRouter dashboard to bound the monthly bill — a few dollars
@@ -81,13 +86,10 @@ turn goes through Haiku 4.5.
 
 ## 3 · First run
 
-Launch the stack with both compose files:
+Launch the stack:
 
 ```bash
-docker compose \
-    -f docker-compose.yml \
-    -f docker-compose.demo.yml \
-    up -d --build
+docker compose up -d --build
 ```
 
 Watch the backend logs and wait for the seeder to finish:
@@ -206,5 +208,6 @@ deployments.
 | `Caddyfile` | Reverse-proxy config for Caddy — TLS + HTTP/2 + the demo hostname. |
 | `flowminer-demo.service` | Systemd unit that runs `docker compose up` on boot. |
 
-See also: `docker-compose.demo.yml` at the repo root (which this
-deployment layers on top of the main `docker-compose.yml`).
+Demo behaviour is purely runtime — flip `DEMO_MODE=1` in `.env`
+and the same `docker-compose.yml` everyone else uses turns into
+the locked-down public demo.
