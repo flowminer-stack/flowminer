@@ -60,6 +60,7 @@ from app.schemas.mining import (
     SimulationRequest,
     SimulationResponse,
     SocialNetworkResponse,
+    StochasticConformanceResponse,
     TemporalProfileResponse,
     TimelineResponse,
     VariantResponse,
@@ -614,6 +615,72 @@ async def check_conformance(
 
     _set_cached(event_log_id, "conformance", result, cache_params)
     return ConformanceResponse(**result)
+
+
+@router.get(
+    "/conformance/{event_log_id}/stochastic",
+    response_model=StochasticConformanceResponse,
+)
+async def check_stochastic_conformance(
+    event_log_id: UUID,
+    reference_model: str | None = Query(
+        default=None,
+        description="Optional reference model as JSON string",
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Stochastic conformance via Earth Mover's Distance (EMD).
+
+    Computes the EMD between the log's empirical variant distribution and
+    the model's sampled stochastic language, giving a frequency-weighted
+    fitness score that distinguishes a 0.1% deviation from a 30% deviation.
+
+    Reference: Polyvyanyy et al., "Earth Movers' Stochastic Conformance"
+    (Information Systems 2021); Leemans & Polyvyanyy, "Stochastic-aware
+    precision and recall measures" (2023).
+
+    Returns:
+        emd_distance         – float in [0, 1], lower = better distributional fit
+        stochastic_fitness   – 1 - emd_distance, higher = better
+        top_deviating_variants – up to 20 variants sorted by |Δ| desc
+        severity_breakdown   – minor / moderate / severe variant counts
+        log_variants_count   – distinct variants in the log
+        model_traces_sampled – traces sampled from the model
+    """
+    ref_model_dict = None
+    if reference_model:
+        try:
+            ref_model_dict = json.loads(reference_model)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="reference_model must be a valid JSON string",
+            )
+
+    cache_params = {"reference_model": ref_model_dict}
+    await _assert_event_log_access(event_log_id, db, current_user)
+    cached = _get_cached(event_log_id, "conformance_stochastic", cache_params)
+    if cached is not None:
+        return StochasticConformanceResponse(**cached)
+
+    _event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
+
+    try:
+        result = await _run_in_thread(
+            mining_engine.compute_stochastic_conformance,
+            df,
+            reference_model=ref_model_dict,
+        )
+    except Exception as e:
+        logger.error("Stochastic conformance failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Stochastic conformance failed: {str(e)}",
+        )
+
+    _set_cached(event_log_id, "conformance_stochastic", result, cache_params)
+    return StochasticConformanceResponse(**result)
 
 
 @router.get("/conformance/{event_log_id}/pdf")

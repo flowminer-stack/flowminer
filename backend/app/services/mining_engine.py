@@ -141,6 +141,24 @@ class MiningEngine:
             df=df, reference_model=reference_model, method=method,
         )
 
+    def compute_stochastic_conformance(
+        self,
+        df: pd.DataFrame,
+        reference_model: dict = None,
+    ) -> dict:
+        """Stochastic conformance via Earth Mover's Distance (EMD).
+
+        Delegates to ConformanceService.compute_stochastic_conformance.
+        See that method for the full docstring and paper references.
+
+        Returns a dict with emd_distance, stochastic_fitness,
+        top_deviating_variants, severity_breakdown, log_variants_count,
+        and model_traces_sampled.
+        """
+        return self.conformance_service.compute_stochastic_conformance(
+            df=df, reference_model=reference_model,
+        )
+
     def run_bottleneck_analysis(self, df: pd.DataFrame) -> dict:
         """
         Run bottleneck analysis to identify slow activities and transitions.

@@ -740,3 +740,70 @@ class Insight(BaseModel):
 class InsightsResponse(BaseModel):
     insights: list[Insight]
     summary: str
+
+
+# --- Stochastic Conformance (EMD-based) ---
+# Ref: Polyvyanyy et al., "Earth Movers' Stochastic Conformance"
+#      Information Systems 2021.
+
+
+class DeviatingVariant(BaseModel):
+    """Per-variant deviation entry from stochastic conformance analysis."""
+
+    variant: list[str] = Field(
+        ...,
+        description="Ordered list of activity labels constituting the trace variant",
+    )
+    log_frequency: float = Field(
+        ...,
+        description="Relative frequency of this variant in the event log (sums to 1.0 across all variants)",
+    )
+    model_probability: float = Field(
+        ...,
+        description="Estimated probability of this variant under the stochastic process model",
+    )
+    contribution: float = Field(
+        ...,
+        description="Absolute difference |log_frequency - model_probability| — higher means more deviation",
+    )
+
+
+class SeverityBreakdown(BaseModel):
+    """Counts of variants bucketed by deviation severity."""
+
+    minor: int = Field(..., description="Variants with |Δ| < 0.05 (negligible frequency mismatch)")
+    moderate: int = Field(..., description="Variants with 0.05 ≤ |Δ| < 0.15")
+    severe: int = Field(..., description="Variants with |Δ| ≥ 0.15 (material frequency deviation)")
+
+
+class StochasticConformanceResponse(BaseModel):
+    """Response model for GET /conformance/{event_log_id}/stochastic.
+
+    Captures the Earth Mover's Distance (EMD) between the log's empirical
+    variant distribution and the model's sampled stochastic language.
+    Lower EMD = log behaviour more closely matches the model.
+    """
+
+    emd_distance: float = Field(
+        ...,
+        description="Earth Mover's Distance in [0, 1]; 0 = perfect distributional fit",
+    )
+    stochastic_fitness: float = Field(
+        ...,
+        description="1 - emd_distance; in [0, 1], higher = better distributional fit",
+    )
+    top_deviating_variants: list[DeviatingVariant] = Field(
+        ...,
+        description="Up to 20 variants sorted by |log_frequency - model_probability| descending",
+    )
+    severity_breakdown: SeverityBreakdown = Field(
+        ...,
+        description="Counts of all variants bucketed by deviation severity",
+    )
+    log_variants_count: int = Field(
+        ..., description="Total number of distinct trace variants observed in the event log"
+    )
+    model_traces_sampled: int = Field(
+        ...,
+        description="Number of traces sampled from the model during stochastic playout",
+    )
