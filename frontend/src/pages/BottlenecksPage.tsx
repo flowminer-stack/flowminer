@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { AlertTriangle, Clock, BarChart3, ArrowRight, Search, X, Activity, Target } from 'lucide-react';
+import { AlertTriangle, Clock, BarChart3, ArrowRight, Search, X, Activity, Target, FlaskConical } from 'lucide-react';
 import HintTooltip from '@/components/common/Tooltip';
 import clsx from 'clsx';
 import ExportButtons from '@/components/common/ExportButtons';
@@ -323,6 +323,20 @@ export default function BottlenecksPage() {
                         {bottleneck.severity}
                       </span>
                     </HintTooltip>
+                    {eventLogId && (
+                      <button
+                        onClick={() =>
+                          navigate(
+                            `/simulate/${eventLogId}?focus=${encodeURIComponent(bottleneck.activity)}&kind=des`,
+                          )
+                        }
+                        className="btn-secondary text-[11px]"
+                        title="Open DES simulator with automation pre-filled for this activity"
+                      >
+                        <FlaskConical size={11} />
+                        Simulate fix
+                      </button>
+                    )}
                     {bottleneck.is_bottleneck && (
                       <button
                         onClick={() =>
