@@ -45,6 +45,7 @@ from app.schemas.mining import (
     FeatureExportResponse,
     FourEyesRequest,
     FourEyesResponse,
+    DriftResponse,
     InsightsResponse,
     LogSkeletonResponse,
     OrgRolesResponse,
@@ -2647,6 +2648,64 @@ async def get_insights(
 
     _set_cached(event_log_id, "insights", result)
     return InsightsResponse(**result)
+
+
+@router.get("/drift/{event_log_id}", response_model=DriftResponse)
+async def get_drift(
+    event_log_id: UUID,
+    window: str = Query(
+        default="auto",
+        description=(
+            "Window granularity for drift detection. "
+            "Accepted values: 'auto' (picks day/week/month to yield 8-30 windows), "
+            "'day', 'week', 'month', or '<N>cases' (e.g. '50cases')."
+        ),
+    ),
+    sensitivity: float = Query(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Jensen-Shannon divergence threshold in [0, 1]. "
+            "Windows whose JSD exceeds this value are flagged as drift points. "
+            "Lower = more sensitive; default 0.15."
+        ),
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Detect concept drift in an event log using a sliding-window JSD detector.
+
+    Slides a time- or case-count window over the log, computes a normalized
+    transition-frequency distribution per window, and flags consecutive window
+    pairs whose Jensen-Shannon divergence exceeds the sensitivity threshold.
+
+    Returns per-window metadata, drift points with structural change
+    explanations (added / removed / magnitude-changed edges), and a summary.
+    """
+    await _assert_event_log_access(event_log_id, db, current_user)
+
+    cache_params = {"window": window, "sensitivity": sensitivity}
+    cached = _get_cached(event_log_id, "drift", cache_params)
+    if cached is not None:
+        return DriftResponse(**cached)
+
+    _event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
+
+    try:
+        result = await _run_in_thread(
+            mining_engine.detect_drifts, df, window, sensitivity
+        )
+    except Exception as e:
+        logger.error(f"Drift detection failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Drift detection failed: {str(e)}",
+        )
+
+    _set_cached(event_log_id, "drift", result, cache_params)
+    return DriftResponse(**result)
 
 
 # ── Export endpoints ─────────────────────────────────────────────────────────

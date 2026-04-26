@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Lock,
   CalendarRange,
+  TrendingUp,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import clsx from 'clsx';
@@ -308,6 +309,7 @@ function EventLogCard({
           { label: 'Process Map', icon: Activity, path: `/process/${eventLog.id}` },
           { label: 'Variants', icon: GitBranch, path: `/variants/${eventLog.id}` },
           { label: 'Bottlenecks', icon: AlertTriangle, path: `/bottlenecks/${eventLog.id}` },
+          { label: 'Concept Drift', icon: TrendingUp, path: `/drift/${eventLog.id}` },
           { label: 'Conformance', icon: CheckCircle2, path: `/conformance/${eventLog.id}` },
           { label: 'Root Cause', icon: Search, path: `/root-cause/${eventLog.id}` },
         ]

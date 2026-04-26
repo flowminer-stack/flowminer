@@ -917,6 +917,50 @@ export interface InsightsResponse {
   summary: string;
 }
 
+// ─── Concept Drift ────────────────────────────────────────────────────────────
+
+export interface DriftWindowVariant {
+  variant: string;
+  count: number;
+}
+
+export interface DriftWindow {
+  start: string;
+  end: string;
+  case_count: number;
+  variant_count: number;
+  top_variants: DriftWindowVariant[];
+}
+
+export interface DriftMagnitudeChange {
+  edge: [string, string];
+  before: number;
+  after: number;
+  delta: number;
+}
+
+export interface DriftPoint {
+  window_index: number;
+  timestamp: string;
+  jsd: number;
+  added_edges: [string, string][];
+  removed_edges: [string, string][];
+  magnitude_changes: DriftMagnitudeChange[];
+}
+
+export interface DriftSummary {
+  total_windows: number;
+  total_drifts: number;
+  avg_jsd: number;
+  max_jsd: number;
+}
+
+export interface DriftResponse {
+  windows: DriftWindow[];
+  drifts: DriftPoint[];
+  summary: DriftSummary;
+}
+
 // ─── UI ──────────────────────────────────────────────────────────────────────
 
 export interface Notification {
