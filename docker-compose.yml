@@ -272,35 +272,6 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # ─── Landing page (static site baked into a nginx image) ─────────
-  # Files are baked into the image rather than bind-mounted so every
-  # git revision produces a new image hash and docker compose recreates
-  # the container on deploy. Without this, Dokploy's atomic deploys
-  # strand the container holding a reference to an old checkout
-  # directory that's been cleaned up, leading to nginx 403s even
-  # though the new files exist on disk.
-  landing:
-    build:
-      context: ./landing
-      dockerfile: Dockerfile
-    image: flowminer-landing:local
-    restart: *restart_policy
-    logging: *logging
-    expose:
-      - "80"
-    healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1/ || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-    mem_limit: 128m
-    networks:
-      - flowminer
-      - dokploy-network
-    security_opt:
-      - no-new-privileges:true
-
   # ─── Frontend (nginx serving built SPA) ────────────────────────────
   frontend:
     build:
