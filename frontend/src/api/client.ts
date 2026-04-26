@@ -58,6 +58,9 @@ import type {
   TimestampRepairResult,
   DriftResponse,
   QueueMiningResponse,
+  DESParameters,
+  DESScenario,
+  DESSimulationResult,
 } from '@/types';
 
 // ─── Axios Instance ──────────────────────────────────────────────────────────
@@ -740,6 +743,25 @@ export const mining = {
     modifications: SimulationModification[];
   }): Promise<SimulationResponse> => {
     const r = await api.post<SimulationResponse>('/mining/simulate', data);
+    return r.data;
+  },
+
+  getDESParams: async (eventLogId: string): Promise<DESParameters> => {
+    const r = await api.get<DESParameters>(`/mining/simulate/des-params/${eventLogId}`);
+    return r.data;
+  },
+
+  runDESSimulation: async (
+    eventLogId: string,
+    scenario: DESScenario,
+    runs = 5,
+    maxCases = 500,
+  ): Promise<DESSimulationResult> => {
+    const r = await api.post<DESSimulationResult>(
+      `/mining/simulate/des/${eventLogId}`,
+      scenario,
+      { params: { runs, max_cases: maxCases } },
+    );
     return r.data;
   },
 

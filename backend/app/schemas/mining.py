@@ -897,3 +897,47 @@ class QueueSummary(BaseModel):
 class QueueMiningResponse(BaseModel):
     per_activity: list[QueueActivity]
     summary: QueueSummary
+
+
+# --- Discrete-Event Simulation (DES) ---
+
+
+class DESScenario(BaseModel):
+    """What-if scenario for the DES engine."""
+    arrival_rate_multiplier: float = Field(
+        default=1.0,
+        description="Multiply arrival rate (>1 = more cases per day)",
+    )
+    activity_duration_overrides: dict[str, float] = Field(
+        default={},
+        description="Per-activity duration multiplier (0.5 = 2x faster)",
+    )
+    activity_automation: dict[str, bool] = Field(
+        default={},
+        description="Mark activity as automated (duration → 0)",
+    )
+    resource_pool_overrides: dict[str, int] = Field(
+        default={},
+        description="Override capacity for named resource pools",
+    )
+    new_resources: list[dict] = Field(
+        default=[],
+        description="Add new resource pools [{name: str, capacity: int}]",
+    )
+
+
+class DESSummary(BaseModel):
+    avg_case_duration_s: float
+    p50: float
+    p90: float
+    p95: float
+    throughput_cases_per_day: float
+    max_concurrent_cases: int
+    resource_utilization: dict[str, float]
+
+
+class DESSimulationResponse(BaseModel):
+    summary: DESSummary
+    baseline: DESSummary
+    delta: dict[str, float]
+    runs: int

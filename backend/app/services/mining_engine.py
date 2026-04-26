@@ -3583,6 +3583,33 @@ class MiningEngine:
             df=df, window=window, sensitivity=sensitivity
         )
 
+    # ── DES delegates ──────────────────────────────────────────────────────────
+
+    def mine_des_parameters(self, df: pd.DataFrame) -> dict:
+        """
+        Delegate to DESSimulator.mine_simulation_parameters.
+        Extracts arrival distribution, per-activity duration stats,
+        gateway probabilities, resource pools and hourly calendar.
+        """
+        from app.services.simulation_des import DESSimulator
+        return DESSimulator().mine_simulation_parameters(df)
+
+    def run_des_simulation(
+        self,
+        df: pd.DataFrame,
+        scenario: dict,
+        runs: int = 5,
+        max_cases: int = 1000,
+    ) -> dict:
+        """
+        Mine parameters from *df* and run DES with the given what-if scenario.
+        Returns summary + baseline + delta dict as defined by DESSimulator.simulate.
+        """
+        from app.services.simulation_des import DESSimulator
+        sim = DESSimulator()
+        params = sim.mine_simulation_parameters(df)
+        return sim.simulate(params, scenario, runs=runs, max_cases=max_cases)
+
 
 # Module-level singleton instance
 mining_engine = MiningEngine()

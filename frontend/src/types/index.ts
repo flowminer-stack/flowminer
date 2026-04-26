@@ -816,6 +816,61 @@ export interface SimulationResponse {
   };
 }
 
+// ─── Discrete-Event Simulation (DES) ─────────────────────────────────────────
+
+export interface DESActivityDuration {
+  mean: number;
+  std: number;
+  samples: number[];
+  count: number;
+}
+
+export interface DESResourcePool {
+  capacity: number;
+  cases_handled: number;
+}
+
+export interface DESParameters {
+  arrival_distribution: {
+    kind: 'exponential' | 'empirical';
+    lambda: number;
+    mean_inter_arrival_s: number;
+  };
+  activity_durations: Record<string, DESActivityDuration>;
+  gateway_probabilities: Record<string, Record<string, number>>;
+  resource_pools: Record<string, DESResourcePool>;
+  hourly_calendar: Record<string, number>;
+  act_resource_map: Record<string, string | null>;
+  start_activities: string[];
+  sink_activities: string[];
+  total_cases_observed: number;
+}
+
+export interface DESScenario {
+  arrival_rate_multiplier?: number;
+  activity_duration_overrides?: Record<string, number>;
+  activity_automation?: Record<string, boolean>;
+  resource_pool_overrides?: Record<string, number>;
+  new_resources?: Array<{ name: string; capacity: number }>;
+}
+
+export interface DESSummary {
+  avg_case_duration_s: number;
+  p50: number;
+  p90: number;
+  p95: number;
+  throughput_cases_per_day: number;
+  max_concurrent_cases: number;
+  resource_utilization: Record<string, number>;
+}
+
+export interface DESSimulationResult {
+  summary: DESSummary;
+  baseline: DESSummary;
+  delta: Record<string, number>;
+  runs: number;
+}
+
 // ─── Search ──────────────────────────────────────────────────────────────────
 
 export interface SearchResult {

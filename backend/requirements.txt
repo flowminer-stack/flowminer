@@ -45,3 +45,6 @@ mcp
 # Backs the operator CLI at app/cli.py (``python -m app.cli``) —
 # tiny click-based framework for the user-management subcommands.
 typer>=0.12,<0.16
+# Discrete-event simulation engine (Task 2 / DES endpoint).
+# MIT-licensed, pure-Python, zero heavy deps — safe to add unconditionally.
+simpy

@@ -61,6 +61,8 @@ from app.schemas.mining import (
     SNAResponse,
     SimulationRequest,
     SimulationResponse,
+    DESScenario,
+    DESSimulationResponse,
     SocialNetworkResponse,
     StochasticConformanceResponse,
     TemporalProfileResponse,
@@ -1733,6 +1735,83 @@ async def simulate_monte_carlo(
         "iterations_succeeded": len(samples["avg_case_duration_seconds"]),
         "bands": {k: _band(v) for k, v in samples.items()},
     }
+
+
+@router.get("/simulate/des-params/{event_log_id}")
+async def get_des_params(
+    event_log_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Mine and return DES simulation parameters for the given event log.
+
+    Parameters are cached with a 12-hour TTL. Returns arrival distribution,
+    per-activity duration stats (mean, std, up to 200 samples), gateway
+    probabilities, resource pools, and hourly arrival calendar.
+    """
+    await _assert_event_log_access(event_log_id, db, current_user)
+    cached = _get_cached(event_log_id, "des_params")
+    if cached is not None:
+        return cached
+
+    _event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
+
+    try:
+        result = await _run_in_thread(
+            mining_engine.mine_des_parameters,
+            df=df,
+        )
+    except Exception as e:
+        logger.error("DES parameter mining failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"DES parameter mining failed: {e}",
+        )
+
+    _set_cached(event_log_id, "des_params", result)
+    return result
+
+
+@router.post("/simulate/des/{event_log_id}", response_model=DESSimulationResponse)
+async def run_des_simulation(
+    event_log_id: UUID,
+    body: DESScenario,
+    runs: int = Query(5, ge=1, le=20),
+    max_cases: int = Query(500, ge=50, le=5000),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Run a discrete-event simulation with the supplied what-if scenario.
+
+    The simulation mines parameters fresh from the log on each call, then
+    runs `runs` replications of the scenario *and* a no-change baseline so
+    the caller gets absolute numbers for both plus percentage deltas.
+
+    Result is NOT cached — each scenario combination is user-specific.
+    """
+    await _assert_event_log_access(event_log_id, db, current_user)
+    _event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
+
+    try:
+        result = await _run_in_thread(
+            mining_engine.run_des_simulation,
+            df=df,
+            scenario=body.model_dump(),
+            runs=runs,
+            max_cases=max_cases,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error("DES simulation failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"DES simulation failed: {e}",
+        )
+
+    return DESSimulationResponse(**result)
 
 
 @router.get("/activity-detail/{event_log_id}/{activity_name}", response_model=ActivityDetailResponse)
