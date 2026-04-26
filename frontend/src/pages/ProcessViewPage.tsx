@@ -26,6 +26,7 @@ import {
   Filter,
   Wand2,
   Sparkles,
+  TrendingUp,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEventLogData, useProcessMap } from '@/hooks/useProcessMining';
@@ -93,6 +94,7 @@ const analysisGroups: AnalysisGroup[] = [
     label: 'Performance',
     items: [
       { label: 'Bottlenecks', description: 'Slowest activities & queues', icon: AlertTriangle, path: 'bottlenecks' },
+      { label: 'Concept Drift', description: 'Detect process behavioural shifts', icon: TrendingUp, path: 'drift' },
       { label: 'Rework', description: 'Repeated activities per case', icon: Repeat, path: 'rework' },
       { label: 'Root Cause', description: 'Attributes driving slow cases', icon: Search, path: 'root-cause' },
     ],

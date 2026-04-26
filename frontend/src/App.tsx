@@ -19,6 +19,7 @@ const UploadPage = lazy(() => import('@/pages/UploadPage'));
 const ProcessViewPage = lazy(() => import('@/pages/ProcessViewPage'));
 const VariantsPage = lazy(() => import('@/pages/VariantsPage'));
 const BottlenecksPage = lazy(() => import('@/pages/BottlenecksPage'));
+const DriftPage = lazy(() => import('@/pages/DriftPage'));
 const ConformancePage = lazy(() => import('@/pages/ConformancePage'));
 const RootCausePage = lazy(() => import('@/pages/RootCausePage'));
 const DashboardsPage = lazy(() => import('@/pages/DashboardsPage'));
@@ -180,6 +181,7 @@ export default function App() {
           <Route path="/process/:eventLogId" element={<ProcessViewPage />} />
           <Route path="/variants/:eventLogId" element={<VariantsPage />} />
           <Route path="/bottlenecks/:eventLogId" element={<BottlenecksPage />} />
+          <Route path="/drift/:eventLogId" element={<DriftPage />} />
           <Route path="/conformance/:eventLogId" element={<ConformancePage />} />
           <Route path="/root-cause/:eventLogId" element={<RootCausePage />} />
           <Route path="/dashboards" element={<DashboardsPage />} />

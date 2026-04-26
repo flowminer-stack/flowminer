@@ -56,6 +56,7 @@ import type {
   InsightsResponse,
   FilterOptions,
   TimestampRepairResult,
+  DriftResponse,
 } from '@/types';
 
 // ─── Axios Instance ──────────────────────────────────────────────────────────
@@ -762,6 +763,17 @@ export const mining = {
   checkFourEyes: async (id: string, act1: string, act2: string) => (await api.post(`/mining/four-eyes/${id}`, { activity1: act1, activity2: act2 })).data,
   getPerformanceSpectrum: async (id: string) => (await api.get(`/mining/performance-spectrum/${id}`)).data,
   getFeatures: async (id: string) => (await api.get(`/mining/features/${id}`)).data,
+
+  getDrift: async (
+    eventLogId: string,
+    params?: { window?: string; sensitivity?: number },
+  ): Promise<DriftResponse> => {
+    const response = await api.get<DriftResponse>(
+      `/mining/drift/${eventLogId}`,
+      { params },
+    );
+    return response.data;
+  },
 };
 
 // ─── OCEL ────────────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import type {
   DiscoveryResponse,
   ProcessFilter,
   Dashboard,
+  DriftResponse,
 } from '@/types';
 import { eventLogs as eventLogsApi, mining, dashboards } from '@/api/client';
 import { getCached, setCached, checkVersion } from '@/store/analysisCache';
@@ -256,4 +257,62 @@ export function useDashboard(dashboardId: string | undefined): DashboardState {
     refresh: fetchDashboard,
     updateDashboard,
   };
+}
+
+// ─── useDrift ─────────────────────────────────────────────────────────────────
+
+interface DriftState {
+  data: DriftResponse | null;
+  loading: boolean;
+  error: string | null;
+  refetch: () => void;
+}
+
+/**
+ * Fetch concept-drift analysis for an event log.
+ *
+ * Re-fetches automatically when eventLogId, window, or sensitivity change.
+ */
+export function useDrift(
+  eventLogId: string | undefined,
+  window: string = 'auto',
+  sensitivity: number = 0.15,
+): DriftState {
+  const [data, setData] = useState<DriftResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  const refetch = useCallback(() => setTick((t) => t + 1), []);
+
+  useEffect(() => {
+    if (!eventLogId) return;
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    mining
+      .getDrift(eventLogId, { window, sensitivity })
+      .then((result) => {
+        if (!cancelled) {
+          setData(result);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : 'Failed to load drift analysis',
+          );
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [eventLogId, window, sensitivity, tick]);
+
+  return { data, loading, error, refetch };
 }

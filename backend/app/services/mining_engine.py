@@ -23,6 +23,7 @@ from app.services.bottleneck import BottleneckService
 from app.services.variant_analysis import VariantAnalysisService
 from app.services.root_cause import RootCauseService
 from app.services.statistics import StatisticsService
+from app.services.drift import DriftDetector
 from app.services.rust_accel import (
     discover_performance_dfg as _rs_perf_dfg,
     compute_efg as _rs_efg,
@@ -64,6 +65,7 @@ class MiningEngine:
         self.variant_service = VariantAnalysisService()
         self.root_cause_service = RootCauseService()
         self.statistics_service = StatisticsService()
+        self.drift_detector = DriftDetector()
 
     def load_event_log(
         self,
@@ -3312,6 +3314,30 @@ class MiningEngine:
             summary += " No critical issues detected."
 
         return {'insights': insights, 'summary': summary}
+
+    def detect_drifts(
+        self,
+        df: pd.DataFrame,
+        window: str = "auto",
+        sensitivity: float = 0.15,
+    ) -> dict:
+        """
+        Detect concept drift by sliding a window over the log and computing
+        Jensen-Shannon divergence between consecutive transition distributions.
+
+        Delegates to DriftDetector.detect_drifts.
+
+        Args:
+            df:          Event log DataFrame (pm4py column names).
+            window:      "auto", "day", "week", "month", or "<N>cases".
+            sensitivity: JSD threshold above which a transition is a drift.
+
+        Returns:
+            dict matching DriftResponse schema.
+        """
+        return self.drift_detector.detect_drifts(
+            df=df, window=window, sensitivity=sensitivity
+        )
 
 
 # Module-level singleton instance
