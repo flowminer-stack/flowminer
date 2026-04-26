@@ -56,6 +56,7 @@ import type {
   InsightsResponse,
   FilterOptions,
   TimestampRepairResult,
+  QueueMiningResponse,
 } from '@/types';
 
 // ─── Axios Instance ──────────────────────────────────────────────────────────
@@ -601,6 +602,13 @@ export const mining = {
   getBottlenecks: async (eventLogId: string): Promise<BottleneckResponse> => {
     const response = await api.get<BottleneckResponse>(
       `/mining/bottlenecks/${eventLogId}`,
+    );
+    return response.data;
+  },
+
+  getQueueAnalysis: async (eventLogId: string): Promise<QueueMiningResponse> => {
+    const response = await api.get<QueueMiningResponse>(
+      `/mining/queue-mining/${eventLogId}`,
     );
     return response.data;
   },

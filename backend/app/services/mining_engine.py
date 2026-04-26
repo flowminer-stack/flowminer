@@ -20,6 +20,7 @@ from app.services.ingestion import (
 from app.services.discovery import DiscoveryService
 from app.services.conformance import ConformanceService
 from app.services.bottleneck import BottleneckService
+from app.services.queue_mining import QueueMiningService
 from app.services.variant_analysis import VariantAnalysisService
 from app.services.root_cause import RootCauseService
 from app.services.statistics import StatisticsService
@@ -61,6 +62,7 @@ class MiningEngine:
         self.discovery_service = DiscoveryService()
         self.conformance_service = ConformanceService()
         self.bottleneck_service = BottleneckService()
+        self.queue_mining_service = QueueMiningService()
         self.variant_service = VariantAnalysisService()
         self.root_cause_service = RootCauseService()
         self.statistics_service = StatisticsService()
@@ -148,6 +150,15 @@ class MiningEngine:
         Delegates to BottleneckService.analyze_bottlenecks.
         """
         return self.bottleneck_service.analyze_bottlenecks(df=df)
+
+    def analyze_queue(self, df: pd.DataFrame) -> dict:
+        """
+        Run M/M/c queue mining to estimate resource contention and wait-time
+        decomposition per activity.
+
+        Delegates to QueueMiningService.analyze (Senderovich et al., 2015).
+        """
+        return self.queue_mining_service.analyze(df=df)
 
     def run_variant_analysis(self, df: pd.DataFrame) -> dict:
         """

@@ -53,6 +53,7 @@ from app.schemas.mining import (
     ProcessFilter,
     ProcessStatistics,
     ProcessSummary,
+    QueueMiningResponse,
     ReportResponse,
     ReworkResponse,
     RootCauseResponse,
@@ -548,6 +549,39 @@ async def get_bottlenecks(
 
     _set_cached(event_log_id, "bottlenecks", result)
     return BottleneckResponse(**result)
+
+
+@router.get("/queue-mining/{event_log_id}", response_model=QueueMiningResponse)
+async def get_queue_mining(
+    event_log_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    M/M/c queue mining per activity: arrival/service rates, utilisation,
+    Erlang-C expected wait, and wait-time decomposition (resource contention,
+    inter-batch, external dependency).
+
+    Reference: Senderovich et al., Information Systems 2015.
+    """
+    await _assert_event_log_access(event_log_id, db, current_user)
+    cached = _get_cached(event_log_id, "queue_mining")
+    if cached is not None:
+        return QueueMiningResponse(**cached)
+
+    event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
+
+    try:
+        result = await _run_in_thread(mining_engine.analyze_queue, df)
+    except Exception as e:
+        logger.error(f"Queue mining analysis failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Queue mining analysis failed: {str(e)}",
+        )
+
+    _set_cached(event_log_id, "queue_mining", result)
+    return QueueMiningResponse(**result)
 
 
 @router.get("/conformance/{event_log_id}", response_model=ConformanceResponse)

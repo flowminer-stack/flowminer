@@ -6,6 +6,7 @@ import type {
   DiscoveryResponse,
   ProcessFilter,
   Dashboard,
+  QueueMiningResponse,
 } from '@/types';
 import { eventLogs as eventLogsApi, mining, dashboards } from '@/api/client';
 import { getCached, setCached, checkVersion } from '@/store/analysisCache';
@@ -256,4 +257,43 @@ export function useDashboard(dashboardId: string | undefined): DashboardState {
     refresh: fetchDashboard,
     updateDashboard,
   };
+}
+
+// ─── useQueueAnalysis ────────────────────────────────────────────────────────
+
+interface QueueAnalysisState {
+  data: QueueMiningResponse | null;
+  loading: boolean;
+  error: string | null;
+  refresh: () => Promise<void>;
+}
+
+export function useQueueAnalysis(
+  eventLogId: string | undefined,
+): QueueAnalysisState {
+  const [data, setData] = useState<QueueMiningResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetch = useCallback(async () => {
+    if (!eventLogId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await mining.getQueueAnalysis(eventLogId);
+      setData(result);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to load queue analysis';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  }, [eventLogId]);
+
+  useEffect(() => {
+    fetch();
+  }, [fetch]);
+
+  return { data, loading, error, refresh: fetch };
 }
