@@ -1,0 +1,39 @@
+# Everything that doesn't need to ship to the node builder stage.
+# node_modules are regenerated fresh inside the container via
+# `npm ci`; the build artifacts from a local `npm run build` are
+# never used by the container.
+
+.git
+.gitignore
+.gitattributes
+
+node_modules
+dist
+.vite
+coverage
+*.tsbuildinfo
+
+# Secrets — NEVER in a layer
+.env
+.env.*
+*.env
+*.secret
+
+# IDE + OS
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Tests — not used by the production image builder
+__tests__
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+playwright-report
+test-results

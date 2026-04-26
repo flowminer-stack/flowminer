@@ -1,0 +1,73 @@
+# Default values for FlowMiner. Override via --values or --set.
+
+image:
+  repository: ghcr.io/flowminer/flowminer-backend
+  tag: latest
+  pullPolicy: IfNotPresent
+
+frontendImage:
+  repository: ghcr.io/flowminer/flowminer-frontend
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# How many copies of each workload to run.
+replicas:
+  backend: 2
+  worker: 2
+  beat: 1
+  frontend: 1
+
+resources:
+  backend:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 2000m, memory: 4Gi }
+  worker:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 2000m, memory: 4Gi }
+  beat:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+# Required secrets — override via --set-string or an external secret manager.
+secrets:
+  # MUST be overridden in production:
+  secretKey: "change-me-in-production"
+  encryptionKey: ""           # used by services/secret_box.py (Fernet)
+  sentryDsn: ""
+  llmProvider: "null"         # anthropic | openai | ollama | null
+  anthropicApiKey: ""
+  openaiApiKey: ""
+  siemHecUrl: ""
+  siemHecToken: ""
+
+database:
+  # When enabled, the chart deploys a small PostgreSQL StatefulSet.
+  # For production, point `externalUrl` at a managed database instead.
+  enabled: true
+  persistence:
+    enabled: true
+    size: 20Gi
+  externalUrl: ""  # e.g. "postgresql+asyncpg://flowminer:***@rds.../flowminer"
+
+redis:
+  enabled: true
+  persistence:
+    enabled: false
+  externalUrl: ""  # e.g. "redis://elasticache..:6379/0"
+
+storage:
+  # Event log files + backups + task mining recordings
+  persistence:
+    enabled: true
+    size: 100Gi
+    accessMode: ReadWriteMany
+
+ingress:
+  enabled: true
+  className: nginx
+  host: flowminer.example.com
+  tls:
+    enabled: true
+    secretName: flowminer-tls
+
+environment: production

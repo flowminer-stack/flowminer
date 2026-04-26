@@ -1,0 +1,124 @@
+"""Oracle Fusion Cloud Applications connector.
+
+Two modes:
+  - BICC (BI Cloud Connector) — bulk extract for historical loads
+  - REST API (/fscmRestApi/resources/11.13.18.05/...) — for incremental
+    pulls against specific business objects (PurchaseOrders,
+    ReceivingReceiptRequests, InvoiceHolds, etc.)
+
+This connector uses the REST path; BICC exports land as CSVs in UCM
+and can be picked up with the existing csv_connector.
+
+Config keys:
+    base_url: str — e.g. "https://abc-prod.oraclecloud.com"
+    username: str — Oracle Fusion user
+    password: str — Oracle Fusion password
+    resource: str — e.g. "purchaseOrders" or "invoices"
+    query: str  — (optional) oData-style filter
+    limit: int  — max rows (default 10000)
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import uuid
+
+import httpx
+import pandas as pd
+
+from app.services.connectors.base import BaseConnector
+
+logger = logging.getLogger(__name__)
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
+
+
+class OracleFusionConnector(BaseConnector):
+    async def test_connection(self, config: dict) -> dict:
+        base = config["base_url"].rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"{base}/fscmRestApi/resources/11.13.18.05",
+                    auth=(config["username"], config["password"]),
+                    headers={"Accept": "application/json"},
+                )
+                resp.raise_for_status()
+            return {"success": True, "message": "Connected to Oracle Fusion"}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    async def get_schema(self, config: dict) -> dict:
+        # Fusion catalog is huge; we return a small static list of common
+        # business objects. A full implementation would hit
+        # /fscmRestApi/resources/11.13.18.05 and parse the catalog.
+        return {
+            "resources": [
+                "purchaseOrders", "invoices", "receivingReceiptRequests",
+                "salesOrders", "creditMemos", "paymentTerms",
+                "supplierPayments", "expenseReports",
+            ]
+        }
+
+    async def fetch_data(
+        self,
+        config: dict,
+        column_mapping: dict,
+        since=None,
+    ) -> str:
+        base = config["base_url"].rstrip("/")
+        resource = config.get("resource", "purchaseOrders")
+        limit = int(config.get("limit", 10000))
+
+        params: dict[str, str] = {"limit": str(min(limit, 500))}
+        query_parts: list[str] = []
+        if config.get("query"):
+            query_parts.append(str(config["query"]))
+        if since is not None:
+            try:
+                query_parts.append(f"LastUpdateDate >= '{since.isoformat()}'")
+            except Exception:
+                pass
+        if query_parts:
+            params["q"] = " and ".join(query_parts)
+
+        rows: list[dict] = []
+        offset = 0
+        async with httpx.AsyncClient(timeout=60) as client:
+            while len(rows) < limit:
+                params["offset"] = str(offset)
+                resp = await client.get(
+                    f"{base}/fscmRestApi/resources/11.13.18.05/{resource}",
+                    params=params,
+                    auth=(config["username"], config["password"]),
+                    headers={"Accept": "application/json"},
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                items = payload.get("items", [])
+                if not items:
+                    break
+                rows.extend(items)
+                offset += len(items)
+                if not payload.get("hasMore"):
+                    break
+
+        if not rows:
+            raise ValueError("Oracle Fusion returned no rows for the configured resource/query")
+
+        df = pd.DataFrame(rows[:limit])
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        dest = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}_oracle_fusion_{resource}.parquet")
+        df.to_parquet(dest, index=False)
+        logger.info("Oracle Fusion %s → %s (%d rows)", resource, dest, len(df))
+        return dest
+
+    def get_default_column_mapping(self, config: dict) -> dict | None:
+        # Lightweight heuristic — most Fusion resources have
+        # `CreationDate` and `<Resource>Number` columns. Callers
+        # should override via the column_mapping API.
+        return {
+            "case_id_column": "PurchaseOrderNumber" if "purchaseOrders" in (config.get("resource") or "") else None,
+            "timestamp_column": "CreationDate",
+            "activity_column": "Status",
+        }

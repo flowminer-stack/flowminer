@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<!--
+  FlowMiner Tableau Web Data Connector
+
+  Host this file on any HTTPS endpoint your Tableau instance can reach.
+  In Tableau Desktop: Connect → To a Server → Web Data Connector → paste
+  the URL of this page. The connector prompts for the FlowMiner base URL,
+  API key, and event log ID, then returns a flat table.
+
+  Unlike the Celonis Power BI connector (200k row / 20 col cap), this
+  connector has no built-in limits — pagination handles arbitrary log
+  sizes via offset/limit.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-store">
+  <title>FlowMiner WDC</title>
+  <script src="https://connectors.tableau.com/libs/tableauwdc-2.3.latest.js" type="text/javascript"></script>
+  <script type="text/javascript">
+    (function () {
+      var myConnector = tableau.makeConnector();
+
+      // Column schemas per table
+      var SCHEMAS = {
+        statistics: {
+          id: "flowminer_statistics",
+          alias: "FlowMiner statistics",
+          columns: [
+            { id: "event_log_id", dataType: tableau.dataTypeEnum.string },
+            { id: "total_cases", dataType: tableau.dataTypeEnum.int },
+            { id: "total_events", dataType: tableau.dataTypeEnum.int },
+            { id: "total_activities", dataType: tableau.dataTypeEnum.int },
+            { id: "avg_case_duration_hours", dataType: tableau.dataTypeEnum.float },
+            { id: "median_case_duration_hours", dataType: tableau.dataTypeEnum.float },
+            { id: "start_timestamp", dataType: tableau.dataTypeEnum.datetime },
+            { id: "end_timestamp", dataType: tableau.dataTypeEnum.datetime }
+          ]
+        },
+        variants: {
+          id: "flowminer_variants",
+          alias: "FlowMiner variants",
+          columns: [
+            { id: "event_log_id", dataType: tableau.dataTypeEnum.string },
+            { id: "variant_rank", dataType: tableau.dataTypeEnum.int },
+            { id: "case_count", dataType: tableau.dataTypeEnum.int },
+            { id: "case_percentage", dataType: tableau.dataTypeEnum.float },
+            { id: "activity_sequence", dataType: tableau.dataTypeEnum.string },
+            { id: "step_count", dataType: tableau.dataTypeEnum.int }
+          ]
+        },
+        bottlenecks: {
+          id: "flowminer_bottlenecks",
+          alias: "FlowMiner bottlenecks",
+          columns: [
+            { id: "event_log_id", dataType: tableau.dataTypeEnum.string },
+            { id: "activity", dataType: tableau.dataTypeEnum.string },
+            { id: "avg_duration_seconds", dataType: tableau.dataTypeEnum.float },
+            { id: "max_duration_seconds", dataType: tableau.dataTypeEnum.float },
+            { id: "frequency", dataType: tableau.dataTypeEnum.int }
+          ]
+        },
+        activities: {
+          id: "flowminer_activities",
+          alias: "FlowMiner activities",
+          columns: [
+            { id: "event_log_id", dataType: tableau.dataTypeEnum.string },
+            { id: "activity", dataType: tableau.dataTypeEnum.string },
+            { id: "occurrences", dataType: tableau.dataTypeEnum.int },
+            { id: "cases_touching", dataType: tableau.dataTypeEnum.int }
+          ]
+        },
+        cases: {
+          id: "flowminer_cases",
+          alias: "FlowMiner cases",
+          columns: [
+            { id: "event_log_id", dataType: tableau.dataTypeEnum.string },
+            { id: "case_id", dataType: tableau.dataTypeEnum.string },
+            { id: "event_count", dataType: tableau.dataTypeEnum.int },
+            { id: "duration_seconds", dataType: tableau.dataTypeEnum.float },
+            { id: "start_timestamp", dataType: tableau.dataTypeEnum.datetime },
+            { id: "end_timestamp", dataType: tableau.dataTypeEnum.datetime },
+            { id: "activity_count", dataType: tableau.dataTypeEnum.int }
+          ]
+        },
+        events: {
+          id: "flowminer_events",
+          alias: "FlowMiner events",
+          columns: [
+            { id: "event_log_id", dataType: tableau.dataTypeEnum.string },
+            { id: "case_id", dataType: tableau.dataTypeEnum.string },
+            { id: "activity", dataType: tableau.dataTypeEnum.string },
+            { id: "timestamp", dataType: tableau.dataTypeEnum.datetime },
+            { id: "resource", dataType: tableau.dataTypeEnum.string }
+          ]
+        }
+      };
+
+      myConnector.getSchema = function (schemaCallback) {
+        var cfg = JSON.parse(tableau.connectionData || "{}");
+        var table = cfg.table || "statistics";
+        schemaCallback([SCHEMAS[table]]);
+      };
+
+      myConnector.getData = function (table, doneCallback) {
+        var cfg = JSON.parse(tableau.connectionData);
+        var base = cfg.baseUrl.replace(/\/$/, "");
+        var apiKey = cfg.apiKey;
+        var eventLogId = cfg.eventLogId;
+        var tableName = cfg.table || "statistics";
+
+        var fetchPage = function (offset) {
+          var url = base + "/api/v1/bi/" + tableName +
+                    "?event_log_id=" + encodeURIComponent(eventLogId) +
+                    "&limit=10000&offset=" + offset;
+
+          $.ajax({
+            url: url,
+            headers: { "Authorization": "Bearer " + apiKey, "Accept": "application/json" },
+            success: function (rows) {
+              if (!Array.isArray(rows) || rows.length === 0) {
+                doneCallback();
+                return;
+              }
+              table.appendRows(rows);
+              // Fetch next page if this one was full (non-paginated endpoints
+              // return < 10000 rows and will early-return on the next call).
+              if (rows.length >= 10000) {
+                fetchPage(offset + 10000);
+              } else {
+                doneCallback();
+              }
+            },
+            error: function (xhr, status, err) {
+              tableau.abortWithError("FlowMiner fetch failed: " + err + " (" + xhr.status + ")");
+            }
+          });
+        };
+
+        fetchPage(0);
+      };
+
+      tableau.registerConnector(myConnector);
+
+      // Submit handler for the configuration form
+      window.submitConnector = function () {
+        var baseUrl = document.getElementById("baseUrl").value.trim();
+        var apiKey = document.getElementById("apiKey").value.trim();
+        var eventLogId = document.getElementById("eventLogId").value.trim();
+        var table = document.getElementById("table").value;
+
+        if (!baseUrl || !apiKey || !eventLogId) {
+          alert("Base URL, API key, and event log ID are all required.");
+          return;
+        }
+
+        tableau.connectionData = JSON.stringify({
+          baseUrl: baseUrl,
+          apiKey: apiKey,
+          eventLogId: eventLogId,
+          table: table
+        });
+        tableau.connectionName = "FlowMiner — " + table;
+        tableau.submit();
+      };
+    })();
+  </script>
+  <style>
+    body { font-family: -apple-system, Segoe UI, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 20px; color: #1e293b; }
+    h1 { font-size: 20px; }
+    label { display: block; font-size: 12px; font-weight: 600; margin-top: 12px; }
+    input, select { width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid #cbd5e1; border-radius: 4px; box-sizing: border-box; }
+    button { margin-top: 20px; padding: 10px 16px; background: #2563eb; color: white; border: 0; border-radius: 4px; font-weight: 600; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    p.help { font-size: 11px; color: #64748b; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <h1>FlowMiner → Tableau</h1>
+  <p>Connect Tableau Desktop to a FlowMiner event log via HTTP. No row caps, no Power BI admin ceremony.</p>
+
+  <label for="baseUrl">FlowMiner base URL</label>
+  <input id="baseUrl" type="url" placeholder="https://flowminer.example.com" />
+  <p class="help">Root URL of your FlowMiner installation. No trailing slash needed.</p>
+
+  <label for="apiKey">API key</label>
+  <input id="apiKey" type="password" placeholder="fmk_..." />
+  <p class="help">Generate one at Settings → API Keys in FlowMiner.</p>
+
+  <label for="eventLogId">Event log ID</label>
+  <input id="eventLogId" type="text" placeholder="00000000-0000-0000-0000-000000000000" />
+  <p class="help">Copy from the URL of any process view (e.g. /process/&lt;uuid&gt;).</p>
+
+  <label for="table">Table</label>
+  <select id="table">
+    <option value="statistics">Statistics (1 row)</option>
+    <option value="variants">Variants (ranked)</option>
+    <option value="bottlenecks">Bottlenecks</option>
+    <option value="activities">Activities</option>
+    <option value="cases">Cases</option>
+    <option value="events">Events (flat)</option>
+  </select>
+
+  <button onclick="submitConnector()">Get Data</button>
+</body>
+</html>

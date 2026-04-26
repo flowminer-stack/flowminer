@@ -1,0 +1,1980 @@
+{
+  "ocel:global-event": {
+    "ocel:activity": "__INVALID__"
+  },
+  "ocel:global-object": {
+    "ocel:type": "__INVALID__"
+  },
+  "ocel:global-log": {
+    "ocel:attribute-names": [],
+    "ocel:object-types": [
+      "order",
+      "customer",
+      "item",
+      "invoice"
+    ],
+    "ocel:version": "1.0",
+    "ocel:ordering": "timestamp"
+  },
+  "ocel:events": {
+    "e1": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-16T11:00:00",
+      "ocel:omap": [
+        "O-0001",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e2": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-16T16:00:00",
+      "ocel:omap": [
+        "O-0001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e3": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-16T18:00:00",
+      "ocel:omap": [
+        "O-0001",
+        "I-00018"
+      ],
+      "ocel:vmap": {}
+    },
+    "e4": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-16T19:00:00",
+      "ocel:omap": [
+        "O-0001",
+        "I-00018"
+      ],
+      "ocel:vmap": {}
+    },
+    "e5": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-17T06:00:00",
+      "ocel:omap": [
+        "O-0001",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e6": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-17T07:00:00",
+      "ocel:omap": [
+        "O-0001",
+        "INV-0001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e7": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-18T07:00:00",
+      "ocel:omap": [
+        "INV-0001",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e8": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-01-21T07:00:00",
+      "ocel:omap": [
+        "INV-0001",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e9": {
+      "ocel:activity": "Return Item",
+      "ocel:timestamp": "2025-01-30T07:00:00",
+      "ocel:omap": [
+        "O-0001",
+        "I-00018",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e10": {
+      "ocel:activity": "Process Return",
+      "ocel:timestamp": "2025-02-04T07:00:00",
+      "ocel:omap": [
+        "O-0001",
+        "I-00018"
+      ],
+      "ocel:vmap": {}
+    },
+    "e11": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-15T15:00:00",
+      "ocel:omap": [
+        "O-0002",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e12": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-16T10:00:00",
+      "ocel:omap": [
+        "O-0002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e13": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-16T15:00:00",
+      "ocel:omap": [
+        "O-0002",
+        "I-00013"
+      ],
+      "ocel:vmap": {}
+    },
+    "e14": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-16T16:00:00",
+      "ocel:omap": [
+        "O-0002",
+        "I-00013"
+      ],
+      "ocel:vmap": {}
+    },
+    "e15": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-16T19:00:00",
+      "ocel:omap": [
+        "O-0002",
+        "I-00035"
+      ],
+      "ocel:vmap": {}
+    },
+    "e16": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-16T23:00:00",
+      "ocel:omap": [
+        "O-0002",
+        "I-00035"
+      ],
+      "ocel:vmap": {}
+    },
+    "e17": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-17T05:00:00",
+      "ocel:omap": [
+        "O-0002",
+        "I-00027"
+      ],
+      "ocel:vmap": {}
+    },
+    "e18": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-17T08:00:00",
+      "ocel:omap": [
+        "O-0002",
+        "I-00027"
+      ],
+      "ocel:vmap": {}
+    },
+    "e19": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-17T12:00:00",
+      "ocel:omap": [
+        "O-0002",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e20": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-17T12:00:00",
+      "ocel:omap": [
+        "O-0002",
+        "INV-0002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e21": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-20T12:00:00",
+      "ocel:omap": [
+        "INV-0002",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e22": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-01-26T12:00:00",
+      "ocel:omap": [
+        "INV-0002",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e23": {
+      "ocel:activity": "Return Item",
+      "ocel:timestamp": "2025-02-01T12:00:00",
+      "ocel:omap": [
+        "O-0002",
+        "I-00013",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e24": {
+      "ocel:activity": "Process Return",
+      "ocel:timestamp": "2025-02-04T12:00:00",
+      "ocel:omap": [
+        "O-0002",
+        "I-00013"
+      ],
+      "ocel:vmap": {}
+    },
+    "e25": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-02-04T09:00:00",
+      "ocel:omap": [
+        "O-0003",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e26": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-02-04T22:00:00",
+      "ocel:omap": [
+        "O-0003"
+      ],
+      "ocel:vmap": {}
+    },
+    "e27": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-02-05T00:00:00",
+      "ocel:omap": [
+        "O-0003",
+        "I-00003"
+      ],
+      "ocel:vmap": {}
+    },
+    "e28": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-02-05T03:00:00",
+      "ocel:omap": [
+        "O-0003",
+        "I-00003"
+      ],
+      "ocel:vmap": {}
+    },
+    "e29": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-02-05T09:00:00",
+      "ocel:omap": [
+        "O-0003",
+        "I-00030"
+      ],
+      "ocel:vmap": {}
+    },
+    "e30": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-02-05T11:00:00",
+      "ocel:omap": [
+        "O-0003",
+        "I-00030"
+      ],
+      "ocel:vmap": {}
+    },
+    "e31": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-02-05T14:00:00",
+      "ocel:omap": [
+        "O-0003",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e32": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-02-05T14:00:00",
+      "ocel:omap": [
+        "O-0003",
+        "INV-0003"
+      ],
+      "ocel:vmap": {}
+    },
+    "e33": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-02-07T14:00:00",
+      "ocel:omap": [
+        "INV-0003",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e34": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-03-06T14:00:00",
+      "ocel:omap": [
+        "INV-0003",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e35": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-25T12:00:00",
+      "ocel:omap": [
+        "O-0004",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e36": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-26T03:00:00",
+      "ocel:omap": [
+        "O-0004"
+      ],
+      "ocel:vmap": {}
+    },
+    "e37": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-26T09:00:00",
+      "ocel:omap": [
+        "O-0004",
+        "I-00007"
+      ],
+      "ocel:vmap": {}
+    },
+    "e38": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-26T11:00:00",
+      "ocel:omap": [
+        "O-0004",
+        "I-00007"
+      ],
+      "ocel:vmap": {}
+    },
+    "e39": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-26T18:00:00",
+      "ocel:omap": [
+        "O-0004",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e40": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-26T19:00:00",
+      "ocel:omap": [
+        "O-0004",
+        "INV-0004"
+      ],
+      "ocel:vmap": {}
+    },
+    "e41": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-28T19:00:00",
+      "ocel:omap": [
+        "INV-0004",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e42": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-02-21T19:00:00",
+      "ocel:omap": [
+        "INV-0004",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e43": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-11T15:00:00",
+      "ocel:omap": [
+        "O-0005",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e44": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-12T04:00:00",
+      "ocel:omap": [
+        "O-0005"
+      ],
+      "ocel:vmap": {}
+    },
+    "e45": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-12T09:00:00",
+      "ocel:omap": [
+        "O-0005",
+        "I-00011"
+      ],
+      "ocel:vmap": {}
+    },
+    "e46": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-12T11:00:00",
+      "ocel:omap": [
+        "O-0005",
+        "I-00011"
+      ],
+      "ocel:vmap": {}
+    },
+    "e47": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-12T17:00:00",
+      "ocel:omap": [
+        "O-0005",
+        "I-00035"
+      ],
+      "ocel:vmap": {}
+    },
+    "e48": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-12T18:00:00",
+      "ocel:omap": [
+        "O-0005",
+        "I-00035"
+      ],
+      "ocel:vmap": {}
+    },
+    "e49": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-12T22:00:00",
+      "ocel:omap": [
+        "O-0005",
+        "I-00016"
+      ],
+      "ocel:vmap": {}
+    },
+    "e50": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-12T23:00:00",
+      "ocel:omap": [
+        "O-0005",
+        "I-00016"
+      ],
+      "ocel:vmap": {}
+    },
+    "e51": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-13T06:00:00",
+      "ocel:omap": [
+        "O-0005",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e52": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-13T07:00:00",
+      "ocel:omap": [
+        "O-0005",
+        "INV-0005"
+      ],
+      "ocel:vmap": {}
+    },
+    "e53": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-16T07:00:00",
+      "ocel:omap": [
+        "INV-0005",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e54": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-01-21T07:00:00",
+      "ocel:omap": [
+        "INV-0005",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e55": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-26T15:00:00",
+      "ocel:omap": [
+        "O-0006",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e56": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-26T20:00:00",
+      "ocel:omap": [
+        "O-0006"
+      ],
+      "ocel:vmap": {}
+    },
+    "e57": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-27T01:00:00",
+      "ocel:omap": [
+        "O-0006",
+        "I-00021"
+      ],
+      "ocel:vmap": {}
+    },
+    "e58": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-27T03:00:00",
+      "ocel:omap": [
+        "O-0006",
+        "I-00021"
+      ],
+      "ocel:vmap": {}
+    },
+    "e59": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-27T07:00:00",
+      "ocel:omap": [
+        "O-0006",
+        "I-00014"
+      ],
+      "ocel:vmap": {}
+    },
+    "e60": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-27T10:00:00",
+      "ocel:omap": [
+        "O-0006",
+        "I-00014"
+      ],
+      "ocel:vmap": {}
+    },
+    "e61": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-27T17:00:00",
+      "ocel:omap": [
+        "O-0006",
+        "I-00032"
+      ],
+      "ocel:vmap": {}
+    },
+    "e62": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-27T21:00:00",
+      "ocel:omap": [
+        "O-0006",
+        "I-00032"
+      ],
+      "ocel:vmap": {}
+    },
+    "e63": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-28T04:00:00",
+      "ocel:omap": [
+        "O-0006",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e64": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-28T04:00:00",
+      "ocel:omap": [
+        "O-0006",
+        "INV-0006"
+      ],
+      "ocel:vmap": {}
+    },
+    "e65": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-30T04:00:00",
+      "ocel:omap": [
+        "INV-0006",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e66": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-02-18T04:00:00",
+      "ocel:omap": [
+        "INV-0006",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e67": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-02-10T10:00:00",
+      "ocel:omap": [
+        "O-0007",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e68": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-02-11T08:00:00",
+      "ocel:omap": [
+        "O-0007"
+      ],
+      "ocel:vmap": {}
+    },
+    "e69": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-02-11T15:00:00",
+      "ocel:omap": [
+        "O-0007",
+        "I-00010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e70": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-02-11T16:00:00",
+      "ocel:omap": [
+        "O-0007",
+        "I-00010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e71": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-02-12T00:00:00",
+      "ocel:omap": [
+        "O-0007",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e72": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-02-12T01:00:00",
+      "ocel:omap": [
+        "O-0007",
+        "INV-0007"
+      ],
+      "ocel:vmap": {}
+    },
+    "e73": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-02-17T01:00:00",
+      "ocel:omap": [
+        "INV-0007",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e74": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-03-06T01:00:00",
+      "ocel:omap": [
+        "INV-0007",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e75": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-02-13T16:00:00",
+      "ocel:omap": [
+        "O-0008",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e76": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-02-14T01:00:00",
+      "ocel:omap": [
+        "O-0008"
+      ],
+      "ocel:vmap": {}
+    },
+    "e77": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-02-14T07:00:00",
+      "ocel:omap": [
+        "O-0008",
+        "I-00008"
+      ],
+      "ocel:vmap": {}
+    },
+    "e78": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-02-14T08:00:00",
+      "ocel:omap": [
+        "O-0008",
+        "I-00008"
+      ],
+      "ocel:vmap": {}
+    },
+    "e79": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-02-14T14:00:00",
+      "ocel:omap": [
+        "O-0008",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e80": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-02-14T15:00:00",
+      "ocel:omap": [
+        "O-0008",
+        "INV-0008"
+      ],
+      "ocel:vmap": {}
+    },
+    "e81": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-02-16T15:00:00",
+      "ocel:omap": [
+        "INV-0008",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e82": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-03-05T15:00:00",
+      "ocel:omap": [
+        "INV-0008",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e83": {
+      "ocel:activity": "Return Item",
+      "ocel:timestamp": "2025-03-14T15:00:00",
+      "ocel:omap": [
+        "O-0008",
+        "I-00008",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e84": {
+      "ocel:activity": "Process Return",
+      "ocel:timestamp": "2025-03-16T15:00:00",
+      "ocel:omap": [
+        "O-0008",
+        "I-00008"
+      ],
+      "ocel:vmap": {}
+    },
+    "e85": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-02-23T16:00:00",
+      "ocel:omap": [
+        "O-0009",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e86": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-02-24T12:00:00",
+      "ocel:omap": [
+        "O-0009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e87": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-02-24T16:00:00",
+      "ocel:omap": [
+        "O-0009",
+        "I-00020"
+      ],
+      "ocel:vmap": {}
+    },
+    "e88": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-02-24T18:00:00",
+      "ocel:omap": [
+        "O-0009",
+        "I-00020"
+      ],
+      "ocel:vmap": {}
+    },
+    "e89": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-02-25T01:00:00",
+      "ocel:omap": [
+        "O-0009",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e90": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-02-25T01:00:00",
+      "ocel:omap": [
+        "O-0009",
+        "INV-0009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e91": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-03-02T01:00:00",
+      "ocel:omap": [
+        "INV-0009",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e92": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-03-29T01:00:00",
+      "ocel:omap": [
+        "INV-0009",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e93": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-08T13:00:00",
+      "ocel:omap": [
+        "O-0010",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e94": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-08T23:00:00",
+      "ocel:omap": [
+        "O-0010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e95": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-09T03:00:00",
+      "ocel:omap": [
+        "O-0010",
+        "I-00021"
+      ],
+      "ocel:vmap": {}
+    },
+    "e96": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-09T04:00:00",
+      "ocel:omap": [
+        "O-0010",
+        "I-00021"
+      ],
+      "ocel:vmap": {}
+    },
+    "e97": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-09T08:00:00",
+      "ocel:omap": [
+        "O-0010",
+        "I-00032"
+      ],
+      "ocel:vmap": {}
+    },
+    "e98": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-09T09:00:00",
+      "ocel:omap": [
+        "O-0010",
+        "I-00032"
+      ],
+      "ocel:vmap": {}
+    },
+    "e99": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-09T11:00:00",
+      "ocel:omap": [
+        "O-0010",
+        "I-00002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e100": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-09T15:00:00",
+      "ocel:omap": [
+        "O-0010",
+        "I-00002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e101": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-09T18:00:00",
+      "ocel:omap": [
+        "O-0010",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e102": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-09T20:00:00",
+      "ocel:omap": [
+        "O-0010",
+        "INV-0010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e103": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-11T20:00:00",
+      "ocel:omap": [
+        "INV-0010",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e104": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-01-18T20:00:00",
+      "ocel:omap": [
+        "INV-0010",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e105": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-02-03T14:00:00",
+      "ocel:omap": [
+        "O-0011",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e106": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-02-03T21:00:00",
+      "ocel:omap": [
+        "O-0011"
+      ],
+      "ocel:vmap": {}
+    },
+    "e107": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-02-04T01:00:00",
+      "ocel:omap": [
+        "O-0011",
+        "I-00017"
+      ],
+      "ocel:vmap": {}
+    },
+    "e108": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-02-04T04:00:00",
+      "ocel:omap": [
+        "O-0011",
+        "I-00017"
+      ],
+      "ocel:vmap": {}
+    },
+    "e109": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-02-04T12:00:00",
+      "ocel:omap": [
+        "O-0011",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e110": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-02-04T14:00:00",
+      "ocel:omap": [
+        "O-0011",
+        "INV-0011"
+      ],
+      "ocel:vmap": {}
+    },
+    "e111": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-02-07T14:00:00",
+      "ocel:omap": [
+        "INV-0011",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e112": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-02-24T14:00:00",
+      "ocel:omap": [
+        "INV-0011",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e113": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-15T09:00:00",
+      "ocel:omap": [
+        "O-0012",
+        "C-008"
+      ],
+      "ocel:vmap": {}
+    },
+    "e114": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-15T20:00:00",
+      "ocel:omap": [
+        "O-0012"
+      ],
+      "ocel:vmap": {}
+    },
+    "e115": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-15T21:00:00",
+      "ocel:omap": [
+        "O-0012",
+        "I-00016"
+      ],
+      "ocel:vmap": {}
+    },
+    "e116": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-15T23:00:00",
+      "ocel:omap": [
+        "O-0012",
+        "I-00016"
+      ],
+      "ocel:vmap": {}
+    },
+    "e117": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-16T10:00:00",
+      "ocel:omap": [
+        "O-0012",
+        "C-008"
+      ],
+      "ocel:vmap": {}
+    },
+    "e118": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-16T10:00:00",
+      "ocel:omap": [
+        "O-0012",
+        "INV-0012"
+      ],
+      "ocel:vmap": {}
+    },
+    "e119": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-17T10:00:00",
+      "ocel:omap": [
+        "INV-0012",
+        "C-008"
+      ],
+      "ocel:vmap": {}
+    },
+    "e120": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-01-22T10:00:00",
+      "ocel:omap": [
+        "INV-0012",
+        "C-008"
+      ],
+      "ocel:vmap": {}
+    },
+    "e121": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-02-27T08:00:00",
+      "ocel:omap": [
+        "O-0013",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e122": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-02-27T19:00:00",
+      "ocel:omap": [
+        "O-0013"
+      ],
+      "ocel:vmap": {}
+    },
+    "e123": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-02-27T21:00:00",
+      "ocel:omap": [
+        "O-0013",
+        "I-00005"
+      ],
+      "ocel:vmap": {}
+    },
+    "e124": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-02-27T23:00:00",
+      "ocel:omap": [
+        "O-0013",
+        "I-00005"
+      ],
+      "ocel:vmap": {}
+    },
+    "e125": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-02-28T05:00:00",
+      "ocel:omap": [
+        "O-0013",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e126": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-02-28T07:00:00",
+      "ocel:omap": [
+        "O-0013",
+        "INV-0013"
+      ],
+      "ocel:vmap": {}
+    },
+    "e127": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-03-04T07:00:00",
+      "ocel:omap": [
+        "INV-0013",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e128": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-03-13T07:00:00",
+      "ocel:omap": [
+        "INV-0013",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e129": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-13T09:00:00",
+      "ocel:omap": [
+        "O-0014",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e130": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-13T13:00:00",
+      "ocel:omap": [
+        "O-0014"
+      ],
+      "ocel:vmap": {}
+    },
+    "e131": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-13T20:00:00",
+      "ocel:omap": [
+        "O-0014",
+        "I-00031"
+      ],
+      "ocel:vmap": {}
+    },
+    "e132": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-13T23:00:00",
+      "ocel:omap": [
+        "O-0014",
+        "I-00031"
+      ],
+      "ocel:vmap": {}
+    },
+    "e133": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-14T06:00:00",
+      "ocel:omap": [
+        "O-0014",
+        "I-00016"
+      ],
+      "ocel:vmap": {}
+    },
+    "e134": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-14T10:00:00",
+      "ocel:omap": [
+        "O-0014",
+        "I-00016"
+      ],
+      "ocel:vmap": {}
+    },
+    "e135": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-14T18:00:00",
+      "ocel:omap": [
+        "O-0014",
+        "I-00027"
+      ],
+      "ocel:vmap": {}
+    },
+    "e136": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-14T19:00:00",
+      "ocel:omap": [
+        "O-0014",
+        "I-00027"
+      ],
+      "ocel:vmap": {}
+    },
+    "e137": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-15T07:00:00",
+      "ocel:omap": [
+        "O-0014",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e138": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-15T09:00:00",
+      "ocel:omap": [
+        "O-0014",
+        "INV-0014"
+      ],
+      "ocel:vmap": {}
+    },
+    "e139": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-16T09:00:00",
+      "ocel:omap": [
+        "INV-0014",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e140": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-01-20T09:00:00",
+      "ocel:omap": [
+        "INV-0014",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e141": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-13T11:00:00",
+      "ocel:omap": [
+        "O-0015",
+        "C-006"
+      ],
+      "ocel:vmap": {}
+    },
+    "e142": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-14T05:00:00",
+      "ocel:omap": [
+        "O-0015"
+      ],
+      "ocel:vmap": {}
+    },
+    "e143": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-14T13:00:00",
+      "ocel:omap": [
+        "O-0015",
+        "I-00016"
+      ],
+      "ocel:vmap": {}
+    },
+    "e144": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-14T15:00:00",
+      "ocel:omap": [
+        "O-0015",
+        "I-00016"
+      ],
+      "ocel:vmap": {}
+    },
+    "e145": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-14T23:00:00",
+      "ocel:omap": [
+        "O-0015",
+        "C-006"
+      ],
+      "ocel:vmap": {}
+    },
+    "e146": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-14T23:00:00",
+      "ocel:omap": [
+        "O-0015",
+        "INV-0015"
+      ],
+      "ocel:vmap": {}
+    },
+    "e147": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-17T23:00:00",
+      "ocel:omap": [
+        "INV-0015",
+        "C-006"
+      ],
+      "ocel:vmap": {}
+    },
+    "e148": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-02-03T23:00:00",
+      "ocel:omap": [
+        "INV-0015",
+        "C-006"
+      ],
+      "ocel:vmap": {}
+    },
+    "e149": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-04T16:00:00",
+      "ocel:omap": [
+        "O-0016",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e150": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-04T17:00:00",
+      "ocel:omap": [
+        "O-0016"
+      ],
+      "ocel:vmap": {}
+    },
+    "e151": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-04T19:00:00",
+      "ocel:omap": [
+        "O-0016",
+        "I-00036"
+      ],
+      "ocel:vmap": {}
+    },
+    "e152": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-04T21:00:00",
+      "ocel:omap": [
+        "O-0016",
+        "I-00036"
+      ],
+      "ocel:vmap": {}
+    },
+    "e153": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-05T00:00:00",
+      "ocel:omap": [
+        "O-0016",
+        "I-00007"
+      ],
+      "ocel:vmap": {}
+    },
+    "e154": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-05T04:00:00",
+      "ocel:omap": [
+        "O-0016",
+        "I-00007"
+      ],
+      "ocel:vmap": {}
+    },
+    "e155": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-05T13:00:00",
+      "ocel:omap": [
+        "O-0016",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e156": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-05T14:00:00",
+      "ocel:omap": [
+        "O-0016",
+        "INV-0001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e157": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-07T14:00:00",
+      "ocel:omap": [
+        "INV-0001",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e158": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-02-06T14:00:00",
+      "ocel:omap": [
+        "INV-0001",
+        "C-002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e159": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-01T14:00:00",
+      "ocel:omap": [
+        "O-0017",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e160": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-01T23:00:00",
+      "ocel:omap": [
+        "O-0017"
+      ],
+      "ocel:vmap": {}
+    },
+    "e161": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-02T07:00:00",
+      "ocel:omap": [
+        "O-0017",
+        "I-00025"
+      ],
+      "ocel:vmap": {}
+    },
+    "e162": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-02T10:00:00",
+      "ocel:omap": [
+        "O-0017",
+        "I-00025"
+      ],
+      "ocel:vmap": {}
+    },
+    "e163": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-02T18:00:00",
+      "ocel:omap": [
+        "O-0017",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e164": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-02T20:00:00",
+      "ocel:omap": [
+        "O-0017",
+        "INV-0002"
+      ],
+      "ocel:vmap": {}
+    },
+    "e165": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-07T20:00:00",
+      "ocel:omap": [
+        "INV-0002",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e166": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-01-31T20:00:00",
+      "ocel:omap": [
+        "INV-0002",
+        "C-001"
+      ],
+      "ocel:vmap": {}
+    },
+    "e167": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-01-14T08:00:00",
+      "ocel:omap": [
+        "O-0018",
+        "C-003"
+      ],
+      "ocel:vmap": {}
+    },
+    "e168": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-01-15T03:00:00",
+      "ocel:omap": [
+        "O-0018"
+      ],
+      "ocel:vmap": {}
+    },
+    "e169": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-01-15T04:00:00",
+      "ocel:omap": [
+        "O-0018",
+        "I-00019"
+      ],
+      "ocel:vmap": {}
+    },
+    "e170": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-01-15T07:00:00",
+      "ocel:omap": [
+        "O-0018",
+        "I-00019"
+      ],
+      "ocel:vmap": {}
+    },
+    "e171": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-01-15T09:00:00",
+      "ocel:omap": [
+        "O-0018",
+        "C-003"
+      ],
+      "ocel:vmap": {}
+    },
+    "e172": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-01-15T09:00:00",
+      "ocel:omap": [
+        "O-0018",
+        "INV-0003"
+      ],
+      "ocel:vmap": {}
+    },
+    "e173": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-01-20T09:00:00",
+      "ocel:omap": [
+        "INV-0003",
+        "C-003"
+      ],
+      "ocel:vmap": {}
+    },
+    "e174": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-02-07T09:00:00",
+      "ocel:omap": [
+        "INV-0003",
+        "C-003"
+      ],
+      "ocel:vmap": {}
+    },
+    "e175": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-02-02T09:00:00",
+      "ocel:omap": [
+        "O-0019",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e176": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-02-02T15:00:00",
+      "ocel:omap": [
+        "O-0019"
+      ],
+      "ocel:vmap": {}
+    },
+    "e177": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-02-02T17:00:00",
+      "ocel:omap": [
+        "O-0019",
+        "I-00004"
+      ],
+      "ocel:vmap": {}
+    },
+    "e178": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-02-02T18:00:00",
+      "ocel:omap": [
+        "O-0019",
+        "I-00004"
+      ],
+      "ocel:vmap": {}
+    },
+    "e179": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-02-03T06:00:00",
+      "ocel:omap": [
+        "O-0019",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e180": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-02-03T06:00:00",
+      "ocel:omap": [
+        "O-0019",
+        "INV-0004"
+      ],
+      "ocel:vmap": {}
+    },
+    "e181": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-02-07T06:00:00",
+      "ocel:omap": [
+        "INV-0004",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e182": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-02-13T06:00:00",
+      "ocel:omap": [
+        "INV-0004",
+        "C-009"
+      ],
+      "ocel:vmap": {}
+    },
+    "e183": {
+      "ocel:activity": "Create Order",
+      "ocel:timestamp": "2025-02-08T08:00:00",
+      "ocel:omap": [
+        "O-0020",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e184": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2025-02-09T04:00:00",
+      "ocel:omap": [
+        "O-0020"
+      ],
+      "ocel:vmap": {}
+    },
+    "e185": {
+      "ocel:activity": "Pick Items",
+      "ocel:timestamp": "2025-02-09T06:00:00",
+      "ocel:omap": [
+        "O-0020",
+        "I-00038"
+      ],
+      "ocel:vmap": {}
+    },
+    "e186": {
+      "ocel:activity": "Pack Items",
+      "ocel:timestamp": "2025-02-09T10:00:00",
+      "ocel:omap": [
+        "O-0020",
+        "I-00038"
+      ],
+      "ocel:vmap": {}
+    },
+    "e187": {
+      "ocel:activity": "Ship Order",
+      "ocel:timestamp": "2025-02-09T22:00:00",
+      "ocel:omap": [
+        "O-0020",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e188": {
+      "ocel:activity": "Create Invoice",
+      "ocel:timestamp": "2025-02-10T00:00:00",
+      "ocel:omap": [
+        "O-0020",
+        "INV-0005"
+      ],
+      "ocel:vmap": {}
+    },
+    "e189": {
+      "ocel:activity": "Send Invoice",
+      "ocel:timestamp": "2025-02-15T00:00:00",
+      "ocel:omap": [
+        "INV-0005",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    },
+    "e190": {
+      "ocel:activity": "Receive Payment",
+      "ocel:timestamp": "2025-03-06T00:00:00",
+      "ocel:omap": [
+        "INV-0005",
+        "C-010"
+      ],
+      "ocel:vmap": {}
+    }
+  },
+  "ocel:objects": {
+    "O-0001": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "C-002": {
+      "ocel:type": "customer",
+      "ocel:ovmap": {}
+    },
+    "I-00018": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0001": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0002": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "C-001": {
+      "ocel:type": "customer",
+      "ocel:ovmap": {}
+    },
+    "I-00013": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "I-00035": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "I-00027": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0002": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0003": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "C-010": {
+      "ocel:type": "customer",
+      "ocel:ovmap": {}
+    },
+    "I-00003": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "I-00030": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0003": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0004": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00007": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0004": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0005": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00011": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "I-00016": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0005": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0006": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00021": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "I-00014": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "I-00032": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0006": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0007": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00010": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0007": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0008": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "C-009": {
+      "ocel:type": "customer",
+      "ocel:ovmap": {}
+    },
+    "I-00008": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0008": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0009": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00020": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0009": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0010": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00002": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0010": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0011": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00017": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0011": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0012": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "C-008": {
+      "ocel:type": "customer",
+      "ocel:ovmap": {}
+    },
+    "INV-0012": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0013": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00005": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0013": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0014": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00031": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "INV-0014": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0015": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "C-006": {
+      "ocel:type": "customer",
+      "ocel:ovmap": {}
+    },
+    "INV-0015": {
+      "ocel:type": "invoice",
+      "ocel:ovmap": {}
+    },
+    "O-0016": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00036": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "O-0017": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00025": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "O-0018": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "C-003": {
+      "ocel:type": "customer",
+      "ocel:ovmap": {}
+    },
+    "I-00019": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "O-0019": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00004": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "O-0020": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "I-00038": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    }
+  }
+}

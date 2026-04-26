@@ -1,0 +1,68 @@
+# Development override for docker-compose.yml.
+#
+# Activate with:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# What this adds on top of the production-safe base:
+#
+#   * Bind-mounts the local ./backend and ./frontend source trees
+#     into the running containers so you can edit code without
+#     rebuilding. Production MUST NEVER use bind mounts.
+#   * Runs uvicorn with --reload so the API restarts on source edits.
+#   * Runs the Vite dev server in the frontend instead of the built
+#     nginx static bundle, for instant HMR.
+#   * Exposes the backend port on 0.0.0.0 so editors and tools on the
+#     host (postman, httpie, language servers) can reach it directly.
+
+services:
+  backend:
+    environment:
+      ENV: development
+    volumes:
+      - ./backend:/app
+    # Replace (not append) the ports list from docker-compose.yml.
+    # The empty first line tells Compose we want this list to fully
+    # overwrite the base.
+    ports: !override
+      - "0.0.0.0:8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Dev mode runs as the host user so edits done from the editor
+    # don't create root-owned files in the bind-mount.
+    user: "${UID:-1000}:${GID:-1000}"
+
+  worker:
+    environment:
+      ENV: development
+    volumes:
+      - ./backend:/app
+    user: "${UID:-1000}:${GID:-1000}"
+
+  beat:
+    environment:
+      ENV: development
+    volumes:
+      - ./backend:/app
+    user: "${UID:-1000}:${GID:-1000}"
+
+  frontend:
+    # Use a distinct image tag so docker compose builds a separate
+    # builder-target image for dev mode. Without this, the base
+    # compose file's ``image: flowminer-frontend:local`` would be
+    # reused — and that's the final nginx-runtime stage, which
+    # doesn't have node installed.
+    image: flowminer-frontend:dev
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: builder
+    entrypoint: []
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "80"]
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+      # Inside the docker network, the backend is reachable at
+      # http://backend:8000. Vite's /api proxy will forward there.
+      VITE_API_PROXY_TARGET: http://backend:8000

@@ -1,0 +1,34 @@
+log                                        analysis                    pm4py       ours    speedup  status
+------------------------------------------------------------------------------------------------------------
+running-example (6×6)                      efg                        0.006s     0.004s       1.4x  OK
+running-example (6×6)                      temporal_profile           0.008s     0.012s       0.7x  OK
+running-example (6×6)                      log_skeleton               0.002s     0.001s       1.9x  FAIL
+  └─ LogSkeleton family equivalence mismatch
+  └─ LogSkeleton family always_after mismatch
+  └─ LogSkeleton family always_before mismatch
+  └─ LogSkeleton family never_together mismatch
+  └─ LogSkeleton family directly_follows mismatch
+running-example (6×6)                      conformance                0.007s     0.030s       0.2x  OK
+HR_Onboarding (1000×6)                     efg                        0.016s     0.015s       1.1x  OK
+HR_Onboarding (1000×6)                     temporal_profile           0.019s     0.036s       0.5x  OK
+HR_Onboarding (1000×6)                     log_skeleton               0.010s     0.009s       1.1x  FAIL
+  └─ LogSkeleton family equivalence mismatch
+  └─ LogSkeleton family always_after mismatch
+  └─ LogSkeleton family always_before mismatch
+  └─ LogSkeleton family directly_follows mismatch
+HR_Onboarding (1000×6)                     conformance                0.076s     0.091s       0.8x  OK
+Transport Document flatten (594×4.3)       efg                        0.009s     0.007s       1.3x  OK
+Transport Document flatten (594×4.3)       temporal_profile           0.011s     0.018s       0.6x  OK
+Transport Document flatten (594×4.3)       log_skeleton               0.007s     0.006s       1.1x  FAIL
+  └─ LogSkeleton family equivalence mismatch
+  └─ LogSkeleton family always_after mismatch
+  └─ LogSkeleton family always_before mismatch
+  └─ LogSkeleton family directly_follows mismatch
+Transport Document flatten (594×4.3)       conformance                0.039s     0.078s       0.5x  OK
+Forklift flatten (3×2579)                  efg                        4.218s     4.219s       1.0x  OK
+Forklift flatten (3×2579)                  temporal_profile           4.333s     9.869s       0.4x  OK
+Forklift flatten (3×2579)                  log_skeleton               3.174s     3.166s       1.0x  OK
+Forklift flatten (3×2579)                  conformance                 >300s      >300s          —  WARN
+  └─ subprocess TIMEOUT (>300s, hard-killed)
+
+Parity warnings (non-fatal): 1. Hard fails: 1.

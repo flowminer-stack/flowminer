@@ -1,0 +1,62 @@
+# Keep the build context lean — everything excluded here never gets
+# shipped into the layer that contains COPY . .
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Python bytecode and caches
+__pycache__
+*.py[cod]
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+.coverage.*
+coverage.xml
+htmlcov
+.hypothesis
+
+# Virtualenvs
+.venv
+venv
+env
+ENV
+
+# Packaging artifacts
+*.egg-info
+dist
+build
+
+# Secrets — NEVER in a layer
+.env
+.env.*
+*.env
+*.secret
+*.pem
+*.key
+*.crt
+
+# IDE + OS
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# Local-only files
+*.log
+logs/
+celerybeat-schedule
+celerybeat-schedule.db
+
+# Tests are run in CI against a separate target, not inside the
+# production image. Remove this exclusion if you want to run
+# pytest inside the runtime container.
+tests
+conftest.py
+
+# Docs go with the repo, not the image
+docs
+README.md

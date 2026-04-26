@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels:
+    app: flowminer
+    component: worker
+spec:
+  replicas: {{ .Values.replicas.worker }}
+  selector:
+    matchLabels:
+      app: flowminer
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: flowminer
+        component: worker
+    spec:
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
+          env:
+            - name: DATABASE_URL
+              value: {{ .Values.database.externalUrl | default (printf "postgresql+asyncpg://flowminer:flowminer@%s-postgres:5432/flowminer" .Release.Name) | quote }}
+            - name: SYNC_DATABASE_URL
+              value: {{ .Values.database.externalUrl | default (printf "postgresql://flowminer:flowminer@%s-postgres:5432/flowminer" .Release.Name) | quote }}
+            - name: REDIS_URL
+              value: {{ .Values.redis.externalUrl | default (printf "redis://%s-redis:6379/0" .Release.Name) | quote }}
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: secret-key
+            - name: UPLOAD_DIR
+              value: /data/uploads
+          volumeMounts:
+            - name: uploads
+              mountPath: /data/uploads
+          resources:
+{{ toYaml .Values.resources.worker | indent 12 }}
+      volumes:
+        - name: uploads
+{{- if .Values.storage.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-uploads
+{{- else }}
+          emptyDir: {}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-beat
+  labels:
+    app: flowminer
+    component: beat
+spec:
+  replicas: {{ .Values.replicas.beat }}
+  selector:
+    matchLabels:
+      app: flowminer
+      component: beat
+  template:
+    metadata:
+      labels:
+        app: flowminer
+        component: beat
+    spec:
+      containers:
+        - name: beat
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command: ["celery", "-A", "app.workers.celery_app", "beat", "--loglevel=info"]
+          env:
+            - name: REDIS_URL
+              value: {{ .Values.redis.externalUrl | default (printf "redis://%s-redis:6379/0" .Release.Name) | quote }}
+            - name: DATABASE_URL
+              value: {{ .Values.database.externalUrl | default (printf "postgresql+asyncpg://flowminer:flowminer@%s-postgres:5432/flowminer" .Release.Name) | quote }}
+            - name: SYNC_DATABASE_URL
+              value: {{ .Values.database.externalUrl | default (printf "postgresql://flowminer:flowminer@%s-postgres:5432/flowminer" .Release.Name) | quote }}
+          resources:
+{{ toYaml .Values.resources.beat | indent 12 }}

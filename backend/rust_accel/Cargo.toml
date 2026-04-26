@@ -1,0 +1,15 @@
+[package]
+name = "flowminer-accel"
+version = "0.1.0"
+edition = "2021"
+description = "Rust-accelerated process mining algorithms for FlowMiner"
+
+[lib]
+name = "flowminer_accel"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.25", features = ["extension-module"] }
+numpy = "0.25"
+rustc-hash = "2"
+quick-xml = "0.37"

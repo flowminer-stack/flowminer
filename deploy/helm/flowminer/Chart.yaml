@@ -1,0 +1,18 @@
+apiVersion: v2
+name: flowminer
+description: |
+  FlowMiner — open-source process mining platform. Deploys the
+  FastAPI backend, Celery worker + beat, PostgreSQL, Redis, and the
+  React frontend as a single Helm release.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - process-mining
+  - bpm
+  - analytics
+home: https://github.com/flowminer/flowminer
+sources:
+  - https://github.com/flowminer/flowminer
+maintainers:
+  - name: FlowMiner

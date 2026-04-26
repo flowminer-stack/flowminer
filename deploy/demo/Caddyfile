@@ -1,0 +1,48 @@
+# Caddy reverse proxy for demo.flowminer.io.
+#
+# Terminates TLS (Let's Encrypt), serves the FlowMiner SPA, and
+# proxies /api/v1/* to the backend container. Copy to
+# /etc/caddy/Caddyfile and reload with `sudo systemctl reload caddy`.
+#
+# Caddy's ACME client handles cert issuance + renewal automatically
+# as long as ports 80 and 443 are reachable from the public internet.
+
+demo.flowminer.io {
+	encode zstd gzip
+
+	# Aggressive security headers on top of what the backend
+	# already sets. Caddy applies these before the response hits
+	# the client, so even a misconfigured backend can't downgrade
+	# them.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# Backend API — proxied to the uvicorn container on the
+	# Docker host's loopback port 8000 (published by
+	# docker-compose.yml). WebSocket and SSE streams both flow
+	# through here; Caddy auto-detects and keeps the connection
+	# open for /api/v1/ai/chat.
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:8000 {
+			header_up X-Forwarded-Proto https
+			header_up Host {host}
+			flush_interval -1
+		}
+	}
+
+	# Health probe for the external uptime monitor.
+	handle /health {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# Everything else goes to the SPA container (nginx serving
+	# the built React bundle on port 3000).
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}

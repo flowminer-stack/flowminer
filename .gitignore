@@ -1,0 +1,109 @@
+# ─── Python ────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+*.egg
+.installed.cfg
+dist/
+build/
+.venv/
+venv/
+env/
+ENV/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+cython_debug/
+
+# ─── Celery ────────────────────────────────────────────────────────────
+celerybeat-schedule
+celerybeat-schedule.db
+celerybeat.pid
+
+# ─── Node / Frontend ───────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+*.tsbuildinfo
+
+# ─── Docker / Runtime ──────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── IDE ───────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── OS ────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Environment + Secrets ────────────────────────────────────────────
+# Never commit a real .env. The reference copy lives in .env.example.
+# Any file with .env in the name (e.g. db.env, prod.env) is also
+# excluded by the wildcard below.
+.env
+.env.*
+!.env.example
+*.env
+*.secret
+*.secrets
+secrets.*
+secrets/
+
+# TLS and key material — anything a newcomer might accidentally
+# generate inside the repo for local testing.
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.der
+*.jks
+
+# Databases and data dumps
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+
+# ─── Local uploads and data volumes ───────────────────────────────────
+/data/
+uploads/
+backend/uploads/
+
+# ─── Generic cache ─────────────────────────────────────────────────────
+.cache/
+
+# ─── Tool-specific local state ────────────────────────────────────────
+# Claude Code session data, Playwright debugging artifacts,
+# and the local design-system scratch directory.
+.claude/
+.playwright-mcp/
+.interface-design/
+
+# Loose competitor-analysis screenshots and debug images that
+# sometimes accumulate in the repo root during active development.
+# Keep them out of the public repo entirely.
+celonisDemo/
+conformance-timeout.png
+efg-debug.png
+efg-fixed.png
