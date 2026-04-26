@@ -2884,6 +2884,50 @@ async def decision_rules(
     return result
 
 
+@router.get("/decision-rules/{event_log_id}/dmn")
+async def decision_rules_dmn(
+    event_log_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Export discovered decision rules as a DMN 1.4 XML file.
+
+    Returns an ``application/xml`` response suitable for import into
+    Camunda Modeler, Trisotech, or any DMN 1.4-compliant engine.
+    The filename is derived from the event log name.
+    """
+    from fastapi.responses import Response as FastAPIResponse
+    from app.services.dmn_export import decision_rules_to_dmn
+
+    await _assert_event_log_access(event_log_id, db, current_user)
+
+    # Reuse cached decision-rules result if available
+    cached = _get_cached(event_log_id, "decision_rules")
+    if cached is not None:
+        rules = cached
+        # Fetch log name separately (cheap)
+        result = await db.execute(select(EventLog).where(EventLog.id == event_log_id))
+        event_log = result.scalar_one_or_none()
+        log_name = event_log.name if event_log else "Process"
+    else:
+        event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
+        log_name = event_log.name
+        rules = await _run_in_thread(mining_engine.discover_decision_rules, df)
+        _set_cached(event_log_id, "decision_rules", rules)
+
+    xml_content = decision_rules_to_dmn(rules, log_name)
+
+    from app.services.dmn_export import _slugify
+    slug = _slugify(log_name)
+    filename = f"{slug}_decisions.dmn"
+
+    return FastAPIResponse(
+        content=xml_content,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/staff-assignment/{event_log_id}")
 async def staff_assignment(
     event_log_id: UUID,
