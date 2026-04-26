@@ -51,6 +51,7 @@ import DataQualityCard from '@/components/DataQuality/DataQualityCard';
 import AnalysisHub, { ANALYSIS_ITEMS } from '@/components/AnalysisHub/AnalysisHub';
 import InsightsPanel from '@/components/InsightsPanel/InsightsPanel';
 import FilterPanel from '@/components/ProcessMap/FilterPanel';
+import ComplexityScoreBadge from '@/components/ProcessMap/ComplexityScoreBadge';
 import { mining as miningApi } from '@/api/client';
 import { useUIStore } from '@/store';
 import type { ProcessFilter } from '@/types';
@@ -256,6 +257,16 @@ export default function ProcessViewPage() {
   );
   const { discovery, loading: mapLoading, refetch } = useProcessMap(eventLogId, algorithm, hasFilters ? stableFilters : undefined, stableParams);
 
+  const gatewayCount = useMemo(() => {
+    if (!discovery?.nodes || !discovery?.edges) return 0;
+    const inDeg = new Map<string, number>(), outDeg = new Map<string, number>();
+    discovery.edges.forEach(e => {
+      outDeg.set(e.source, (outDeg.get(e.source) ?? 0) + 1);
+      inDeg.set(e.target, (inDeg.get(e.target) ?? 0) + 1);
+    });
+    return discovery.nodes.filter(n => (inDeg.get(n.id) ?? 0) > 1 || (outDeg.get(n.id) ?? 0) > 1).length;
+  }, [discovery]);
+
   const [searchParams] = useSearchParams();
   const urlTab = (searchParams.get('tab') as Tab) || 'map';
   const initialAnalysisId = searchParams.get('analysis') ?? undefined;
@@ -266,7 +277,7 @@ export default function ProcessViewPage() {
     setTab(urlTab);
   }, [urlTab]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
-  const [complexity, setComplexity] = useState(100);
+  const [complexity, setComplexity] = useState(80);
   const [cleanView, setCleanView] = useState(false);
   const [autoSimplifiedForLogId, setAutoSimplifiedForLogId] = useState<string | null>(null);
   const [mapLayout, setMapLayout] = useState<'dagre' | 'breadthfirst' | 'circle' | 'concentric' | 'grid'>('dagre');
@@ -610,6 +621,13 @@ export default function ProcessViewPage() {
                 <span className="text-[10px] tabular-nums text-fg-faint hidden sm:inline">
                   {visibleCounts.nodes}N · {visibleCounts.edges}E
                 </span>
+                {discovery && (
+                  <ComplexityScoreBadge
+                    activityCount={discovery.nodes.length}
+                    edgeCount={discovery.edges.length}
+                    gatewayCount={gatewayCount}
+                  />
+                )}
               </div>
 
               {/* Noise filter — inductive / heuristic only */}
