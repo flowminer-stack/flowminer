@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
@@ -1155,3 +1156,196 @@ async def ai_explain_variant(
         stats=stats,
         llm_configured=llm.is_llm_configured(),
     )
+
+
+# ─── 7. Plain-language Explain (bottleneck / conformance / prediction) ───────
+#
+# A lightweight endpoint that generates a 1-2 sentence plain-English
+# explanation for a single bottleneck row or conformance deviation.
+# Designed to be called inline from the UI "Explain" button; results
+# are cheap enough to not need heavy caching for v1.
+#
+# The endpoint works end-to-end even when the LLM is unconfigured —
+# it falls back to a per-kind templated string and sets
+# ``fallback_used=True`` so the client can render a small disclaimer.
+
+
+_EXPLAIN_SYSTEM = (
+    "You are a concise process-mining analyst assistant. "
+    "Output only plain English. "
+    "Maximum 2 sentences for the explanation field. "
+    "Maximum 1 sentence for the actionable_hint field. "
+    "Never invent activity names, resource names, or numbers not in the "
+    "user input. "
+    'Respond with valid JSON in this exact shape: '
+    '{"explanation": "<1-2 sentences>", "actionable_hint": "<1 sentence or null>"}'
+)
+
+_EXPLAIN_USER_TEMPLATES: dict[str, str] = {
+    "bottleneck": (
+        "You are explaining a process-mining finding to a business analyst. "
+        "Activity '{activity}' has an average duration of {avg_duration_human} "
+        "(median {median_duration_human}) and severity '{severity}'. "
+        "In ≤2 sentences, plainly explain what this likely means and include "
+        "1 short suggestion as actionable_hint. "
+        "Do not invent activity names or attributes not in the context."
+    ),
+    "conformance": (
+        "Explain this process deviation to a business analyst in ≤2 sentences. "
+        "Case '{case_id}' shows a '{deviation_type}' deviation involving "
+        "activity '{activity}'. "
+        "Plainly state what this kind of deviation means in process terms "
+        "and provide one short way to investigate as actionable_hint."
+    ),
+    "prediction": (
+        "Explain this process prediction to a business analyst in ≤2 sentences. "
+        "The prediction context is: {context_summary}. "
+        "Plainly state what this prediction means and provide one short "
+        "next step as actionable_hint."
+    ),
+}
+
+_EXPLAIN_FALLBACKS: dict[str, tuple[str, str]] = {
+    "bottleneck": (
+        "This activity is among the slowest in the process.",
+        "Consider examining waiting times and resource availability.",
+    ),
+    "conformance": (
+        "This case did not follow the expected process flow.",
+        "Review whether the deviation is intentional or indicates a process gap.",
+    ),
+    "prediction": (
+        "This prediction reflects historical patterns in your event log.",
+        "Consider verifying the underlying assumptions.",
+    ),
+}
+
+
+def _fmt_seconds(s: float | int | None) -> str:
+    """Human-readable duration from seconds."""
+    if s is None:
+        return "unknown"
+    s = float(s)
+    if s < 60:
+        return f"{s:.0f}s"
+    if s < 3600:
+        return f"{s/60:.1f}m"
+    if s < 86400:
+        return f"{s/3600:.1f}h"
+    return f"{s/86400:.1f}d"
+
+
+class ExplainRequest(BaseModel):
+    kind: Literal["bottleneck", "conformance", "prediction"]
+    context: dict  # small JSON supplied by the frontend
+
+
+class ExplainResponse(BaseModel):
+    explanation: str          # 1-2 sentences max
+    actionable_hint: str | None
+    fallback_used: bool       # True when LLM unavailable/errored
+
+
+@router.post("/explain", response_model=ExplainResponse)
+async def ai_explain(
+    body: ExplainRequest,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Return a 1-2 sentence plain-language explanation for a single
+    bottleneck row or conformance deviation.
+
+    The endpoint is intentionally lightweight — no event log is loaded,
+    no DataFrame work runs.  The caller passes a small ``context`` dict
+    with the fields it already has from the mining response.
+
+    Defensive fallback: if the LLM provider is unconfigured, times out,
+    or returns unparseable JSON, a templated string is returned with
+    ``fallback_used=True``.
+    """
+    import asyncio as _asyncio
+
+    kind = body.kind
+    ctx = body.context
+
+    fallback_explanation, fallback_hint = _EXPLAIN_FALLBACKS.get(
+        kind, ("No explanation available.", None)
+    )
+
+    # Build the user prompt from the kind-specific template.
+    try:
+        if kind == "bottleneck":
+            user_prompt = _EXPLAIN_USER_TEMPLATES["bottleneck"].format(
+                activity=ctx.get("activity", "unknown"),
+                avg_duration_human=_fmt_seconds(ctx.get("avg_duration_s") or ctx.get("avg_duration")),
+                median_duration_human=_fmt_seconds(ctx.get("median_duration_s") or ctx.get("median_duration")),
+                severity=ctx.get("severity", "unknown"),
+            )
+        elif kind == "conformance":
+            user_prompt = _EXPLAIN_USER_TEMPLATES["conformance"].format(
+                case_id=ctx.get("case_id", "unknown"),
+                deviation_type=ctx.get("deviation_type", "unknown"),
+                activity=ctx.get("activity", "unknown"),
+            )
+        else:  # prediction
+            summary_parts = [f"{k}={v}" for k, v in list(ctx.items())[:6]]
+            user_prompt = _EXPLAIN_USER_TEMPLATES["prediction"].format(
+                context_summary=", ".join(summary_parts) or "no details provided",
+            )
+    except Exception as e:
+        logger.warning("ai_explain: prompt build failed for kind=%s: %s", kind, e)
+        return ExplainResponse(
+            explanation=fallback_explanation,
+            actionable_hint=fallback_hint,
+            fallback_used=True,
+        )
+
+    # Call LLM in thread (sync completion).
+    if not llm.is_llm_configured():
+        return ExplainResponse(
+            explanation=fallback_explanation,
+            actionable_hint=fallback_hint,
+            fallback_used=True,
+        )
+
+    try:
+        raw = await _asyncio.to_thread(
+            llm.complete, _EXPLAIN_SYSTEM, user_prompt, temperature=0.2
+        )
+    except Exception as e:
+        logger.warning("ai_explain: LLM call failed for kind=%s: %s", kind, e)
+        return ExplainResponse(
+            explanation=fallback_explanation,
+            actionable_hint=fallback_hint,
+            fallback_used=True,
+        )
+
+    # Parse the JSON the model should have returned.
+    try:
+        # Strip markdown fences if the model wrapped the JSON.
+        stripped = raw.strip()
+        if stripped.startswith("```"):
+            lines = [l for l in stripped.splitlines() if not l.startswith("```")]
+            stripped = "\n".join(lines)
+        parsed = json.loads(stripped)
+        explanation = str(parsed.get("explanation") or fallback_explanation).strip()
+        hint_raw = parsed.get("actionable_hint")
+        actionable_hint = str(hint_raw).strip() if hint_raw else None
+        return ExplainResponse(
+            explanation=explanation,
+            actionable_hint=actionable_hint,
+            fallback_used=False,
+        )
+    except (json.JSONDecodeError, Exception) as e:
+        logger.warning(
+            "ai_explain: could not parse LLM JSON response for kind=%s: %s — "
+            "returning raw text as explanation",
+            kind, e,
+        )
+        # Fall back gracefully: use raw text as the explanation rather
+        # than the templated string, since the LLM DID respond.
+        explanation = raw.strip()[:400]
+        return ExplainResponse(
+            explanation=explanation or fallback_explanation,
+            actionable_hint=None,
+            fallback_used=False,
+        )

@@ -15,6 +15,7 @@ import EmptyState from '@/components/common/EmptyState';
 import HintTooltip from '@/components/common/Tooltip';
 import ComplianceMatrix from '@/components/Conformance/ComplianceMatrix';
 import SideBySideConformance from '@/components/Conformance/SideBySideConformance';
+import ExplainButton from '@/components/AI/ExplainButton';
 import { mining as miningApi } from '@/api/client';
 import { useUIStore } from '@/store';
 import clsx from 'clsx';
@@ -83,6 +84,23 @@ const deviationColumns: ColumnDef<Deviation, unknown>[] = [
     accessorKey: 'actual',
     header: 'Actual',
     cell: ({ getValue }) => getValue<string>() ?? '--',
+  },
+  {
+    id: 'explain',
+    header: '',
+    cell: ({ row }) => (
+      <ExplainButton
+        kind="conformance"
+        context={{
+          case_id: row.original.case_id,
+          deviation_type: row.original.deviation_type,
+          activity: row.original.activity ?? '',
+          expected: row.original.expected ?? null,
+          actual: row.original.actual ?? null,
+        }}
+        size="xs"
+      />
+    ),
   },
 ];
 
