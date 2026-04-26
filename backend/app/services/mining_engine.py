@@ -2369,55 +2369,270 @@ class MiningEngine:
 
         return {"constraints": _convert(skeleton)}
 
-    def get_declare(self, df: pd.DataFrame) -> dict:
+    def get_declare(self, df: pd.DataFrame, support_threshold: float = 0.7) -> dict:
         """
         Discover DECLARE constraints from the event log.
 
+        Runs a two-phase approach:
+        1. pm4py.discover_declare for the standard pm4py templates (Response,
+           Precedence, etc.) normalised into a flat rules list.
+        2. A custom O(n) scan over case sequences that computes the richer
+           template set from MINERful / SIESTA literature with proper
+           support, confidence, and a plain-language narrative.
+
+        Template coverage (custom scan):
+            Existence, Absence, Exactly-one (unary cardinality)
+            Init, End (position)
+            Response, Precedence, Succession (ordering)
+            Co-existence, Not-Co-existence, Choice, Exclusive-choice (relational)
+
+        Args:
+            support_threshold: only return rules where support >= this value
+                (default 0.7 — 70% of cases must satisfy the rule).
+
         Returns:
-            dict with key: rules (list of {template, activity_a, activity_b, support})
+            dict with key: rules (list of {template, activity_a, activity_b,
+                support, confidence, narrative})
         """
-        import pm4py
+        from collections import defaultdict as _dd
 
-        declare_model = pm4py.discover_declare(
-            df,
-            activity_key=ACTIVITY_COL,
-            case_id_key=CASE_COL,
-            timestamp_key=TIMESTAMP_COL,
-        )
+        # ── Phase 1: pm4py discover_declare ─────────────────────────────────
+        import pm4py as _pm4py
 
-        rules = []
-        for template_name, pairs in declare_model.items():
-            if isinstance(pairs, dict):
-                for pair_key, support in pairs.items():
-                    if isinstance(pair_key, (tuple, list)) and len(pair_key) == 2:
-                        act_a, act_b = str(pair_key[0]), str(pair_key[1])
-                    else:
-                        act_a = str(pair_key)
-                        act_b = None
-                    if isinstance(support, dict):
-                        sup_val = support.get("support", support.get("confidence", 0))
-                    else:
-                        sup_val = support
-                    try:
-                        sup_val = float(sup_val)
-                    except (TypeError, ValueError):
-                        sup_val = 0.0
-                    rules.append({
+        pm4py_rules: list[dict] = []
+        try:
+            declare_model = _pm4py.discover_declare(
+                df,
+                activity_key=ACTIVITY_COL,
+                case_id_key=CASE_COL,
+                timestamp_key=TIMESTAMP_COL,
+            )
+            for template_name, pairs in declare_model.items():
+                if isinstance(pairs, dict):
+                    for pair_key, support in pairs.items():
+                        if isinstance(pair_key, (tuple, list)) and len(pair_key) == 2:
+                            act_a, act_b = str(pair_key[0]), str(pair_key[1])
+                        else:
+                            act_a = str(pair_key)
+                            act_b = None
+                        if isinstance(support, dict):
+                            sup_val = support.get("support", support.get("confidence", 0))
+                        else:
+                            sup_val = support
+                        try:
+                            sup_val = float(sup_val)
+                        except (TypeError, ValueError):
+                            sup_val = 0.0
+                        pm4py_rules.append({
+                            "template": str(template_name),
+                            "activity_a": act_a,
+                            "activity_b": act_b,
+                            "support": sup_val,
+                            "confidence": sup_val,
+                            "narrative": None,
+                        })
+                elif isinstance(pairs, (int, float)):
+                    pm4py_rules.append({
                         "template": str(template_name),
-                        "activity_a": act_a,
-                        "activity_b": act_b,
-                        "support": sup_val,
+                        "activity_a": "",
+                        "activity_b": None,
+                        "support": float(pairs),
+                        "confidence": float(pairs),
+                        "narrative": None,
                     })
-            elif isinstance(pairs, (int, float)):
-                # Unary template — no pair
-                rules.append({
-                    "template": str(template_name),
-                    "activity_a": "",
-                    "activity_b": None,
-                    "support": float(pairs),
-                })
+        except Exception as exc:
+            logger.warning(f"pm4py.discover_declare failed, skipping pm4py phase: {exc}")
 
-        return {"rules": rules}
+        # ── Phase 2: custom O(n) scan for richer templates ───────────────────
+        # Derive per-case activity sequences
+        sorted_df = df.sort_values([CASE_COL, TIMESTAMP_COL])
+        cases: dict[str, list[str]] = {}
+        for case_id, grp in sorted_df.groupby(CASE_COL, sort=False):
+            cases[str(case_id)] = [str(a) for a in grp[ACTIVITY_COL].tolist()]
+
+        total_cases = len(cases)
+        if total_cases == 0:
+            return {"rules": pm4py_rules}
+
+        all_activities: set[str] = {a for seq in cases.values() for a in seq}
+
+        # Per-activity counters
+        act_cases: dict[str, int] = _dd(int)       # cases containing A
+        act_exactly_one: dict[str, int] = _dd(int)  # cases with exactly one A
+        act_init: dict[str, int] = _dd(int)         # cases starting with A
+        act_end: dict[str, int] = _dd(int)          # cases ending with A
+
+        # Pair counters  (A, B) ordered
+        pair_both: dict[tuple, int] = _dd(int)       # cases containing both A and B
+        pair_a_before_b: dict[tuple, int] = _dd(int) # cases where A appears before any B
+        pair_response: dict[tuple, int] = _dd(int)   # cases where after every A, B eventually follows
+        pair_precedence: dict[tuple, int] = _dd(int) # cases where every B is preceded by A
+
+        for seq in cases.values():
+            act_set = set(seq)
+            act_counts = _dd(int)
+            for a in seq:
+                act_counts[a] += 1
+
+            for a in act_set:
+                act_cases[a] += 1
+                if act_counts[a] == 1:
+                    act_exactly_one[a] += 1
+                if seq[0] == a:
+                    act_init[a] += 1
+                if seq[-1] == a:
+                    act_end[a] += 1
+
+            for a in act_set:
+                for b in act_set:
+                    if a == b:
+                        continue
+                    ab = (a, b)
+                    pair_both[ab] += 1
+
+                    # A before B: some occurrence of A appears before some occurrence of B
+                    indices_a = [i for i, x in enumerate(seq) if x == a]
+                    indices_b = [i for i, x in enumerate(seq) if x == b]
+
+                    if any(ia < ib for ia in indices_a for ib in indices_b):
+                        pair_a_before_b[ab] += 1
+
+                    # Response(A,B): every A in the sequence is eventually followed by B
+                    resp_ok = all(
+                        any(seq[j] == b for j in range(i + 1, len(seq)))
+                        for i, x in enumerate(seq) if x == a
+                    )
+                    if resp_ok:
+                        pair_response[ab] += 1
+
+                    # Precedence(A,B): every B in the sequence is preceded by A
+                    prec_ok = all(
+                        any(seq[j] == a for j in range(0, i))
+                        for i, x in enumerate(seq) if x == b
+                    )
+                    if prec_ok:
+                        pair_precedence[ab] += 1
+
+        _NARRATIVES = {
+            "Existence":         lambda a, _: f"'{a}' occurs at least once in the case.",
+            "Absence":           lambda a, _: f"'{a}' never occurs in the case.",
+            "ExactlyOne":        lambda a, _: f"'{a}' occurs exactly once per case.",
+            "Init":              lambda a, _: f"'{a}' is always the first activity in the case.",
+            "End":               lambda a, _: f"'{a}' is always the last activity in the case.",
+            "Response":          lambda a, b: f"Whenever '{a}' occurs, '{b}' eventually follows in the same case.",
+            "Precedence":        lambda a, b: f"'{b}' only occurs after '{a}' has occurred.",
+            "Succession":        lambda a, b: f"'{a}' and '{b}' always occur together with '{a}' before '{b}'.",
+            "CoExistence":       lambda a, b: f"If '{a}' occurs, '{b}' also occurs (and vice versa).",
+            "NotCoExistence":    lambda a, b: f"'{a}' and '{b}' never both appear in the same case.",
+            "Choice":            lambda a, b: f"At least one of '{a}' or '{b}' occurs in every case.",
+            "ExclusiveChoice":   lambda a, b: f"Exactly one of '{a}' or '{b}' occurs — never both, never neither.",
+        }
+
+        def _narrative(template: str, a: str, b: str | None) -> str:
+            fn = _NARRATIVES.get(template)
+            if fn:
+                return fn(a, b or "")
+            return f"{template}: {a}" + (f" → {b}" if b else "")
+
+        custom_rules: list[dict] = []
+
+        def _add(template, act_a, act_b, support, confidence):
+            if support < support_threshold:
+                return
+            custom_rules.append({
+                "template": template,
+                "activity_a": act_a,
+                "activity_b": act_b,
+                "support": round(support, 4),
+                "confidence": round(confidence, 4),
+                "narrative": _narrative(template, act_a, act_b),
+            })
+
+        # Unary templates
+        for a in sorted(all_activities):
+            n_a = act_cases[a]
+            sup_exist = n_a / total_cases
+            _add("Existence", a, None, sup_exist, sup_exist)
+            _add("Absence", a, None, 1.0 - sup_exist, 1.0 - sup_exist)
+            _add("ExactlyOne", a, None, act_exactly_one[a] / total_cases,
+                 act_exactly_one[a] / n_a if n_a else 0.0)
+            _add("Init", a, None, act_init[a] / total_cases,
+                 act_init[a] / n_a if n_a else 0.0)
+            _add("End", a, None, act_end[a] / total_cases,
+                 act_end[a] / n_a if n_a else 0.0)
+
+        # Binary templates
+        for a in sorted(all_activities):
+            for b in sorted(all_activities):
+                if a >= b:
+                    continue
+                ab = (a, b)
+                ba = (b, a)
+                n_both = pair_both.get(ab, 0) or pair_both.get(ba, 0)
+                n_a = act_cases[a]
+                n_b = act_cases[b]
+
+                # Response(A→B)
+                if n_a > 0:
+                    resp_sup = pair_response.get(ab, 0) / total_cases
+                    resp_conf = pair_response.get(ab, 0) / n_a
+                    _add("Response", a, b, resp_sup, resp_conf)
+
+                # Response(B→A)
+                if n_b > 0:
+                    resp_sup_ba = pair_response.get(ba, 0) / total_cases
+                    resp_conf_ba = pair_response.get(ba, 0) / n_b
+                    _add("Response", b, a, resp_sup_ba, resp_conf_ba)
+
+                # Precedence(A before B)
+                if n_b > 0:
+                    prec_sup = pair_precedence.get(ab, 0) / total_cases
+                    prec_conf = pair_precedence.get(ab, 0) / n_b
+                    _add("Precedence", a, b, prec_sup, prec_conf)
+
+                # Succession(A,B) = Response(A,B) AND Precedence(A,B)
+                succ_cases = min(pair_response.get(ab, 0), pair_precedence.get(ab, 0))
+                if total_cases > 0:
+                    _add("Succession", a, b, succ_cases / total_cases,
+                         succ_cases / n_a if n_a else 0.0)
+
+                # CoExistence
+                if n_both > 0:
+                    coex_sup = n_both / total_cases
+                    coex_conf_a = n_both / n_a if n_a else 0.0
+                    _add("CoExistence", a, b, coex_sup, min(coex_conf_a, n_both / n_b if n_b else 0.0))
+
+                # NotCoExistence
+                n_neither = total_cases - n_both
+                if total_cases > 0:
+                    _add("NotCoExistence", a, b, n_neither / total_cases, n_neither / total_cases)
+
+                # Choice: at least one occurs
+                n_at_least_one = n_a + n_b - n_both
+                if total_cases > 0:
+                    _add("Choice", a, b, n_at_least_one / total_cases, n_at_least_one / total_cases)
+
+                # ExclusiveChoice: exactly one occurs
+                n_exactly_one = n_a + n_b - 2 * n_both
+                if total_cases > 0:
+                    _add("ExclusiveChoice", a, b, n_exactly_one / total_cases, n_exactly_one / total_cases)
+
+        # Merge: pm4py rules first, then custom (they complement each other).
+        # Deduplicate on (template, activity_a, activity_b) keeping the custom
+        # version when both exist (it carries confidence + narrative).
+        seen: set[tuple] = set()
+        merged: list[dict] = []
+        for r in custom_rules + pm4py_rules:
+            key = (r["template"], r.get("activity_a", ""), r.get("activity_b") or "")
+            if key not in seen:
+                seen.add(key)
+                # Ensure all rules carry confidence and narrative fields
+                r.setdefault("confidence", r.get("support", 0.0))
+                if not r.get("narrative"):
+                    r["narrative"] = _narrative(r["template"], r.get("activity_a", ""), r.get("activity_b"))
+                merged.append(r)
+
+        return {"rules": merged}
 
     def check_four_eyes(
         self, df: pd.DataFrame, activity1: str, activity2: str

@@ -2473,23 +2473,27 @@ async def get_log_skeleton(
 @router.get("/declare/{event_log_id}", response_model=DeclareResponse)
 async def get_declare(
     event_log_id: UUID,
+    support_threshold: float = Query(default=0.7, ge=0.0, le=1.0, description="Minimum support threshold (0–1). Rules with support below this value are omitted."),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
     """
     Discover DECLARE constraints (e.g. response, precedence, coexistence) from
     the event log. Returns a list of rules with template name, activity pair,
-    and support value.
+    support, confidence, and a plain-language narrative.
+
+    Use ``support_threshold`` (default 0.7) to filter out low-support rules.
     """
     await _assert_event_log_access(event_log_id, db, current_user)
-    cached = _get_cached(event_log_id, "declare")
+    cache_params = {"support_threshold": support_threshold}
+    cached = _get_cached(event_log_id, "declare", cache_params)
     if cached is not None:
         return DeclareResponse(**cached)
 
     _event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
 
     try:
-        result = await _run_in_thread(mining_engine.get_declare, df)
+        result = await _run_in_thread(mining_engine.get_declare, df, support_threshold)
     except Exception as e:
         logger.error(f"DECLARE discovery failed: {e}", exc_info=True)
         raise HTTPException(
@@ -2497,7 +2501,7 @@ async def get_declare(
             detail=f"DECLARE discovery failed: {str(e)}",
         )
 
-    _set_cached(event_log_id, "declare", result)
+    _set_cached(event_log_id, "declare", result, cache_params)
     return DeclareResponse(**result)
 
 

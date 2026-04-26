@@ -306,7 +306,7 @@ interface MiningSlice {
   error: string | null;
   fetchDiscovery: (
     eventLogId: string,
-    algorithm?: 'dfg' | 'alpha' | 'heuristic' | 'inductive',
+    algorithm?: 'dfg' | 'alpha' | 'heuristic' | 'inductive' | 'split_miner',
   ) => Promise<void>;
   fetchVariants: (eventLogId: string) => Promise<void>;
   fetchBottlenecks: (eventLogId: string) => Promise<void>;
@@ -353,7 +353,7 @@ export const useMiningStore = create<MiningSlice>()((set, get) => ({
     try {
       const result = await miningApi.discover({
         event_log_id: eventLogId,
-        algorithm,
+        algorithm: algorithm as 'dfg' | 'alpha' | 'heuristic' | 'inductive' | 'split_miner',
       });
       set({ discoveryResult: result, discoveryLoading: false });
     } catch (error) {

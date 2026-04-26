@@ -57,13 +57,14 @@ import { useUIStore } from '@/store';
 import type { ProcessFilter } from '@/types';
 
 type Tab = 'map' | 'happy_path' | 'bpmn' | 'cases' | 'analysis';
-type Algorithm = 'dfg' | 'alpha' | 'heuristic' | 'inductive';
+type Algorithm = 'dfg' | 'alpha' | 'heuristic' | 'inductive' | 'split_miner';
 
 const algorithmOptions: { value: Algorithm; label: string; short: string }[] = [
   { value: 'dfg', label: 'Directly-Follows Graph', short: 'DFG' },
   { value: 'alpha', label: 'Alpha Miner', short: 'Alpha' },
   { value: 'heuristic', label: 'Heuristic Miner', short: 'Heuristic' },
   { value: 'inductive', label: 'Inductive Miner', short: 'Inductive' },
+  { value: 'split_miner', label: 'Split Miner', short: 'Split' },
 ];
 
 const detailLevels = [
@@ -884,6 +885,9 @@ export default function ProcessViewPage() {
                         { label: 'Activities', value: discovery.nodes.length },
                         { label: 'Transitions', value: discovery.edges.length },
                         { label: 'Algorithm', value: algorithm.toUpperCase(), isBadge: true },
+                        ...(Array.isArray((discovery.statistics as Record<string, unknown>)?.concurrent_pairs) && ((discovery.statistics as Record<string, unknown>).concurrent_pairs as unknown[]).length > 0
+                          ? [{ label: 'Parallel pairs', value: `${((discovery.statistics as Record<string, unknown>).concurrent_pairs as unknown[]).length} detected` }]
+                          : []),
                       ].map((row) => (
                         <div key={row.label} className="flex items-center justify-between">
                           <span className="text-[11px] text-fg-muted">{row.label}</span>

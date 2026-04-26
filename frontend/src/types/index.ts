@@ -253,7 +253,7 @@ export interface FilterOptions {
 
 export interface DiscoveryRequest {
   event_log_id: string;
-  algorithm: 'dfg' | 'alpha' | 'heuristic' | 'inductive';
+  algorithm: 'dfg' | 'alpha' | 'heuristic' | 'inductive' | 'split_miner';
   parameters?: Record<string, unknown>;
   filters?: ProcessFilter;
 }
@@ -886,7 +886,7 @@ export interface ClusterResponse { clusters: CaseCluster[]; }
 export interface LogSkeletonResponse { constraints: Record<string, unknown>; }
 
 // DECLARE
-export interface DeclareRule { template: string; activity_a: string; activity_b: string; support: number; }
+export interface DeclareRule { template: string; activity_a: string; activity_b: string | null; support: number; confidence?: number | null; narrative?: string | null; }
 export interface DeclareResponse { rules: DeclareRule[]; }
 
 // Four-Eyes
