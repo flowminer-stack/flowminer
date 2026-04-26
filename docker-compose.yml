@@ -66,6 +66,9 @@ x-app-env: &app_env
   DEMO_MODE: ${DEMO_MODE:-0}
   DEMO_USER_EMAIL: ${DEMO_USER_EMAIL:-demo@demo.flowminer.io}
   DEMO_USER_NAME: ${DEMO_USER_NAME:-Demo Visitor}
+  # Seed sample data without the demo lock-down — see backend
+  # config.py for the difference between this flag and DEMO_MODE.
+  SEED_SAMPLE_DATA_ON_FIRST_BOOT: ${SEED_SAMPLE_DATA_ON_FIRST_BOOT:-0}
 
 # Bounded logging — applies to every service. Without this, Docker's
 # default json-file driver writes unbounded log files on the host

@@ -1,19 +1,30 @@
-.PHONY: dev prod setup migrate seed clean test
+.PHONY: init-env dev prod setup migrate seed clean test localhost wait
 
-# Development
+# First-run helper — generate .env with strong secrets.
+init-env:
+	./scripts/init-env.sh $(if $(force),--force,)
+
+# Dev: full stack with hot-reload bind mounts. Foregrounded so logs
+# are visible. The legacy `make dev` target that backgrounded uvicorn
+# / vite / celery with `&` was removed — those processes were reaped
+# the moment make exited, so the target had been quietly broken.
 dev:
-	docker compose up -d db redis
-	@echo "Waiting for services..."
-	@sleep 3
-	@echo "Starting backend..."
-	cd backend && uvicorn app.main:app --reload --port 8000 &
-	@echo "Starting frontend..."
-	cd frontend && npm run dev &
-	@echo "Starting worker..."
-	cd backend && celery -A app.workers.celery_app worker --loglevel=info &
-
-dev-docker:
 	docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+
+# Localhost — direct self-host without a reverse proxy. Publishes
+# the SPA on host port 3000 (or $$FLOWMINER_FRONTEND_PORT). Don't
+# use this on Dokploy / Traefik / production hosts where another
+# stack already owns port 3000.
+localhost:
+	docker compose -f docker-compose.yml -f docker-compose.localhost.yml up -d
+
+# Block until /health/ready returns 200 — eg. after `make localhost`
+# so a new operator doesn't have to keep poking `docker compose ps`.
+wait:
+	./scripts/wait-ready.sh
+
+# One-shot: start the stack on localhost AND wait for it to be ready.
+up: localhost wait
 
 # Production
 prod:

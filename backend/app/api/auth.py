@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -42,8 +42,11 @@ async def register(
 ):
     """Register a new user account.
 
-    New accounts are always created with the ``analyst`` role. Role
-    promotion requires an existing admin hitting ``PUT /users/{id}/role``.
+    The very first registration on a fresh deployment is auto-promoted
+    to ``admin`` so the operator doesn't need to run a manual SQL
+    UPDATE to bootstrap the instance. Every later registration lands
+    as ``analyst``; role changes after that require an existing admin
+    hitting ``PUT /users/{id}/role``.
     """
     # Enforce the shared password policy (length + complexity +
     # common-password blocklist) before anything else.
@@ -58,11 +61,21 @@ async def register(
             detail="A user with this email already exists",
         )
 
+    # First-user-becomes-admin bootstrap. The window between checking
+    # the count and inserting the row is tiny; on a self-hosted instance
+    # the operator who runs `docker compose up` is the same person
+    # registering immediately afterwards, so concurrent registrations
+    # racing for admin in practice don't happen. If they ever do, the
+    # second admin can be demoted via the user-management UI.
+    count_result = await db.execute(select(func.count()).select_from(User))
+    is_first_user = (count_result.scalar() or 0) == 0
+    new_role = UserRole.admin if is_first_user else UserRole.analyst
+
     user = User(
         email=body.email,
         password_hash=_hash_password(body.password),
         full_name=body.full_name,
-        role=UserRole.analyst,
+        role=new_role,
     )
 
     db.add(user)

@@ -1,0 +1,18 @@
+# Localhost override — publishes the SPA on the host so a direct
+# `docker compose up` works without a reverse proxy.
+#
+# Activate with:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.localhost.yml up -d
+#
+# Production / Dokploy deployments must NOT use this file. Traefik on
+# the external `dokploy-network` already routes traffic to the
+# `frontend` container over the internal Docker network; publishing
+# port 3000 on the host would either fight whatever owns port 3000
+# on the Dokploy host or pin the SPA to a single host-port across
+# stacks.
+
+services:
+  frontend:
+    ports:
+      - "${FLOWMINER_FRONTEND_PORT:-3000}:80"

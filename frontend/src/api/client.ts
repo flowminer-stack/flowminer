@@ -1335,6 +1335,20 @@ export interface LLMConfigUpdate {
   api_key?: string;
 }
 
+export interface ComponentStatus {
+  ok: boolean;
+  detail: string;
+}
+
+export interface SystemHealthResponse {
+  database: ComponentStatus;
+  redis: ComponentStatus;
+  encryption: ComponentStatus;
+  llm_provider: ComponentStatus;
+  smtp: ComponentStatus;
+  upload_dir: ComponentStatus;
+}
+
 export const systemSettings = {
   getLLMConfig: async (): Promise<LLMConfigResponse> => {
     const r = await api.get('/system-settings/llm');
@@ -1342,6 +1356,10 @@ export const systemSettings = {
   },
   updateLLMConfig: async (body: LLMConfigUpdate): Promise<LLMConfigResponse> => {
     const r = await api.put('/system-settings/llm', body);
+    return r.data;
+  },
+  getSystemHealth: async (): Promise<SystemHealthResponse> => {
+    const r = await api.get('/system-settings/health');
     return r.data;
   },
 };

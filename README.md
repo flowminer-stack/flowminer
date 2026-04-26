@@ -65,38 +65,59 @@ plugin (not the legacy `docker-compose` Python package).
 git clone https://github.com/<you>/flowminer.git
 cd flowminer
 
-# 2. Create your .env from the template
-cp .env.example .env
-# Edit .env: generate real secrets for SECRET_KEY, POSTGRES_PASSWORD,
-# REDIS_PASSWORD, and (recommended) FLOWMINER_ENCRYPTION_KEY.
-# The .env.example file has the openssl/python commands inline.
+# 2. Generate a .env with strong secrets
+make init-env
+# (Or run `./scripts/init-env.sh` directly. The script generates
+#  SECRET_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD, and a Fernet
+#  FLOWMINER_ENCRYPTION_KEY; everything else is left at template
+#  defaults for you to fill in.)
 
-# 3. Start the full stack (production-safe defaults)
-docker compose up -d
+# 3. Start the full stack and wait until it's ready
+make up
+# (`make up` runs `make localhost` then `make wait`. The wait step
+#  polls /health/ready until DB + Redis report healthy — usually
+#  30-90s on a cold first build, near-instant on subsequent boots.)
 
-# 4. Wait for health checks
-docker compose ps
-
-# 5. Open the UI
+# 4. Open the UI
 open http://localhost:3000
 ```
 
 **First run:**
 
-1. Register a user at `http://localhost:3000/register`
-2. Promote yourself to admin (we don't ship a default admin on purpose):
-   ```bash
-   docker compose exec db psql -U flowminer -d flowminer \
-     -c "UPDATE users SET role='admin' WHERE email='you@example.com';"
-   ```
-3. Log in, create a project, upload `docs/examples/running-example.csv`.
-4. Map columns (Case ID / Activity / Timestamp) — FlowMiner will
+1. Register a user at `http://localhost:3000/register`. The first
+   registration on a fresh deployment is automatically promoted to
+   admin — no manual SQL needed.
+2. Log in, create a project, upload `docs/examples/running-example.csv`.
+3. Map columns (Case ID / Activity / Timestamp) — FlowMiner will
    auto-detect for standard formats.
-5. Explore the process map.
+4. Explore the process map.
+
+> **Deploying behind a reverse proxy / Dokploy / Traefik?** Skip the
+> `docker-compose.localhost.yml` override — the bare
+> `docker-compose.yml` keeps the SPA off any host port and lets your
+> proxy route traffic to the container over the Docker network.
 
 **Want the AI features?** After logging in as an admin, go to
 `Settings → AI` and paste an OpenRouter / Anthropic / OpenAI key.
 Keys are encrypted at rest with the server-side encryption key.
+
+### Ops CLI
+
+For routine user management — promoting an admin, resetting a
+forgotten password, unlocking an account — FlowMiner ships a small
+typed CLI inside the backend container. No raw SQL needed.
+
+```bash
+docker compose exec backend python -m app.cli user list
+docker compose exec backend python -m app.cli user promote --email alice@corp.com
+docker compose exec backend python -m app.cli user demote  --email alice@corp.com
+docker compose exec backend python -m app.cli user reset-password --email alice@corp.com
+```
+
+`reset-password` without `--password` generates a strong random one
+and prints it once at the end — copy it immediately. Run
+`docker compose exec backend python -m app.cli --help` to see every
+command (also covers `activate` / `deactivate`).
 
 ---
 

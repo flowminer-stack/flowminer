@@ -32,22 +32,26 @@ async def lifespan(app: FastAPI):
     await init_db()
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 
-    # Demo mode: seed a locked-down demo user + preloaded event logs
-    # on every boot. The seeder is idempotent, so a container restart
-    # doesn't duplicate data; a full DB wipe re-seeds from scratch.
-    # Any exception here is logged but doesn't prevent the app from
-    # starting — the demo is a best-effort convenience on top of the
-    # real product.
-    if settings.DEMO_MODE:
+    # Sample-data seeder. Runs whenever either:
+    #   - DEMO_MODE=1 — full public-demo behaviour (seed + lock-down +
+    #     anonymous /auth/demo + hourly Celery purge), or
+    #   - SEED_SAMPLE_DATA_ON_FIRST_BOOT=1 — seed only, no lock-down.
+    # The seeder is idempotent (skips projects whose name already
+    # exists for the demo user), so a container restart never
+    # duplicates data. Any exception here is logged but doesn't
+    # prevent the app from starting — sample data is a best-effort
+    # convenience on top of the real product.
+    if settings.DEMO_MODE or settings.SEED_SAMPLE_DATA_ON_FIRST_BOOT:
         try:
             from app.database import async_session
             from app.services.demo_seeder import seed_demo_data
 
             async with async_session() as session:
                 await seed_demo_data(session)
-            logger.info("demo mode: seed complete")
+            mode = "demo mode" if settings.DEMO_MODE else "sample-data seed"
+            logger.info("%s: seed complete", mode)
         except Exception:
-            logger.exception("demo mode: seed failed — continuing anyway")
+            logger.exception("sample-data seed failed — continuing anyway")
 
     yield
     # Shutdown (cleanup if needed)

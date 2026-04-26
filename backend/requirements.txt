@@ -42,3 +42,6 @@ anthropic
 # ``flowminer-mcp`` server in app/mcp/ which exposes the mining
 # endpoints as MCP tools for Claude Desktop, Cursor, Zed, etc.
 mcp
+# Backs the operator CLI at app/cli.py (``python -m app.cli``) —
+# tiny click-based framework for the user-management subcommands.
+typer>=0.12,<0.16

@@ -74,6 +74,14 @@ class Notifier:
         """Send an alert notification via SMTP."""
         from app.config import settings
 
+        smtp_host = getattr(settings, "SMTP_HOST", "") or ""
+        if not smtp_host.strip():
+            logger.info(
+                "Alert %s: skipping email — SMTP_HOST not configured",
+                alert.id,
+            )
+            return
+
         recipients = alert.email_recipients or []
         if not recipients:
             logger.warning("Alert %s has no email recipients configured", alert.id)
@@ -100,7 +108,6 @@ class Notifier:
             msg["To"] = ", ".join(recipients)
             msg.attach(MIMEText(body, "plain"))
 
-            smtp_host = getattr(settings, "SMTP_HOST", "localhost")
             smtp_port = int(getattr(settings, "SMTP_PORT", 587))
             smtp_user = getattr(settings, "SMTP_USER", "")
             smtp_pass = getattr(settings, "SMTP_PASS", "")

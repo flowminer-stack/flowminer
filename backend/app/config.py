@@ -69,8 +69,13 @@ class Settings(BaseSettings):
             return [o.strip() for o in v.split(",") if o.strip()]
         return v
 
-    # SMTP settings for email alerts
-    SMTP_HOST: str = "localhost"
+    # SMTP settings for email alerts. SMTP_HOST defaults to empty so a
+    # non-compose run (e.g. `uvicorn` direct, or a CI test harness)
+    # doesn't silently retry connections to localhost:587 when the
+    # operator never wired up an SMTP relay. The compose env-block in
+    # docker-compose.yml passes `${SMTP_HOST:-}` which lands here as
+    # the same empty string. Email is disabled when SMTP_HOST is empty.
+    SMTP_HOST: str = ""
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASS: str = ""
@@ -90,6 +95,17 @@ class Settings(BaseSettings):
     DEMO_MODE: bool = False
     DEMO_USER_EMAIL: str = "demo@demo.flowminer.io"
     DEMO_USER_NAME: str = "Demo Visitor"
+
+    # Seed sample data without the lock-down. When DEMO_MODE is off but
+    # this flag is on, the lifespan runs the same idempotent demo seeder
+    # (creating the running-example, sepsis, and container-logistics
+    # projects) but DOES NOT arm the write-guard middleware, expose
+    # /auth/demo, or schedule the hourly purge. Useful for trial
+    # deployments where customers want sample logs to click through
+    # without the read-only sandbox. The seeded "demo" user lands as a
+    # plain `viewer` and can be deleted by an admin once it's no
+    # longer needed.
+    SEED_SAMPLE_DATA_ON_FIRST_BOOT: bool = False
 
     model_config = {
         "env_file": ".env",

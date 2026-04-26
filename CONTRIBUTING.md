@@ -35,9 +35,10 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 # 4. Wait ~30s for migrations to finish, then open
 #    http://localhost:3000 in a browser.
-#    Create the first admin:
-docker compose exec db psql -U flowminer -d flowminer \
-  -c "UPDATE users SET role='admin' WHERE email='you@example.com';"
+#    The first user to register is auto-promoted to admin. To
+#    promote a later user, use the ops CLI:
+docker compose exec backend python -m app.cli user promote \
+  --email you@example.com
 ```
 
 That's it — edits under `./backend` and `./frontend` hot-reload
