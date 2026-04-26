@@ -259,12 +259,13 @@ export default function ProcessViewPage() {
 
   const gatewayCount = useMemo(() => {
     if (!discovery?.nodes || !discovery?.edges) return 0;
-    const inDeg = new Map<string, number>(), outDeg = new Map<string, number>();
-    discovery.edges.forEach(e => {
-      outDeg.set(e.source, (outDeg.get(e.source) ?? 0) + 1);
-      inDeg.set(e.target, (inDeg.get(e.target) ?? 0) + 1);
+    const inDeg: Record<string, number> = {};
+    const outDeg: Record<string, number> = {};
+    discovery.edges.forEach((e) => {
+      outDeg[e.source] = (outDeg[e.source] ?? 0) + 1;
+      inDeg[e.target] = (inDeg[e.target] ?? 0) + 1;
     });
-    return discovery.nodes.filter(n => (inDeg.get(n.id) ?? 0) > 1 || (outDeg.get(n.id) ?? 0) > 1).length;
+    return discovery.nodes.filter((n) => (inDeg[n.id] ?? 0) > 1 || (outDeg[n.id] ?? 0) > 1).length;
   }, [discovery]);
 
   const [searchParams] = useSearchParams();
