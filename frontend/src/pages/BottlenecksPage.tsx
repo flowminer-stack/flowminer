@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AlertTriangle, Clock, BarChart3, ArrowRight, Search, X, Activity, Target, ChevronDown, ChevronUp } from 'lucide-react';
 import type { DBSMScore } from '@/types';
+import ExplainButton from '@/components/AI/ExplainButton';
 import HintTooltip from '@/components/common/Tooltip';
 import clsx from 'clsx';
 import ExportButtons from '@/components/common/ExportButtons';
@@ -81,6 +82,18 @@ export default function BottlenecksPage() {
     (bottlenecks?.dbsm_scores ?? []).forEach((s) => map.set(s.activity, s));
     return map;
   }, [bottlenecks?.dbsm_scores]);
+
+  // Top-10 activities by avg duration — only these get the Explain button.
+  const top10Activities = useMemo(
+    () =>
+      new Set(
+        [...bottleneckItems]
+          .sort((a, b) => b.avg_duration - a.avg_duration)
+          .slice(0, 10)
+          .map((b) => b.activity),
+      ),
+    [bottleneckItems],
+  );
 
   const filteredItems = useMemo(() => {
     const filtered = bottleneckItems.filter((b) => {
@@ -388,6 +401,19 @@ export default function BottlenecksPage() {
                         <span className="text-[11px] text-fg-faint">&mdash;</span>
                       )}
                     </div>
+                    {top10Activities.has(bottleneck.activity) && (
+                      <ExplainButton
+                        kind="bottleneck"
+                        context={{
+                          activity: bottleneck.activity,
+                          avg_duration_s: bottleneck.avg_duration,
+                          median_duration_s: bottleneck.median_duration,
+                          severity: bottleneck.severity,
+                        }}
+                        size="xs"
+                        className="mt-2"
+                      />
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <HintTooltip text="Critical = duration in the top 5% of all activities">

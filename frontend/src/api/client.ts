@@ -1585,6 +1585,19 @@ export const ai = {
     });
     return r.data;
   },
+
+  /**
+   * Generate a 1-2 sentence plain-language explanation for a single
+   * bottleneck row, conformance deviation, or prediction entry.
+   * Falls back to a templated string server-side when LLM is offline.
+   */
+  explain: async (
+    kind: 'bottleneck' | 'conformance' | 'prediction',
+    context: Record<string, unknown>,
+  ): Promise<{ explanation: string; actionable_hint: string | null; fallback_used: boolean }> => {
+    const r = await api.post('/ai/explain', { kind, context });
+    return r.data;
+  },
 };
 
 // Response shape for /ai/explain-variant — structured delta stats
