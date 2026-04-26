@@ -672,6 +672,8 @@ class DeclareRule(BaseModel):
     activity_a: str
     activity_b: str | None = None
     support: float
+    confidence: float | None = None
+    narrative: str | None = None
 
 
 class DeclareResponse(BaseModel):

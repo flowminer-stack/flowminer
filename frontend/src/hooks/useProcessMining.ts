@@ -126,11 +126,13 @@ export function useEventLogData(eventLogId: string | undefined): EventLogDataSta
 
 // ─── useProcessMap ───────────────────────────────────────────────────────────
 
+type DiscoveryAlgorithm = 'dfg' | 'alpha' | 'heuristic' | 'inductive' | 'split_miner';
+
 interface ProcessMapState {
   discovery: DiscoveryResponse | null;
   loading: boolean;
   error: string | null;
-  refetch: (algorithm?: 'dfg' | 'alpha' | 'heuristic' | 'inductive') => Promise<void>;
+  refetch: (algorithm?: DiscoveryAlgorithm) => Promise<void>;
 }
 
 function filterCacheKey(algorithm: string, filters?: ProcessFilter, parameters?: Record<string, unknown>): string {
@@ -142,7 +144,7 @@ function filterCacheKey(algorithm: string, filters?: ProcessFilter, parameters?:
 
 export function useProcessMap(
   eventLogId: string | undefined,
-  algorithm: 'dfg' | 'alpha' | 'heuristic' | 'inductive' = 'dfg',
+  algorithm: DiscoveryAlgorithm = 'dfg',
   filters?: ProcessFilter,
   parameters?: Record<string, unknown>,
 ): ProcessMapState {
@@ -153,7 +155,7 @@ export function useProcessMap(
   const [error, setError] = useState<string | null>(null);
 
   const fetchDiscovery = useCallback(
-    async (algo?: 'dfg' | 'alpha' | 'heuristic' | 'inductive') => {
+    async (algo?: DiscoveryAlgorithm) => {
       if (!eventLogId) return;
 
       const key = filterCacheKey(algo ?? algorithm, filters, parameters);

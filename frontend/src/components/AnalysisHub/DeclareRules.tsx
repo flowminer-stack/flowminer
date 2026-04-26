@@ -53,7 +53,8 @@ export default function DeclareRules({ eventLogId }: Props) {
     const q = search.toLowerCase();
     return r.template.toLowerCase().includes(q) ||
       r.activity_a.toLowerCase().includes(q) ||
-      r.activity_b.toLowerCase().includes(q);
+      (r.activity_b ?? '').toLowerCase().includes(q) ||
+      (r.narrative ?? '').toLowerCase().includes(q);
   });
 
   if (sorted.length === 0) {
@@ -80,23 +81,35 @@ export default function DeclareRules({ eventLogId }: Props) {
               <th className="px-3 py-2 text-left font-semibold text-fg-faint">Template</th>
               <th className="px-3 py-2 text-left font-semibold text-fg-faint">Activity A</th>
               <th className="px-3 py-2 text-left font-semibold text-fg-faint">Activity B</th>
-              <th className="px-3 py-2 text-left font-semibold text-fg-faint">Description</th>
+              <th className="px-3 py-2 text-left font-semibold text-fg-faint">Narrative</th>
               <th className="px-3 py-2 text-right font-semibold text-fg-faint">Support</th>
+              <th className="px-3 py-2 text-right font-semibold text-fg-faint">Confidence</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={5} className="py-6 text-center text-fg-muted">No rules match your search.</td></tr>
+              <tr><td colSpan={6} className="py-6 text-center text-fg-muted">No rules match your search.</td></tr>
             ) : filtered.map((r, i) => (
               <tr key={i} className={i % 2 === 0 ? 'bg-surface-0' : 'bg-surface-1'}>
                 <td className="px-3 py-1.5 font-medium text-fg">{templateLabel(r.template)}</td>
                 <td className="px-3 py-1.5 text-fg-secondary">{r.activity_a || '—'}</td>
                 <td className="px-3 py-1.5 text-fg-secondary">{r.activity_b || '—'}</td>
-                <td className="px-3 py-1.5 text-fg-faint italic">{templateDesc(r.template)}</td>
+                <td className="px-3 py-1.5 text-fg-faint italic max-w-xs truncate" title={r.narrative ?? templateDesc(r.template)}>
+                  {r.narrative ?? templateDesc(r.template)}
+                </td>
                 <td className="px-3 py-1.5 text-right">
                   <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums ${supportColor(r.support)}`}>
                     {(r.support * 100).toFixed(0)}%
                   </span>
+                </td>
+                <td className="px-3 py-1.5 text-right">
+                  {r.confidence != null ? (
+                    <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums ${supportColor(r.confidence)}`}>
+                      {(r.confidence * 100).toFixed(0)}%
+                    </span>
+                  ) : (
+                    <span className="text-fg-ghost">—</span>
+                  )}
                 </td>
               </tr>
             ))}

@@ -231,20 +231,216 @@ class DiscoveryService:
             logger.error(f"Error in Inductive Miner discovery: {e}", exc_info=True)
             raise
 
-    def discover_split_miner(self, df: pd.DataFrame, parameters: dict = None) -> dict:
-        """Split-Miner-style discovery: a heuristic net filtered to remove
-        low-frequency transitions, followed by precision-oriented cleanup.
+    def _build_concurrency_matrix(self, df: pd.DataFrame, start_col: str) -> dict:
+        """
+        Build a concurrency matrix from start+end timestamp pairs.
 
-        True Split Miner (Augusto et al.) isn't in pm4py yet. This is a
-        Python approximation that produces a qualitatively similar result
-        — take the heuristics net, apply a frequency threshold on edges
-        (default 0.2), and drop nodes with no surviving edges.
+        Two activities A and B are concurrent in a case when their execution
+        intervals [start_A, end_A] and [start_B, end_B] overlap.
+
+        References:
+          Augusto et al. "Split Miner: automated discovery of accurate and simple
+          business process models from event logs." KAIS 2019.
+          Augusto et al. "Split Miner 2.0." 2022 (start/end timestamp variant).
+
+        Returns:
+            dict mapping frozenset({A, B}) -> {"co_occurring": int, "co_present": int}
+        """
+        pair_stats: dict = {}
+
+        for case_id, grp in df.groupby(CASE_COL):
+            grp = grp.reset_index(drop=True)
+            activities = grp[ACTIVITY_COL].tolist()
+            starts = grp[start_col].tolist()
+            ends = grp[TIMESTAMP_COL].tolist()
+
+            # Build per-activity interval lists for this case
+            act_intervals: dict = defaultdict(list)
+            for act, s, e in zip(activities, starts, ends):
+                # Guard against inverted timestamps (start > end)
+                s, e = (s, e) if s <= e else (e, s)
+                act_intervals[str(act)].append((s, e))
+
+            act_list = sorted(act_intervals.keys())
+            for i, a in enumerate(act_list):
+                for b in act_list[i + 1:]:
+                    key = frozenset((a, b))
+                    if key not in pair_stats:
+                        pair_stats[key] = {"co_occurring": 0, "co_present": 0}
+                    pair_stats[key]["co_present"] += 1
+                    # Any interval of A overlaps any interval of B?
+                    overlaps = any(
+                        ia[0] < ib[1] and ib[0] < ia[1]
+                        for ia in act_intervals[a]
+                        for ib in act_intervals[b]
+                    )
+                    if overlaps:
+                        pair_stats[key]["co_occurring"] += 1
+
+        return pair_stats
+
+    def discover_split_miner(self, df: pd.DataFrame, parameters: dict = None) -> dict:
+        """
+        Split-Miner-style discovery with timestamp-pair concurrency detection.
+
+        When the event log contains start timestamps (columns: ``start_timestamp``
+        or ``time:start``), uses the Split Miner 2.0 approach (Augusto et al.
+        2022): builds a concurrency matrix from overlapping [start, end] intervals,
+        labels edges as sequence / parallel / choice, and annotates nodes with
+        their concurrent partners.
+
+        Without start timestamps, falls back to the heuristic-net approximation
+        (original behaviour).
+
+        References:
+          Augusto et al. "Split Miner: automated discovery of accurate and simple
+          business process models from event logs." KAIS 2019.
+          Augusto et al. "Split Miner 2.0." 2022.
         """
         if df.empty:
             return {"nodes": [], "edges": [], "statistics": {}}
         parameters = parameters or {}
         threshold = float(parameters.get("threshold", 0.2))
+        # Concurrency ratio threshold: pairs with ratio > this are declared parallel.
+        # 0.5 means "more than half of cases where both activities appear show overlap"
+        # — a robust mid-point that avoids noise from occasional parallelism.
+        concurrency_threshold = float(parameters.get("concurrency_threshold", 0.5))
 
+        # ── Detect start-timestamp column ────────────────────────────────────
+        start_col = None
+        for candidate in ("start_timestamp", "time:start"):
+            if candidate in df.columns:
+                start_col = candidate
+                break
+
+        has_start_timestamps = start_col is not None
+
+        if not has_start_timestamps:
+            logger.warning(
+                "discover_split_miner: no start-timestamp column found "
+                "(looked for 'start_timestamp', 'time:start'). "
+                "Falling back to heuristic-net approximation."
+            )
+            return self._split_miner_approx(df, threshold)
+
+        # ── Split Miner v2: build concurrency matrix ─────────────────────────
+        logger.info("discover_split_miner: start timestamps detected, using concurrency-matrix approach.")
+        try:
+            pair_stats = self._build_concurrency_matrix(df, start_col)
+        except Exception as e:
+            logger.error(f"Concurrency matrix build failed: {e}. Falling back to approx.", exc_info=True)
+            return self._split_miner_approx(df, threshold)
+
+        # Concurrent pairs: ratio > concurrency_threshold
+        concurrent_pairs: list[tuple[str, str]] = []
+        concurrent_set: set[frozenset] = set()
+        for pair_key, counts in pair_stats.items():
+            if counts["co_present"] == 0:
+                continue
+            ratio = counts["co_occurring"] / counts["co_present"]
+            if ratio > concurrency_threshold:
+                a, b = sorted(pair_key)
+                concurrent_pairs.append((a, b))
+                concurrent_set.add(pair_key)
+
+        # ── Build DFG + annotate edges ───────────────────────────────────────
+        try:
+            dfg, start_activities, end_activities = _rs_discover_dfg(df)
+        except Exception as e:
+            logger.error(f"DFG build failed in split_miner_v2: {e}", exc_info=True)
+            raise
+
+        activity_counts = df[ACTIVITY_COL].value_counts().to_dict()
+        activity_durations = self._compute_activity_durations(df)
+        edge_durations = self._compute_edge_durations(df)
+        p25, p75 = self._edge_percentiles(edge_durations)
+
+        # Determine which pairs only alternate (never co-occur) → choice
+        choice_set: set[frozenset] = set()
+        for pair_key, counts in pair_stats.items():
+            if counts["co_occurring"] == 0 and counts["co_present"] > 0:
+                choice_set.add(pair_key)
+
+        # Build nodes with concurrent_with annotation
+        concurrent_with: dict[str, list[str]] = defaultdict(list)
+        for a, b in concurrent_pairs:
+            concurrent_with[a].append(b)
+            concurrent_with[b].append(a)
+
+        nodes = []
+        for activity in sorted(activity_counts.keys()):
+            freq = activity_counts.get(activity, 0)
+            dur = activity_durations.get(activity, {})
+            node: dict = {
+                "id": _sanitize_id(activity),
+                "label": str(activity),
+                "frequency": int(freq),
+                "avg_duration": dur.get("avg"),
+                "median_duration": dur.get("median"),
+                "is_start": activity in start_activities,
+                "is_end": activity in end_activities,
+                "concurrent_with": [_sanitize_id(x) for x in concurrent_with.get(activity, [])],
+            }
+            nodes.append(node)
+
+        # Build edges with relation type
+        max_freq = max(dfg.values()) if dfg else 1
+        cutoff = max_freq * threshold
+        edges = []
+        used_nodes: set[str] = set()
+        for (source, target), freq in sorted(dfg.items(), key=lambda x: x[1], reverse=True):
+            if freq < cutoff:
+                continue
+            edge_dur = edge_durations.get((source, target), {})
+            avg_dur = edge_dur.get("avg")
+            color = None
+            if avg_dur is not None and avg_dur > 0:
+                color = _assign_performance_color(avg_dur, p25, p75)
+
+            pair_key = frozenset((source, target))
+            if pair_key in concurrent_set:
+                relation = "parallel"
+            elif pair_key in choice_set:
+                relation = "choice"
+            else:
+                relation = "sequence"
+
+            edges.append({
+                "source": _sanitize_id(source),
+                "target": _sanitize_id(target),
+                "frequency": int(freq),
+                "avg_duration": avg_dur,
+                "median_duration": edge_dur.get("median"),
+                "performance_color": color,
+                "relation": relation,
+            })
+            used_nodes.add(_sanitize_id(source))
+            used_nodes.add(_sanitize_id(target))
+
+        # Prune disconnected nodes
+        nodes = [n for n in nodes if n["id"] in used_nodes]
+
+        statistics = {
+            "total_cases": int(df[CASE_COL].nunique()),
+            "total_events": len(df),
+            "total_activities": len({n["id"] for n in nodes}),
+            "total_edges": len(edges),
+            "start_activities": list(start_activities.keys()),
+            "end_activities": list(end_activities.keys()),
+            "algorithm": "split_miner_v2",
+            "threshold": threshold,
+            "concurrency_threshold": concurrency_threshold,
+            "has_start_timestamps": True,
+            "concurrent_pairs": concurrent_pairs,
+        }
+
+        return {"nodes": nodes, "edges": edges, "statistics": statistics}
+
+    def _split_miner_approx(self, df: pd.DataFrame, threshold: float) -> dict:
+        """
+        Heuristic-net approximation used as fallback when start timestamps
+        are absent. Original Split Miner behaviour prior to v2 enhancement.
+        """
         try:
             net, im, fm = pm4py.discover_petri_net_heuristics(
                 df,
@@ -256,8 +452,7 @@ class DiscoveryService:
             logger.error(f"Split-Miner approximation failed: {e}", exc_info=True)
             raise
 
-        # Post-filter: drop edges whose frequency is below `threshold` fraction
-        # of the strongest edge, then prune disconnected nodes.
+        # Post-filter: drop edges below threshold fraction of max, prune nodes
         edges = result.get("edges", [])
         if edges:
             max_freq = max(e.get("frequency", 0) for e in edges) or 1
@@ -268,6 +463,8 @@ class DiscoveryService:
             result["nodes"] = [n for n in result.get("nodes", []) if n.get("id") in used_nodes]
             result.setdefault("statistics", {})["algorithm"] = "split_miner_approx"
             result["statistics"]["threshold"] = threshold
+            result["statistics"]["has_start_timestamps"] = False
+            result["statistics"]["concurrent_pairs"] = []
 
         return result
 
