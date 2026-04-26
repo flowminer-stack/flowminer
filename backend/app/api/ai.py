@@ -1349,3 +1349,225 @@ async def ai_explain(
             actionable_hint=None,
             fallback_used=False,
         )
+
+
+# ─── 8. Event-log extraction copilot ─────────────────────────────────────────
+#
+# Multi-turn dialog that helps users transform raw source-system tables into
+# a valid event log by generating SQL/pandas extraction code with rationale.
+# Follows the abstract → prompt → reason pattern from Berti et al. (CoopIS 2024).
+
+
+class ExtractTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ExtractRequest(BaseModel):
+    schema_hint: str | None = None      # optional dump of source-table schemas
+    objective: str | None = None         # e.g. "track customer onboarding"
+    history: list[ExtractTurn] = []      # conversation so far
+
+
+class ExtractStep(BaseModel):
+    label: str                           # e.g. "Identify case ID"
+    rationale: str                       # plain English
+    sql: str | None = None               # generated SQL (or None if conversational)
+    pandas: str | None = None            # alternative pandas snippet
+    columns_used: list[str] = []         # columns/tables this step references
+
+
+class ExtractResponse(BaseModel):
+    assistant_message: str               # next message to user
+    suggested_steps: list[ExtractStep]   # any code emitted this turn (may be empty)
+    requires_user_input: bool            # true if the agent is asking for clarification
+    confidence: float                    # 0-1 self-rated
+    fallback_used: bool
+
+
+_EXTRACT_SYSTEM_PROMPT = (
+    "You are an event-log extraction assistant. The user has raw source-system "
+    "tables and wants to extract an event log for process mining. Your job: "
+    "through conversation, derive a SQL query (or pandas snippet) that produces "
+    "columns (case_id, activity, timestamp, resource_id, optional case_attributes).\n\n"
+    "Rules:\n"
+    "  1. Ask for missing schema info if the user has not described their tables. "
+    "Never invent column names — only reference columns the user has confirmed exist.\n"
+    "  2. Explain the WHY before any SQL. Each suggested step must have a clear "
+    "rationale in plain business English.\n"
+    "  3. When proposing SQL, scope it to columns/tables already confirmed by the "
+    "user. Use standard ANSI SQL that works on PostgreSQL.\n"
+    "  4. Rate your own confidence from 0 (completely guessing) to 1 (all columns "
+    "confirmed and query is straightforward).\n"
+    "  5. Set requires_user_input to true whenever you need the user to confirm "
+    "column names, table structures, or business definitions before you can proceed.\n\n"
+    "RESPONSE FORMAT — you MUST respond with a single JSON object matching this "
+    "exact schema (no markdown fences, no extra text outside the JSON):\n"
+    "{\n"
+    '  "assistant_message": "<conversational reply to the user>",\n'
+    '  "suggested_steps": [\n'
+    "    {\n"
+    '      "label": "<short step name>",\n'
+    '      "rationale": "<plain English why>",\n'
+    '      "sql": "<SQL string or null>",\n'
+    '      "pandas": "<pandas snippet or null>",\n'
+    '      "columns_used": ["<col1>", "<col2>"]\n'
+    "    }\n"
+    "  ],\n"
+    '  "requires_user_input": true,\n'
+    '  "confidence": 0.0\n'
+    "}"
+)
+
+_EXTRACT_FALLBACK = ExtractResponse(
+    assistant_message=(
+        "LLM provider unavailable. To extract an event log manually: pick the "
+        "column that uniquely identifies a process instance (case_id), pick the "
+        "column or expression that names what happened (activity), pick the column "
+        "with the timestamp, and optionally a resource column. Aggregate one row "
+        "per (case_id, activity, timestamp)."
+    ),
+    suggested_steps=[],
+    requires_user_input=True,
+    confidence=0.0,
+    fallback_used=True,
+)
+
+
+@router.post("/extract-log", response_model=ExtractResponse)
+async def ai_extract_log(
+    body: ExtractRequest,
+    _current_user: User = Depends(get_current_active_user),
+):
+    """Multi-turn event-log extraction copilot.
+
+    Each call represents one user turn. The client maintains the conversation
+    history and passes it back on each request. The server builds a user message
+    that incorporates any schema_hint and objective provided, then calls the LLM
+    with the full history. The response is parsed as structured JSON (ExtractResponse).
+
+    If the LLM is unavailable or JSON parsing fails, a safe fallback is returned.
+    """
+    import asyncio as _asyncio
+
+    # Build the current user message — incorporate schema_hint and objective
+    # so they flow into the conversation without the frontend needing to repeat
+    # them on every turn (the history already carries prior turns).
+    user_parts: list[str] = []
+    if body.objective:
+        user_parts.append(f"Objective: {body.objective}")
+    if body.schema_hint:
+        user_parts.append(f"Source table schemas:\n{body.schema_hint}")
+
+    # Append the last user message from history if any (the actual question).
+    # History is ordered oldest → newest. The last entry with role="user" is
+    # the current turn's question; everything before it is prior context.
+    last_user_content = ""
+    for turn in reversed(body.history):
+        if turn.role == "user":
+            last_user_content = turn.content
+            break
+
+    if last_user_content:
+        user_parts.append(last_user_content)
+
+    if not user_parts:
+        user_parts.append(
+            "Hello! I'd like help extracting an event log from my source tables."
+        )
+
+    current_user_msg = "\n\n".join(user_parts)
+
+    # Build the prior conversation context (all turns except the last user turn,
+    # which we've already embedded above). We include assistant turns so the
+    # LLM remembers what it already suggested.
+    prior_turns_text = ""
+    if len(body.history) > 1:
+        prior_lines: list[str] = []
+        # Include all but the last user turn (which is current_user_msg)
+        last_user_idx = -1
+        for i in range(len(body.history) - 1, -1, -1):
+            if body.history[i].role == "user":
+                last_user_idx = i
+                break
+        relevant = body.history[:last_user_idx] if last_user_idx > 0 else []
+        for t in relevant:
+            role_label = "User" if t.role == "user" else "Assistant"
+            prior_lines.append(f"{role_label}: {t.content[:1000]}")
+        if prior_lines:
+            prior_turns_text = (
+                "Prior conversation:\n"
+                + "\n---\n".join(prior_lines)
+                + "\n\nNow respond to the current user message below."
+            )
+
+    full_user_msg = (
+        f"{prior_turns_text}\n\n{current_user_msg}".strip()
+        if prior_turns_text
+        else current_user_msg
+    )
+
+    # Call the LLM in a thread (complete() is synchronous)
+    try:
+        raw = await _asyncio.to_thread(
+            llm.complete,
+            _EXTRACT_SYSTEM_PROMPT,
+            full_user_msg,
+            temperature=0.2,
+        )
+    except Exception as e:
+        logger.warning("extract-log LLM call failed: %s", e)
+        return _EXTRACT_FALLBACK
+
+    # Check if the null provider returned its sentinel — treat as fallback.
+    if "No LLM provider is configured" in raw:
+        return _EXTRACT_FALLBACK
+
+    # Parse the structured JSON response. The LLM is instructed to return
+    # pure JSON, but may occasionally wrap it in markdown fences or add
+    # preamble. We strip fences first, then attempt json.loads. On any
+    # failure we degrade to a minimal response with the raw text as the
+    # assistant_message so the user sees something useful.
+    stripped = raw.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        lines = [ln for ln in lines if not ln.startswith("```")]
+        stripped = "\n".join(lines).strip()
+
+    # Find the outermost JSON object in case there's prose before/after.
+    json_start = stripped.find("{")
+    json_end = stripped.rfind("}") + 1
+    if json_start != -1 and json_end > json_start:
+        stripped = stripped[json_start:json_end]
+
+    try:
+        parsed = json.loads(stripped)
+        steps_raw = parsed.get("suggested_steps") or []
+        steps = [
+            ExtractStep(
+                label=s.get("label", "Step"),
+                rationale=s.get("rationale", ""),
+                sql=s.get("sql") or None,
+                pandas=s.get("pandas") or None,
+                columns_used=s.get("columns_used") or [],
+            )
+            for s in steps_raw
+            if isinstance(s, dict)
+        ]
+        return ExtractResponse(
+            assistant_message=str(parsed.get("assistant_message", raw[:800])),
+            suggested_steps=steps,
+            requires_user_input=bool(parsed.get("requires_user_input", True)),
+            confidence=float(parsed.get("confidence", 0.0)),
+            fallback_used=False,
+        )
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        logger.warning("extract-log JSON parse failed (%s) — degrading to raw text", exc)
+        # Graceful degradation: surface the raw text as the assistant message.
+        return ExtractResponse(
+            assistant_message=raw[:2000],
+            suggested_steps=[],
+            requires_user_input=True,
+            confidence=0.0,
+            fallback_used=False,
+        )
