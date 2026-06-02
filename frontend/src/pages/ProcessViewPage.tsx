@@ -27,6 +27,7 @@ import {
   Wand2,
   Sparkles,
   TrendingUp,
+  HelpCircle,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEventLogData, useProcessMap } from '@/hooks/useProcessMining';
@@ -53,19 +54,47 @@ import AnalysisHub, { ANALYSIS_ITEMS } from '@/components/AnalysisHub/AnalysisHu
 import InsightsPanel from '@/components/InsightsPanel/InsightsPanel';
 import FilterPanel from '@/components/ProcessMap/FilterPanel';
 import ComplexityScoreBadge from '@/components/ProcessMap/ComplexityScoreBadge';
-import { mining as miningApi } from '@/api/client';
+import { mining as miningApi, ai as aiApi } from '@/api/client';
 import { useUIStore } from '@/store';
 import type { ProcessFilter } from '@/types';
 
 type Tab = 'map' | 'happy_path' | 'bpmn' | 'cases' | 'analysis';
 type Algorithm = 'dfg' | 'alpha' | 'heuristic' | 'inductive' | 'split_miner';
 
-const algorithmOptions: { value: Algorithm; label: string; short: string }[] = [
-  { value: 'dfg', label: 'Directly-Follows Graph', short: 'DFG' },
-  { value: 'alpha', label: 'Alpha Miner', short: 'Alpha' },
-  { value: 'heuristic', label: 'Heuristic Miner', short: 'Heuristic' },
-  { value: 'inductive', label: 'Inductive Miner', short: 'Inductive' },
-  { value: 'split_miner', label: 'Split Miner', short: 'Split' },
+// ``help`` is a short "when to use this" hint surfaced as the button
+// tooltip so users aren't left guessing which discovery algorithm fits
+// their question (finding #15: spaghetti guidance).
+const algorithmOptions: { value: Algorithm; label: string; short: string; help: string }[] = [
+  {
+    value: 'dfg',
+    label: 'Directly-Follows Graph',
+    short: 'DFG',
+    help: 'DFG — fastest, most literal. Shows every observed hand-off as a frequency/performance graph. Best for a first look and for spotting the busiest paths, but can look like spaghetti on noisy logs.',
+  },
+  {
+    value: 'alpha',
+    label: 'Alpha Miner',
+    short: 'Alpha',
+    help: 'Alpha Miner — classic Petri-net discovery. Good for clean, well-structured logs; struggles with noise, loops, and short cases.',
+  },
+  {
+    value: 'heuristic',
+    label: 'Heuristic Miner',
+    short: 'Heuristic',
+    help: 'Heuristic Miner — frequency-based with a noise filter. Use the Noise slider to drop rare edges and tame a spaghetti DFG while keeping the dominant behaviour.',
+  },
+  {
+    value: 'inductive',
+    label: 'Inductive Miner',
+    short: 'Inductive',
+    help: 'Inductive Miner — always returns a sound, block-structured model. Use the Noise slider to control how much infrequent behaviour is filtered. Best when you need a guaranteed-replayable model.',
+  },
+  {
+    value: 'split_miner',
+    label: 'Split Miner',
+    short: 'Split',
+    help: 'Split Miner — modern algorithm balancing fitness and precision with clean gateways. A strong default for a readable BPMN-like model on real-world logs.',
+  },
 ];
 
 const detailLevels = [
@@ -132,6 +161,76 @@ function formatDuration(seconds: number | null): string {
   if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
   if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
   return `${(seconds / 86400).toFixed(1)}d`;
+}
+
+// Merge two ProcessFilters into one (sidebar state + chip-derived
+// filter). Lists are unioned, scalar bounds take the *tighter* value,
+// and attribute filters are combined per-column. Used so the universal
+// filter chips and the sidebar FilterPanel both scope the map without
+// one clobbering the other (finding #13).
+function mergeProcessFilters(a: ProcessFilter, b: ProcessFilter): ProcessFilter {
+  const out: ProcessFilter = {};
+  const unionList = (x?: string[], y?: string[]): string[] | undefined => {
+    const set = new Set<string>([...(x ?? []), ...(y ?? [])]);
+    return set.size ? Array.from(set) : undefined;
+  };
+  const unionEdges = (
+    x?: Array<[string, string]>,
+    y?: Array<[string, string]>,
+  ): Array<[string, string]> | undefined => {
+    const seen = new Set<string>();
+    const merged: Array<[string, string]> = [];
+    for (const [s, t] of [...(x ?? []), ...(y ?? [])]) {
+      const key = `${s}->${t}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push([s, t]);
+      }
+    }
+    return merged.length ? merged : undefined;
+  };
+
+  out.activities_include = unionList(a.activities_include, b.activities_include);
+  out.activities_exclude = unionList(a.activities_exclude, b.activities_exclude);
+  out.start_activities = unionList(a.start_activities, b.start_activities);
+  out.end_activities = unionList(a.end_activities, b.end_activities);
+  out.required_edges = unionEdges(a.required_edges, b.required_edges);
+  out.forbidden_edges = unionEdges(a.forbidden_edges, b.forbidden_edges);
+
+  const variants = Array.from(new Set([...(a.variants ?? []), ...(b.variants ?? [])]));
+  if (variants.length) out.variants = variants;
+
+  // Scalar bounds: take the more restrictive (max of mins, min of maxes).
+  const mins = [a.duration_min, b.duration_min].filter((v): v is number => v != null);
+  if (mins.length) out.duration_min = Math.max(...mins);
+  const maxs = [a.duration_max, b.duration_max].filter((v): v is number => v != null);
+  if (maxs.length) out.duration_max = Math.min(...maxs);
+
+  out.time_start = a.time_start ?? b.time_start;
+  out.time_end = a.time_end ?? b.time_end;
+
+  // Attribute filters — combine per column, unioning values. (We use a
+  // plain record rather than a Map because `Map` is shadowed by the
+  // lucide-react icon import in this module.)
+  const byColumn: Record<string, { column: string; values: string[]; exclude?: boolean }> = {};
+  for (const attr of [...(a.attributes ?? []), ...(b.attributes ?? [])]) {
+    const existing = byColumn[attr.column];
+    if (existing) {
+      existing.values = Array.from(new Set([...existing.values, ...attr.values]));
+      if (attr.exclude) existing.exclude = true;
+    } else {
+      byColumn[attr.column] = { ...attr, values: [...attr.values] };
+    }
+  }
+  const columns = Object.values(byColumn);
+  if (columns.length) out.attributes = columns;
+
+  // Strip undefined keys so Object.keys()-based "has filters" checks
+  // stay accurate.
+  (Object.keys(out) as Array<keyof ProcessFilter>).forEach((k) => {
+    if (out[k] === undefined) delete out[k];
+  });
+  return out;
 }
 
 /* ── Deep Analyses dropdown ───────────────────────────────────────────── */
@@ -250,8 +349,30 @@ export default function ProcessViewPage() {
   const [filters, setFilters] = useState<ProcessFilter>({});
   const [filterOpen, setFilterOpen] = useState(false);
   const [noiseThreshold, setNoiseThreshold] = useState(0.0);
-  const stableFilters = useMemo(() => filters, [JSON.stringify(filters)]);
-  const hasFilters = Object.keys(filters).length > 0;
+
+  // Finding #13 — unify the filter systems. The chip bar / DSL bar
+  // write to the shared filterStore (which drives the analysis tabs),
+  // while the sidebar FilterPanel drives the map via local ``filters``.
+  // We project the active chips into a ProcessFilter and merge them
+  // with the sidebar state, so the universal chips now scope the *map*
+  // too — closing the silent inconsistency where chips moved the
+  // analysis tabs but left the map untouched.
+  const chips = useFilterStore((s) => s.chips);
+  const chipDisabled = useFilterStore((s) => s.disabled);
+  const toProcessFilter = useFilterStore((s) => s.toProcessFilter);
+  const chipFilter = useMemo(
+    () => toProcessFilter(),
+    // Recompute whenever the active chip set changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [chips, chipDisabled, toProcessFilter],
+  );
+
+  const mergedFilters = useMemo(
+    () => mergeProcessFilters(filters, chipFilter),
+    [filters, chipFilter],
+  );
+  const stableFilters = useMemo(() => mergedFilters, [JSON.stringify(mergedFilters)]);
+  const hasFilters = Object.keys(mergedFilters).length > 0;
   // Only send threshold param when it's non-zero and algorithm supports it
   const supportsNoise = algorithm === 'inductive' || algorithm === 'heuristic';
   const stableParams = useMemo(
@@ -291,6 +412,16 @@ export default function ProcessViewPage() {
   const [exportingReport, setExportingReport] = useState(false);
   const [selectedEdge, setSelectedEdge] = useState<{ source: string; target: string } | null>(null);
 
+  // ── "What does this map mean?" narration (finding #15) ────────────
+  // On demand, ask the AI to read the *current* map config — algorithm,
+  // noise threshold, complexity, and how many nodes/edges are actually
+  // on screen — and explain in plain language what the user is looking
+  // at. Rendered inline in the Process Summary panel area.
+  const [narration, setNarration] = useState<string | null>(null);
+  const [narrationLoading, setNarrationLoading] = useState(false);
+  const [narrationError, setNarrationError] = useState<string | null>(null);
+  const [narrationLlmConfigured, setNarrationLlmConfigured] = useState(true);
+
   // ── Competitive UX state ─────────────────────────────────────────
   const [labelMode, setLabelMode] = useState<'absolute' | 'relative'>('absolute');
   const [highlightSlow, setHighlightSlow] = useState(false);
@@ -298,9 +429,62 @@ export default function ProcessViewPage() {
   const [contextMenu, setContextMenu] = useState<{ node: ProcessNode; x: number; y: number } | null>(null);
   const [treemapActivity, setTreemapActivity] = useState<string | null>(null);
   const addChip = useFilterStore((s) => s.addChip);
+  const removeChip = useFilterStore((s) => s.removeChip);
   useFilterUrlSync(eventLogId);
 
   const cyRef = useRef<Core | null>(null);
+
+  // Finding #13 — reflect the sidebar FilterPanel's state into the
+  // shared filterStore so the analysis tabs see the same scope the map
+  // does. We tag panel-originated chips with ``__source: 'panel'`` and
+  // reconcile them whenever the sidebar (or edge-modal) ``filters``
+  // change: drop the stale panel chips and re-derive fresh ones. Chips
+  // added by other surfaces (map clicks, DSL bar) are left untouched.
+  // The merge into the map is a set-union, so a facet living in both
+  // ``filters`` and a panel chip never double-counts.
+  useEffect(() => {
+    const stalePanelChipIds = useFilterStore
+      .getState()
+      .chips.filter((c) => c.payload.__source === 'panel')
+      .map((c) => c.id);
+    stalePanelChipIds.forEach((id) => removeChip(id));
+
+    const tag = { __source: 'panel' as const };
+    for (const act of filters.activities_include ?? []) {
+      addChip({ type: 'activity', label: `activity: ${act}`, payload: { activity: act, ...tag } });
+    }
+    for (const act of filters.activities_exclude ?? []) {
+      addChip({ type: 'activity_exclude', label: `exclude: ${act}`, payload: { activity: act, ...tag } });
+    }
+    for (const [s, t] of filters.required_edges ?? []) {
+      addChip({ type: 'edge', label: `edge: ${s} → ${t}`, payload: { source: s, target: t, ...tag } });
+    }
+    if (filters.duration_min != null || filters.duration_max != null) {
+      addChip({
+        type: 'duration_range',
+        label: `duration: ${filters.duration_min ?? '0'}–${filters.duration_max ?? '∞'}s`,
+        payload: { min: filters.duration_min ?? null, max: filters.duration_max ?? null, ...tag },
+      });
+    }
+    if (filters.time_start || filters.time_end) {
+      addChip({
+        type: 'time_range',
+        label: `time: ${filters.time_start ?? '…'} – ${filters.time_end ?? '…'}`,
+        payload: { start: filters.time_start ?? null, end: filters.time_end ?? null, ...tag },
+      });
+    }
+    for (const attr of filters.attributes ?? []) {
+      for (const v of attr.values) {
+        addChip({
+          type: 'attribute_value',
+          label: `${attr.column}: ${v}`,
+          payload: { attribute: attr.column, value: v, ...tag },
+        });
+      }
+    }
+    // Only re-run when the sidebar/edge-modal filter object changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(filters)]);
 
   const handleAlgorithmChange = (algo: Algorithm) => {
     setAlgorithm(algo);
@@ -402,6 +586,30 @@ export default function ProcessViewPage() {
     for (const id of endIds) nodeIds.add(id);
     return { nodes: nodeIds.size, edges: all.length };
   })();
+
+  const explainMap = async () => {
+    if (!eventLogId) return;
+    setNarrationLoading(true);
+    setNarrationError(null);
+    try {
+      // Pass the live map context so the narration describes exactly
+      // what's on screen (algorithm + noise + how aggressively the
+      // complexity slider trimmed the graph), not just the raw log.
+      const r = await aiApi.narrate(eventLogId, {
+        algorithm,
+        noise_threshold: supportsNoise ? noiseThreshold : 0,
+        complexity,
+        visible_nodes: visibleCounts.nodes,
+        visible_edges: visibleCounts.edges,
+      });
+      setNarration(r.markdown);
+      setNarrationLlmConfigured(r.llm_configured);
+    } catch {
+      setNarrationError('Could not generate an explanation. Try again.');
+    } finally {
+      setNarrationLoading(false);
+    }
+  };
 
   if (eventLogLoading) {
     return <LoadingSpinner size="lg" text="Loading event log..." fullPage />;
@@ -584,7 +792,7 @@ export default function ProcessViewPage() {
                     <button
                       key={opt.value}
                       onClick={() => handleAlgorithmChange(opt.value)}
-                      title={opt.label}
+                      title={opt.help}
                       className={clsx('segment-btn', algorithm === opt.value && 'segment-btn-active')}
                     >
                       {opt.short}
@@ -631,6 +839,30 @@ export default function ProcessViewPage() {
                     edgeCount={discovery.edges.length}
                     gatewayCount={gatewayCount}
                   />
+                )}
+                {/* Plain-language "what am I looking at?" guide for the
+                    current map (finding #15). Reads the live algorithm /
+                    noise / complexity context and renders the answer in
+                    the Process Summary panel on the right. */}
+                {discovery && (
+                  <button
+                    onClick={explainMap}
+                    disabled={narrationLoading}
+                    className={clsx(
+                      'flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-all duration-100 disabled:opacity-50',
+                      narration
+                        ? 'border-accent/40 bg-accent/10 text-accent'
+                        : 'border-line bg-surface-1 text-fg-muted hover:border-line-strong hover:text-fg',
+                    )}
+                    title="Ask AI to explain what this map shows, given the current algorithm, noise filter, and detail level"
+                  >
+                    {narrationLoading ? (
+                      <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-line-strong border-t-accent" />
+                    ) : (
+                      <HelpCircle size={11} />
+                    )}
+                    What does this map mean?
+                  </button>
                 )}
               </div>
 
@@ -680,6 +912,7 @@ export default function ProcessViewPage() {
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={() => setFilterOpen((o) => !o)}
+                  title="Detailed filter panel. Changes here scope the map and are mirrored into the universal filter chips, so the analysis tabs stay in sync."
                   className={clsx(
                     'flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-semibold transition-all duration-100',
                     filterOpen || hasFilters
@@ -689,7 +922,7 @@ export default function ProcessViewPage() {
                 >
                   <Filter size={12} />
                   Filter
-                  {hasFilters && (
+                  {Object.keys(filters).length > 0 && (
                     <span className="rounded-full bg-accent/20 px-1.5 py-px text-[10px] font-bold text-accent">
                       {Object.keys(filters).length}
                     </span>
@@ -736,7 +969,10 @@ export default function ProcessViewPage() {
                         hide-events panel. Renders above the map so
                         users can flip display modes without losing
                         the current viewport. */}
-                    <div className="flex items-center gap-2 border-b border-line bg-surface-1/50 px-2 py-1.5">
+                    <div
+                      className="flex items-center gap-2 border-b border-line bg-surface-1/50 px-2 py-1.5"
+                      data-tour="process-map-toolbar"
+                    >
                       <MapToolbar
                         nodes={discovery.nodes}
                         labelMode={labelMode}
@@ -903,6 +1139,53 @@ export default function ProcessViewPage() {
                       <div className="border-t border-line pt-2 mt-2">
                         <p className="text-[11px] text-fg-faint">Click a node to inspect it.</p>
                       </div>
+
+                      {/* "What does this map mean?" output (finding #15).
+                          Triggered from the control strip; explains the
+                          current algorithm / noise / complexity context
+                          in plain language. */}
+                      {(narrationLoading || narration || narrationError) && (
+                        <div className="border-t border-line pt-3 mt-3">
+                          <div className="mb-1.5 flex items-center gap-1.5">
+                            <Sparkles size={11} className="text-accent" />
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-accent">
+                              What this map shows
+                            </span>
+                            {narration && (
+                              <button
+                                onClick={() => {
+                                  setNarration(null);
+                                  setNarrationError(null);
+                                }}
+                                className="ml-auto rounded p-0.5 text-fg-faint hover:bg-tint hover:text-fg-muted transition-colors"
+                                title="Dismiss"
+                              >
+                                <X size={11} />
+                              </button>
+                            )}
+                          </div>
+                          {narrationLoading ? (
+                            <p className="flex items-center gap-1.5 text-[11px] text-fg-muted">
+                              <span className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-line border-t-accent" />
+                              Reading the current map…
+                            </p>
+                          ) : narrationError ? (
+                            <p className="text-[11px] text-danger">{narrationError}</p>
+                          ) : narration ? (
+                            <>
+                              {narrationLlmConfigured === false && (
+                                <p className="mb-1.5 rounded-md bg-warning/10 px-2 py-1 text-[10px] text-warning">
+                                  No LLM provider configured — showing a
+                                  rule-based summary.
+                                </p>
+                              )}
+                              <div className="whitespace-pre-wrap text-[11px] leading-relaxed text-fg-secondary">
+                                {narration}
+                              </div>
+                            </>
+                          ) : null}
+                        </div>
+                      )}
                     </div>
                   ) : !mapLoading ? (
                     <p className="text-[11px] text-fg-faint">Run a discovery algorithm to see details.</p>

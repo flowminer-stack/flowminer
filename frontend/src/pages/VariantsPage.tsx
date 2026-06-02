@@ -253,6 +253,7 @@ export default function VariantsPage() {
                   <button
                     type="button"
                     onClick={() => handleFocusVariant(variant)}
+                    data-tour={index === 0 ? 'variant-focus' : undefined}
                     className="ml-auto inline-flex items-center gap-1 rounded-md border border-line bg-surface-0 px-2 py-1 text-[11px] font-medium text-fg-muted transition-colors hover:border-accent hover:bg-accent/5 hover:text-accent"
                   >
                     <Target size={11} />
@@ -321,7 +322,7 @@ export default function VariantsPage() {
 
       {/* Variant evolution over time (Minit parity) */}
       {eventLogId && (
-        <div className="mt-8">
+        <div className="mt-8" data-tour="variant-evolution">
           <VariantEvolution eventLogId={eventLogId} />
         </div>
       )}

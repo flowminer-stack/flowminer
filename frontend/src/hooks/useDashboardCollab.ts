@@ -19,9 +19,12 @@ type Listener = (msg: EditMessage) => void;
  * Hook that opens a WebSocket to the dashboard collaboration channel
  * and tracks presence + broadcasts local edits to peers.
  *
- * Server endpoint: /api/v1/streaming/ws/dashboards/{dashboard_id}?user=email
- * Protocol: the server is a pure fan-out, so any JSON we send is echoed
- * to every peer, and presence updates come back as {type: "presence"}.
+ * Server endpoint: /api/v1/streaming/dashboards/{dashboard_id}?token=<jwt>
+ * Auth: the socket now requires a valid ?token= JWT (the same value stored
+ * under `flowminer_token`); the server derives the presence label from the
+ * token and closes unauthenticated sockets with code 1008. Protocol: the
+ * server is a pure fan-out, so any JSON we send is echoed to every peer, and
+ * presence updates come back as {type: "presence"}.
  */
 export function useDashboardCollab(dashboardId: string | undefined) {
   const [viewers, setViewers] = useState<string[]>([]);
@@ -33,9 +36,11 @@ export function useDashboardCollab(dashboardId: string | undefined) {
   useEffect(() => {
     if (!dashboardId) return;
 
+    const token = localStorage.getItem('flowminer_token');
+    if (!token) return; // backend closes tokenless sockets with 1008; don't churn
+
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const label = encodeURIComponent(user?.email || 'anonymous');
-    const url = `${proto}://${window.location.host}/api/v1/streaming/ws/dashboards/${dashboardId}?user=${label}`;
+    const url = `${proto}://${window.location.host}/api/v1/streaming/dashboards/${dashboardId}?token=${encodeURIComponent(token)}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 

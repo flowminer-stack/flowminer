@@ -21,6 +21,7 @@
 // useMiningStore; this is purely filter definitions.
 
 import { create } from 'zustand';
+import type { ProcessFilter } from '@/types';
 
 export type FilterChipType =
   | 'activity'         // include only cases touching this activity
@@ -65,6 +66,14 @@ interface FilterActions {
   // accepts filters reads from this helper so chip semantics stay
   // consistent across pages.
   toQuery: () => Record<string, string>;
+  // Project the active chips into the ``ProcessFilter`` shape the
+  // process-map discovery endpoint consumes. This is the bridge that
+  // lets the universal chip bar drive the *map* (not just the analysis
+  // sub-pages), keeping every surface in sync from one source of truth.
+  // Chip kinds with no ProcessFilter equivalent (variant sequences,
+  // explicit case-id sets, resources, attribute *ranges*) are scoped on
+  // the analysis side via toQuery() and intentionally skipped here.
+  toProcessFilter: () => ProcessFilter;
 }
 
 function newId() {
@@ -182,6 +191,65 @@ export const useFilterStore = create<FilterState & FilterActions>((set, get) => 
         case 'attribute_value':
           if (c.payload.attribute && c.payload.value != null)
             bucket(`attr_${c.payload.attribute}`, String(c.payload.value));
+          break;
+      }
+    }
+    return out;
+  },
+
+  toProcessFilter: () => {
+    const { chips, disabled } = get();
+    const active = chips.filter((c) => !disabled[c.id]);
+    const out: ProcessFilter = {};
+    const pushUnique = (key: 'activities_include' | 'activities_exclude', value: string) => {
+      if (!value) return;
+      const list = out[key] ?? [];
+      if (!list.includes(value)) list.push(value);
+      out[key] = list;
+    };
+    for (const c of active) {
+      switch (c.type) {
+        case 'activity':
+          pushUnique('activities_include', String(c.payload.activity ?? ''));
+          break;
+        case 'activity_exclude':
+          pushUnique('activities_exclude', String(c.payload.activity ?? ''));
+          break;
+        case 'edge': {
+          const source = String(c.payload.source ?? '');
+          const target = String(c.payload.target ?? '');
+          if (source && target) {
+            out.required_edges = [...(out.required_edges ?? []), [source, target]];
+          }
+          break;
+        }
+        case 'duration_range':
+          if (c.payload.min != null) out.duration_min = Number(c.payload.min);
+          if (c.payload.max != null) out.duration_max = Number(c.payload.max);
+          break;
+        case 'time_range':
+          if (c.payload.start) out.time_start = String(c.payload.start);
+          if (c.payload.end) out.time_end = String(c.payload.end);
+          break;
+        case 'attribute_value': {
+          const column = c.payload.attribute ? String(c.payload.attribute) : '';
+          const value = c.payload.value != null ? String(c.payload.value) : '';
+          if (column && value) {
+            const attrs = out.attributes ?? [];
+            const existing = attrs.find((a) => a.column === column);
+            if (existing) {
+              if (!existing.values.includes(value)) existing.values.push(value);
+            } else {
+              attrs.push({ column, values: [value] });
+            }
+            out.attributes = attrs;
+          }
+          break;
+        }
+        // variant / case / resource / attribute_range have no direct
+        // ProcessFilter equivalent — they scope analysis pages via
+        // toQuery() but are skipped for the map discovery request.
+        default:
           break;
       }
     }

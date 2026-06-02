@@ -491,6 +491,12 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
       boxSelectionEnabled: false,
       pixelRatio: 2,
       textureOnViewport: false,
+      // Touch / mobile parity: allow pinch-to-zoom and one-finger pan
+      // on touch devices so the map is usable on tablets and phones.
+      // Cytoscape enables these by default, but we set them explicitly
+      // so a future default change can't silently disable touch.
+      userZoomingEnabled: true,
+      userPanningEnabled: true,
     });
 
     cyRef.current = cy;
@@ -521,7 +527,7 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
   // Memoize the cytoscape element array so filter + scale work only runs
   // when the upstream props actually change — not on every parent re-render
   // that happens to pass new object identities.
-  const { cyNodes, cyEdges } = useMemo(
+  const { cyNodes, cyEdges, visibleNodeCount, visibleEdgeCount } = useMemo(
     () =>
       getFilteredElements(
         nodes,
@@ -698,8 +704,35 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
         </div>
       )}
 
-      {/* Cytoscape canvas */}
-      <div ref={containerRef} className="w-full h-full" />
+      {/* Cytoscape canvas.
+          A11y: cytoscape renders to a <canvas>, which is opaque to
+          screen readers. We label the container as an image/graph and
+          pair it with a visually-hidden text summary (below) so AT
+          users get the node/edge counts. ``touch-action: none`` hands
+          all touch gestures to cytoscape so pinch-to-zoom and pan work
+          on mobile without the browser hijacking them for page scroll. */}
+      <div
+        ref={containerRef}
+        role="img"
+        aria-label={`Process map graph showing ${visibleNodeCount} ${
+          visibleNodeCount === 1 ? 'activity' : 'activities'
+        } and ${visibleEdgeCount} ${
+          visibleEdgeCount === 1 ? 'transition' : 'transitions'
+        }. Use the on-screen zoom controls, or pinch to zoom and drag to pan on touch devices.`}
+        className="w-full h-full"
+        style={{ touchAction: 'none' }}
+      />
+
+      {/* Visually-hidden summary for screen readers — kept in sync with
+          the rendered graph so non-visual users get the headline
+          counts the canvas can't expose. */}
+      <p className="sr-only" aria-live="polite">
+        Discovered process map with {visibleNodeCount}{' '}
+        {visibleNodeCount === 1 ? 'activity' : 'activities'} and{' '}
+        {visibleEdgeCount}{' '}
+        {visibleEdgeCount === 1 ? 'transition' : 'transitions'} currently
+        visible.
+      </p>
 
       {/* Rich hover tooltip (Disco-style) — absolutely positioned
           relative to the map container. Shows abs/rel frequency, mean

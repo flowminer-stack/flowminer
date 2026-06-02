@@ -6,6 +6,8 @@ import type {
   User,
   Project,
   ProjectCreate,
+  ProjectExportManifest,
+  ProjectImportResponse,
   EventLog,
   EventLogPreview,
   ColumnMapping,
@@ -61,6 +63,12 @@ import type {
   DESParameters,
   DESScenario,
   DESSimulationResult,
+  ConnectorSchemaResponse,
+  OPeraPerformanceResponse,
+  StateAwareResponse,
+  LogBuilderBuildRequest,
+  LogBuilderUploadResponse,
+  LogBuilderBuildResponse,
 } from '@/types';
 
 // ─── Axios Instance ──────────────────────────────────────────────────────────
@@ -184,6 +192,41 @@ export const projects = {
   seedSample: async (): Promise<Project> => {
     const r = await api.post('/projects/seed-sample');
     return r.data;
+  },
+
+  // Export a project's metadata, dashboards, alerts, KPIs, initiatives, and
+  // action rules as a JSON manifest. Event-log files are NOT embedded — they
+  // are referenced by SHA-256 checksum and must be re-uploaded after import.
+  export: async (id: string): Promise<ProjectExportManifest> => {
+    const r = await api.get<ProjectExportManifest>(`/projects/${id}/export`);
+    return r.data;
+  },
+
+  // Create a new project from a previously exported manifest. Event-log
+  // files are not restored — re-upload them and match by checksum.
+  import: async (
+    manifest: ProjectExportManifest,
+    targetProjectName?: string | null,
+  ): Promise<ProjectImportResponse> => {
+    const r = await api.post<ProjectImportResponse>('/projects/import', {
+      manifest,
+      target_project_name: targetProjectName ?? null,
+    });
+    return r.data;
+  },
+
+  // Trigger a browser download of the project export manifest as a JSON file.
+  downloadExport: async (id: string, name?: string): Promise<void> => {
+    const manifest = await api.get(`/projects/${id}/export`);
+    const blob = new Blob([JSON.stringify(manifest.data, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name ?? `project_${id}`}.flowminer.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   },
 };
 
@@ -899,6 +942,28 @@ export const ocel = {
       html: string;
       event_log_name: string | null;
     },
+
+  // OPerA object-centric performance metrics (flow / synchronization /
+  // pooling / lagging time per activity, all in seconds). Returns HTTP 501
+  // when the optional `ocpa` package is not installed — callers should
+  // surface that as a "feature requires ocpa" state rather than an error.
+  getOPeraPerformance: async (ocelId: string): Promise<OPeraPerformanceResponse> =>
+    (await api.get<OPeraPerformanceResponse>(`/ocel/${ocelId}/opera-performance`)).data,
+
+  // State-Aware OCPM: materialize object-state transitions into synthetic
+  // events and annotate existing events with current object state.
+  // `stateColumn` is the object attribute carrying the state label;
+  // `objectType` optionally restricts enrichment to one object type.
+  getStateAware: async (
+    ocelId: string,
+    stateColumn: string,
+    objectType?: string,
+  ): Promise<StateAwareResponse> =>
+    (
+      await api.post<StateAwareResponse>(`/ocel/${ocelId}/state-aware`, null, {
+        params: { state_column: stateColumn, object_type: objectType },
+      })
+    ).data,
 };
 
 // Shape of the new unified OCPM improvement report. Matches the
@@ -1057,6 +1122,16 @@ export const connectors = {
     );
     return response.data;
   },
+
+  // Introspect the connector's data source for column-mapping dropdowns.
+  // Never 500s — failures come back as columns:[] with `error` populated;
+  // treat an empty `columns` array as "fall back to free text".
+  getSchema: async (id: string): Promise<ConnectorSchemaResponse> => {
+    const response = await api.get<ConnectorSchemaResponse>(
+      `/connectors/${id}/schema`,
+    );
+    return response.data;
+  },
 };
 
 // ─── Templates ───────────────────────────────────────────────────────────────
@@ -1086,15 +1161,50 @@ export const templates = {
 // ─── Annotations ─────────────────────────────────────────────────────────────
 
 export const annotations = {
-  list: async (eventLogId: string): Promise<Annotation[]> => {
-    const response = await api.get<Annotation[]>(
-      `/annotations?event_log_id=${eventLogId}`,
-    );
+  // Pass `nestReplies` to receive top-level annotations with their
+  // `replies` populated (reply rows are omitted from the root list);
+  // omit it (default) to get every annotation flat regardless of parent.
+  list: async (
+    eventLogId: string,
+    nestReplies = false,
+  ): Promise<Annotation[]> => {
+    const response = await api.get<Annotation[]>('/annotations', {
+      params: { event_log_id: eventLogId, nest_replies: nestReplies },
+    });
     return response.data;
   },
 
   create: async (data: Partial<Annotation>): Promise<Annotation> => {
     const response = await api.post<Annotation>('/annotations', data);
+    return response.data;
+  },
+
+  // Post a threaded reply to an existing annotation.
+  reply: async (id: string, content: string): Promise<Annotation> => {
+    const response = await api.post<Annotation>(`/annotations/${id}/replies`, {
+      content,
+    });
+    return response.data;
+  },
+
+  resolve: async (id: string): Promise<Annotation> => {
+    const response = await api.post<Annotation>(`/annotations/${id}/resolve`);
+    return response.data;
+  },
+
+  unresolve: async (id: string): Promise<Annotation> => {
+    const response = await api.post<Annotation>(`/annotations/${id}/unresolve`);
+    return response.data;
+  },
+
+  // Assign an annotation to a user; pass null to clear the assignment.
+  assign: async (
+    id: string,
+    assigneeId: string | null,
+  ): Promise<Annotation> => {
+    const response = await api.patch<Annotation>(`/annotations/${id}/assign`, {
+      assignee_id: assigneeId,
+    });
     return response.data;
   },
 
@@ -1355,6 +1465,38 @@ export const taskMining = {
     const r = await api.get('/task-mining/recordings', { params: { project_id: projectId } });
     return r.data;
   },
+
+  createRecording: async (
+    projectId: string,
+    opts?: { agent_version?: string | null; hostname?: string | null; notes?: string | null },
+  ): Promise<{ id: string; project_id: string; started_at: string | null }> => {
+    const r = await api.post('/task-mining/recordings', {
+      project_id: projectId,
+      agent_version: opts?.agent_version ?? null,
+      hostname: opts?.hostname ?? null,
+      notes: opts?.notes ?? null,
+    });
+    return r.data;
+  },
+
+  // Ingest a batch of desktop events into a recording. Each event needs
+  // `ts` and `event_type`; the backend caps a single batch at 5000 events.
+  ingestEvents: async (
+    recordingId: string,
+    events: Array<Record<string, unknown>>,
+  ): Promise<{ ingested: number; total_on_recording?: number }> => {
+    const r = await api.post(`/task-mining/recordings/${recordingId}/events`, {
+      events,
+    });
+    return r.data;
+  },
+
+  endRecording: async (
+    recordingId: string,
+  ): Promise<{ id: string; ended_at: string }> => {
+    const r = await api.post(`/task-mining/recordings/${recordingId}/end`);
+    return r.data;
+  },
 };
 
 // ─── System settings (admin-only) ─────────────────────────────────────────
@@ -1595,8 +1737,17 @@ export const ai = {
     return r.data;
   },
 
-  narrate: async (eventLogId: string): Promise<{ markdown: string; llm_configured: boolean }> => {
-    const r = await api.get(`/ai/narrate/${eventLogId}`);
+  narrate: async (
+    eventLogId: string,
+    context?: {
+      algorithm?: string;
+      noise_threshold?: number;
+      complexity?: number;
+      visible_nodes?: number;
+      visible_edges?: number;
+    },
+  ): Promise<{ markdown: string; llm_configured: boolean }> => {
+    const r = await api.get(`/ai/narrate/${eventLogId}`, context ? { params: context } : undefined);
     return r.data;
   },
 
@@ -1701,24 +1852,25 @@ export interface VariantExplanation {
 // ─── Log Builder ─────────────────────────────────────────────────────────────
 
 export const logBuilder = {
-  uploadRaw: async (file: File): Promise<any> => {
+  uploadRaw: async (file: File): Promise<LogBuilderUploadResponse> => {
     const formData = new FormData();
     formData.append('file', file);
-    const r = await api.post('/log-builder/upload-raw', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    const r = await api.post<LogBuilderUploadResponse>(
+      '/log-builder/upload-raw',
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      },
+    );
     return r.data;
   },
-  build: async (body: {
-    project_id: string;
-    name: string;
-    staging_path: string;
-    case_id_column: string;
-    events: { activity_name: string; timestamp_column: string }[];
-    resource_column?: string | null;
-    passthrough_columns?: string[];
-  }): Promise<any> => {
-    const r = await api.post('/log-builder/build', body);
+  // Build a long event log from one staging table, optionally joining in
+  // additional sources first. Upload each extra table via uploadRaw,
+  // collect their staging paths into `additional_sources`, and reference
+  // them by index from each join's `right_source`. `case_id_column` must
+  // exist on the assembled wide table (after joins).
+  build: async (body: LogBuilderBuildRequest): Promise<LogBuilderBuildResponse> => {
+    const r = await api.post<LogBuilderBuildResponse>('/log-builder/build', body);
     return r.data;
   },
 };

@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.models import EventLog, EventLogStatus, LogType, SourceType, User
 from app.schemas.mining import DiscoveryResponse, ProcessNode, ProcessEdge
 from app.schemas.ocel import (
@@ -3111,7 +3111,44 @@ async def generate_ocel_report(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{ocel_id}/state-aware")
+class StateTransition(BaseModel):
+    oid: str
+    object_type: str
+    from_state: str | None = None
+    to_state: str
+    timestamp: str
+    activity: str
+
+
+class StateAwareResponse(BaseModel):
+    """Typed wrapper over ``enrich_ocel_with_state_transitions`` so the
+    frontend has a stable contract for the State-Aware OCPM service."""
+
+    new_events_count: int = Field(
+        ..., description="Number of synthetic state-transition events generated"
+    )
+    annotated_events: int = Field(
+        ..., description="How many existing events were enriched with object state"
+    )
+    state_transitions: list[StateTransition] = Field(
+        default_factory=list,
+        description="The generated transition events (capped at 500 for transport)",
+    )
+    distinct_states: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Unique states observed, keyed by object type",
+    )
+    annotations_by_event: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        description="event_id -> {state_<object_type>: current_state}",
+    )
+    method: str = Field(..., description="Algorithm identifier")
+    state_column: str | None = None
+    object_type_filter: str | None = None
+    note: str | None = None
+
+
+@router.post("/{ocel_id}/state-aware", response_model=StateAwareResponse)
 async def ocel_state_aware(
     ocel_id: str,
     state_column: str = Query(..., description="Object attribute column that carries the state label"),
@@ -3157,4 +3194,265 @@ async def ocel_state_aware(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"State-aware enrichment failed: {e}",
         )
-    return result
+    return StateAwareResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# Endpoint — GET /ocel/{ocel_id}/opera-performance
+# OPerA object-centric performance metrics (Park, Adams, van der Aalst).
+# Computes synchronization / pooling / lagging / flow time per activity via
+# ocpa's token-replay-based performance over a discovered OC Petri net.
+# ---------------------------------------------------------------------------
+
+
+class OPeraActivityMetrics(BaseModel):
+    """Per-activity OPerA timing metrics, all in seconds (None when the
+    underlying replay produced no measurement for that activity)."""
+
+    activity: str
+    flow_time: float | None = Field(
+        None,
+        description="Total time from the first to last object-token arrival at the activity",
+    )
+    synchronization_time: float | None = Field(
+        None,
+        description="Time the activity waits for the last required object to become available",
+    )
+    pooling_time: float | None = Field(
+        None,
+        description="Time spent pooling objects of a single type before the activity fires",
+    )
+    lagging_time: float | None = Field(
+        None,
+        description="Time an object spends waiting because objects of other types lag behind",
+    )
+
+
+class OPeraPerformanceResponse(BaseModel):
+    ocel_id: str
+    activities: list[OPeraActivityMetrics]
+    method: str = "opera_token_replay_based_performance"
+    note: str | None = None
+
+
+# Map the four user-facing OPerA metric names to the substrings that appear
+# in ocpa diagnostics keys across versions (e.g. ``agg_merged_flow_times``,
+# ``flow_time``, ``flow``). Order matters — more specific first.
+_OPERA_METRIC_KEYS: dict[str, tuple[str, ...]] = {
+    "flow_time": ("flow",),
+    "synchronization_time": ("synchronization", "sync"),
+    "pooling_time": ("pooling", "pool"),
+    "lagging_time": ("lagging", "lag"),
+}
+
+
+def _opera_coerce_seconds(value) -> float | None:
+    """Reduce an ocpa diagnostics value to a single float (seconds).
+
+    ocpa hands back numbers, timedeltas, or aggregates (lists / dicts of
+    per-trace measurements). We average lists and pull the mean out of an
+    aggregate dict so the response is a single comparable number.
+    """
+    if value is None:
+        return None
+    if hasattr(value, "total_seconds"):
+        try:
+            return float(value.total_seconds())
+        except Exception:
+            return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, dict):
+        # Prefer an explicit mean/avg key if ocpa already aggregated it.
+        for k in ("mean", "avg", "average"):
+            if k in value:
+                return _opera_coerce_seconds(value[k])
+        nums = [_opera_coerce_seconds(v) for v in value.values()]
+        nums = [n for n in nums if n is not None]
+        return float(sum(nums) / len(nums)) if nums else None
+    if isinstance(value, (list, tuple, set)):
+        nums = [_opera_coerce_seconds(v) for v in value]
+        nums = [n for n in nums if n is not None]
+        return float(sum(nums) / len(nums)) if nums else None
+    return None
+
+
+def _opera_extract_metrics(diagnostics: dict) -> dict[str, dict[str, float | None]]:
+    """Pull the four OPerA metrics per activity out of ocpa diagnostics.
+
+    ocpa's ``token_replay_based_performance`` returns a dict whose timing
+    sections are keyed by something like ``agg_merged_flow_times`` and map
+    activity (transition) name -> measurement. Key names drift across ocpa
+    releases, so we match defensively by substring and skip anything we
+    can't interpret rather than failing the whole request.
+    """
+    per_activity: dict[str, dict[str, float | None]] = {}
+    if not isinstance(diagnostics, dict):
+        return per_activity
+
+    for metric, needles in _OPERA_METRIC_KEYS.items():
+        # Find the diagnostics section for this metric: an activity->value
+        # mapping whose key name contains one of the needles plus "time".
+        section = None
+        for key, val in diagnostics.items():
+            key_l = str(key).lower()
+            if "time" not in key_l:
+                continue
+            if any(n in key_l for n in needles) and isinstance(val, dict):
+                section = val
+                break
+        if section is None:
+            continue
+        for activity, raw in section.items():
+            secs = _opera_coerce_seconds(raw)
+            per_activity.setdefault(str(activity), {})[metric] = secs
+
+    return per_activity
+
+
+def _resolve_ocel_disk_path_sync(ocel_id: str) -> str | None:
+    """Best-effort lookup of the on-disk OCEL file for a real EventLog id.
+
+    Mirrors the reload path in ``_get_ocel_or_404``. Returns None for
+    synthetic conversion ids (which never have a file on disk) — the
+    caller falls back to materialising the in-memory OCEL to a temp file.
+    """
+    from sqlalchemy.orm import Session as SyncSession
+    from app.database import sync_engine
+
+    try:
+        with SyncSession(sync_engine) as db:
+            event_log = db.query(EventLog).filter(
+                EventLog.id == UUID(ocel_id),
+                EventLog.log_type == LogType.ocel,
+            ).first()
+        if event_log and event_log.file_path and os.path.exists(event_log.file_path):
+            return event_log.file_path
+    except Exception as e:
+        logger.warning("OPerA: on-disk OCEL path lookup failed for %s: %s", ocel_id, e)
+    return None
+
+
+def _compute_opera_performance(ocel_id: str, ocel_obj) -> dict:
+    """Synchronous OPerA computation (dispatched to a thread).
+
+    Imports ocpa LAZILY — the import is allowed to raise ImportError so the
+    async endpoint can translate it into a 501. ocpa needs to import the OCEL
+    from a file via its own importer, so we feed it the original upload path
+    when available, otherwise we serialise the in-memory pm4py OCEL to a
+    temporary ``.jsonocel`` first.
+    """
+    import tempfile
+
+    # Lazy import — propagates ImportError to the endpoint for a clean 501.
+    from ocpa.objects.ocel.importer import factory as ocel_import_factory
+    from ocpa.algo.discovery.ocpn import algorithm as ocpn_discovery_factory
+    from ocpa.algo.enhancement.token_replay_based_performance import (
+        algorithm as performance_factory,
+    )
+
+    tmp_path: str | None = None
+    file_path = _resolve_ocel_disk_path_sync(ocel_id)
+
+    if file_path is None or os.path.splitext(file_path)[1].lower() not in (".jsonocel", ".json"):
+        # Materialise the in-memory OCEL to an OCEL 1.0 JSON file that ocpa's
+        # importer reliably reads (covers converted logs and OCEL 2.0
+        # sqlite/xml uploads ocpa can't parse directly).
+        import pm4py
+
+        fd, tmp_path = tempfile.mkstemp(suffix=".jsonocel", prefix="opera_")
+        os.close(fd)
+        try:
+            pm4py.write_ocel_json(ocel_obj, tmp_path)
+        except Exception:
+            writer = getattr(pm4py, "write_ocel2_json", None)
+            if writer is None:
+                raise
+            writer(ocel_obj, tmp_path)
+        file_path = tmp_path
+
+    try:
+        ocpa_ocel = ocel_import_factory.apply(file_path)
+        ocpn = ocpn_discovery_factory.apply(ocpa_ocel)
+        diagnostics = performance_factory.apply(ocpn, ocpa_ocel)
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    per_activity = _opera_extract_metrics(diagnostics)
+
+    activities = [
+        {
+            "activity": act,
+            "flow_time": metrics.get("flow_time"),
+            "synchronization_time": metrics.get("synchronization_time"),
+            "pooling_time": metrics.get("pooling_time"),
+            "lagging_time": metrics.get("lagging_time"),
+        }
+        for act, metrics in sorted(per_activity.items())
+    ]
+
+    return {
+        "ocel_id": ocel_id,
+        "activities": activities,
+        "method": "opera_token_replay_based_performance",
+        "note": None if activities else (
+            "ocpa produced no per-activity timing diagnostics for this OCEL. "
+            "The log may lack the multi-object overlaps OPerA measures."
+        ),
+    }
+
+
+@router.get("/{ocel_id}/opera-performance", response_model=OPeraPerformanceResponse)
+async def get_opera_performance(
+    ocel_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Compute **OPerA** object-centric performance metrics for the OCEL.
+
+    OPerA (Object-centric Performance Analysis, Park / Adams / van der
+    Aalst) decomposes activity time into *flow*, *synchronization*,
+    *pooling* and *lagging* time — the object-centric analogue of the
+    waiting/service split in a flat log, and FlowMiner's named
+    anti-Celonis differentiator on the OCPM side.
+
+    The computation uses ocpa's token-replay-based performance over a
+    discovered object-centric Petri net. ocpa is an OPTIONAL dependency:
+    if it isn't installed this endpoint returns ``501 Not Implemented``
+    with an actionable message rather than crashing.
+    """
+    import asyncio as _asyncio
+
+    await _assert_ocel_access(ocel_id, db, current_user)
+
+    cached = _ocel_cache_get(ocel_id, "opera_performance")
+    if cached is not None:
+        return OPeraPerformanceResponse(**cached)
+
+    ocel_obj = _get_ocel_or_404(ocel_id)
+
+    try:
+        result = await _asyncio.to_thread(_compute_opera_performance, ocel_id, ocel_obj)
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=(
+                "OPerA performance metrics require the optional 'ocpa' package, "
+                "which is not installed in this environment. Install it "
+                "(pip install ocpa) and restart the backend to enable this feature."
+            ),
+        )
+    except Exception as e:
+        logger.error("OPerA performance computation failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"OPerA performance computation failed: {e}",
+        )
+
+    response = OPeraPerformanceResponse(**result)
+    _ocel_cache_set(ocel_id, "opera_performance", response.model_dump())
+    return response

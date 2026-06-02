@@ -15,6 +15,9 @@ from app.models import EventLog, User
 from app.models.action_rule import ActionRule, ActionRuleExecution
 from app.services.action_engine import dispatch_action, evaluate_rule
 from app.services.mining_engine import mining_engine
+from app.services.notifier import Notifier
+
+_notifier = Notifier()
 
 router = APIRouter()
 
@@ -164,13 +167,21 @@ async def evaluate_rule_endpoint(
 
     if not dry_run and matches:
         for case in matches:
-            detail = dispatch_action(rule.action, case)
+            detail = await dispatch_action(
+                rule.action,
+                case,
+                dry_run=False,
+                notifier=_notifier,
+                db=db,
+                event_log_id=rule.event_log_id,
+                created_by=current_user.id,
+            )
             dispatched.append(detail)
             db.add(
                 ActionRuleExecution(
                     rule_id=rule.id,
                     case_id=case["case_id"],
-                    success=True,
+                    success=bool(detail.get("success", False)),
                     details=detail,
                 )
             )

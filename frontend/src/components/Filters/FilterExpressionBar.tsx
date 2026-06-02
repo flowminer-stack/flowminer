@@ -53,7 +53,17 @@ export default function FilterExpressionBar({ eventLogId }: { eventLogId: string
   return (
     <div className="rounded-lg border border-line bg-surface-1 p-3">
       <div className="flex items-center gap-2">
-        <Terminal size={13} className="shrink-0 text-accent" />
+        <Terminal
+          size={13}
+          className="shrink-0 text-accent"
+          aria-label="Filter expression"
+        />
+        <span
+          className="hidden shrink-0 text-[10px] font-semibold uppercase tracking-wide text-fg-faint sm:inline"
+          title="Power-user filter. Running an expression adds a chip to the universal filter, so it scopes the process map AND every analysis tab."
+        >
+          Expression
+        </span>
         <input
           type="text"
           value={expr}
@@ -76,7 +86,7 @@ export default function FilterExpressionBar({ eventLogId }: { eventLogId: string
       </div>
       {matched !== null && (
         <p className="mt-1.5 text-[10px] text-fg-muted">
-          Matched {matched} cases. Chip added — every analysis scopes to them.
+          Matched {matched} cases. Chip added — the map and every analysis tab now scope to them.
         </p>
       )}
       {warnings.length > 0 && (

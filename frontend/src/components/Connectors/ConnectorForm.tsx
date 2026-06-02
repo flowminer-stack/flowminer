@@ -16,8 +16,10 @@ import {
   Zap,
   Clock,
   Info,
+  Columns,
 } from 'lucide-react';
 import { parseCronToHuman } from '../../utils/format';
+import { connectors as connectorsApi } from '@/api/client';
 
 interface Connector {
   id: string;
@@ -46,7 +48,17 @@ type ConnectorType =
   | 'jira'
   | 'github'
   | 'odoo'
-  | 'zendesk';
+  | 'zendesk'
+  | 'sap'
+  | 'salesforce'
+  | 'servicenow'
+  | 'snowflake'
+  | 'bigquery'
+  | 'oracle'
+  | 'workday'
+  | 'oracle_fusion'
+  | 'coupa'
+  | 'ariba';
 
 const types: {
   value: ConnectorType;
@@ -73,6 +85,24 @@ const types: {
     description: 'Connect to Microsoft SQL Server',
   },
   {
+    value: 'oracle',
+    label: 'Oracle DB',
+    icon: <Database className="w-5 h-5" />,
+    description: 'Connect to an Oracle database',
+  },
+  {
+    value: 'snowflake',
+    label: 'Snowflake',
+    icon: <Database className="w-5 h-5" />,
+    description: 'Connect to Snowflake data warehouse',
+  },
+  {
+    value: 'bigquery',
+    label: 'BigQuery',
+    icon: <Database className="w-5 h-5" />,
+    description: 'Connect to Google BigQuery',
+  },
+  {
     value: 'csv_watch',
     label: 'CSV Watch',
     icon: <FileText className="w-5 h-5" />,
@@ -97,6 +127,48 @@ const types: {
     description: 'Import PRs or issues from GitHub',
   },
   {
+    value: 'salesforce',
+    label: 'Salesforce',
+    icon: <Globe className="w-5 h-5" />,
+    description: 'Connect to Salesforce CRM',
+  },
+  {
+    value: 'servicenow',
+    label: 'ServiceNow',
+    icon: <Globe className="w-5 h-5" />,
+    description: 'Import tickets from ServiceNow',
+  },
+  {
+    value: 'sap',
+    label: 'SAP',
+    icon: <Server className="w-5 h-5" />,
+    description: 'Connect to SAP ERP',
+  },
+  {
+    value: 'workday',
+    label: 'Workday',
+    icon: <Globe className="w-5 h-5" />,
+    description: 'Connect to Workday HCM/Finance',
+  },
+  {
+    value: 'oracle_fusion',
+    label: 'Oracle Fusion',
+    icon: <Server className="w-5 h-5" />,
+    description: 'Connect to Oracle Fusion Cloud',
+  },
+  {
+    value: 'coupa',
+    label: 'Coupa',
+    icon: <Globe className="w-5 h-5" />,
+    description: 'Connect to Coupa procurement',
+  },
+  {
+    value: 'ariba',
+    label: 'SAP Ariba',
+    icon: <Globe className="w-5 h-5" />,
+    description: 'Connect to SAP Ariba procurement',
+  },
+  {
     value: 'odoo',
     label: 'Odoo',
     icon: <Database className="w-5 h-5" />,
@@ -118,6 +190,602 @@ const commonCrons = [
   { label: 'Daily at midnight', value: '0 0 * * *' },
   { label: 'Weekly (Monday)', value: '0 0 * * 1' },
 ];
+
+// ERP / SaaS types that supply fixed column mappings automatically or need
+// OAuth-style credentials rather than generic DB fields.
+const AUTO_MAPPED_TYPES: ConnectorType[] = [
+  'jira',
+  'github',
+  'odoo',
+  'zendesk',
+  'salesforce',
+  'servicenow',
+  'workday',
+  'oracle_fusion',
+  'coupa',
+  'ariba',
+];
+
+// Types where the user supplies a SQL/table query and manual column mapping
+// applies (unless schema fetch populates the dropdowns).
+const MANUAL_MAPPED_TYPES: ConnectorType[] = [
+  'postgresql',
+  'mysql',
+  'sqlserver',
+  'oracle',
+  'snowflake',
+  'bigquery',
+  'csv_watch',
+  'api_endpoint',
+  'sap',
+];
+
+// ─── ColumnField ──────────────────────────────────────────────────────────────
+
+interface ColumnFieldProps {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  columns: string[];
+}
+
+function ColumnField({ label, value, onChange, placeholder, columns }: ColumnFieldProps) {
+  if (columns.length > 0) {
+    return (
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">{label}</label>
+        <div className="relative">
+          <select
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className="select w-full"
+          >
+            <option value="">— select column —</option>
+            {columns.map((col) => (
+              <option key={col} value={col}>
+                {col}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-faint pointer-events-none" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <label className="block text-[11px] font-medium text-fg-faint mb-1">{label}</label>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="input w-full"
+      />
+    </div>
+  );
+}
+
+// ─── SAP config ───────────────────────────────────────────────────────────────
+
+interface SapConfigProps {
+  config: Record<string, any>;
+  onChange: (key: string, value: any) => void;
+  showPassword: boolean;
+  onTogglePassword: () => void;
+}
+
+function SapConfig({ config, onChange, showPassword, onTogglePassword }: SapConfigProps) {
+  return (
+    <div className="space-y-4 p-4 bg-surface-1 rounded-xl border border-line">
+      <h3 className="text-sm font-semibold text-fg-secondary">SAP Settings</h3>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Host</label>
+          <input
+            type="text"
+            value={config.host || ''}
+            onChange={(e) => onChange('host', e.target.value)}
+            placeholder="sap-server.company.com"
+            className="input w-full"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">System Number</label>
+          <input
+            type="text"
+            value={config.system_number || ''}
+            onChange={(e) => onChange('system_number', e.target.value)}
+            placeholder="00"
+            className="input w-full font-mono"
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Client</label>
+          <input
+            type="text"
+            value={config.client || ''}
+            onChange={(e) => onChange('client', e.target.value)}
+            placeholder="100"
+            className="input w-full font-mono"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Username</label>
+          <input
+            type="text"
+            value={config.username || ''}
+            onChange={(e) => onChange('username', e.target.value)}
+            placeholder="RFCUSER"
+            className="input w-full"
+          />
+        </div>
+      </div>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">Password</label>
+        <div className="relative">
+          <input
+            type={showPassword ? 'text' : 'password'}
+            value={config.password || ''}
+            onChange={(e) => onChange('password', e.target.value)}
+            placeholder="password"
+            className="input w-full pr-10"
+          />
+          <button
+            type="button"
+            onClick={onTogglePassword}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-fg-faint hover:text-fg-muted transition-colors"
+          >
+            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        </div>
+      </div>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">Table / RFC Function</label>
+        <input
+          type="text"
+          value={config.table || ''}
+          onChange={(e) => onChange('table', e.target.value)}
+          placeholder="CDHDR or Z_GET_EVENTS"
+          className="input w-full font-mono"
+        />
+        <p className="mt-1 text-[11px] text-fg-faint flex items-center gap-1">
+          <Info className="w-3 h-3" />
+          Specify a table name (CDHDR, CDPOS) or a custom RFC function module
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Salesforce config ────────────────────────────────────────────────────────
+
+interface SalesforceConfigProps {
+  config: Record<string, any>;
+  onChange: (key: string, value: any) => void;
+  showPassword: boolean;
+  onTogglePassword: () => void;
+}
+
+function SalesforceConfig({ config, onChange, showPassword, onTogglePassword }: SalesforceConfigProps) {
+  return (
+    <div className="space-y-4 p-4 bg-surface-1 rounded-xl border border-line">
+      <h3 className="text-sm font-semibold text-fg-secondary">Salesforce Settings</h3>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">Instance URL</label>
+        <input
+          type="url"
+          value={config.instance_url || ''}
+          onChange={(e) => onChange('instance_url', e.target.value)}
+          placeholder="https://company.my.salesforce.com"
+          className="input w-full"
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Username</label>
+          <input
+            type="text"
+            value={config.username || ''}
+            onChange={(e) => onChange('username', e.target.value)}
+            placeholder="user@company.com"
+            className="input w-full"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Password + Security Token</label>
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={config.password || ''}
+              onChange={(e) => onChange('password', e.target.value)}
+              placeholder="passwordTOKEN"
+              className="input w-full pr-10"
+            />
+            <button
+              type="button"
+              onClick={onTogglePassword}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-fg-faint hover:text-fg-muted"
+            >
+              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Object / SOQL</label>
+          <input
+            type="text"
+            value={config.sobject || ''}
+            onChange={(e) => onChange('sobject', e.target.value)}
+            placeholder="Case"
+            className="input w-full font-mono"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Max Records</label>
+          <input
+            type="number"
+            value={config.max_records ?? 10000}
+            onChange={(e) => onChange('max_records', Number(e.target.value))}
+            min={1}
+            className="input w-full"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ServiceNow config ────────────────────────────────────────────────────────
+
+interface ServiceNowConfigProps {
+  config: Record<string, any>;
+  onChange: (key: string, value: any) => void;
+  showPassword: boolean;
+  onTogglePassword: () => void;
+}
+
+function ServiceNowConfig({ config, onChange, showPassword, onTogglePassword }: ServiceNowConfigProps) {
+  return (
+    <div className="space-y-4 p-4 bg-surface-1 rounded-xl border border-line">
+      <h3 className="text-sm font-semibold text-fg-secondary">ServiceNow Settings</h3>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">Instance URL</label>
+        <input
+          type="url"
+          value={config.instance_url || ''}
+          onChange={(e) => onChange('instance_url', e.target.value)}
+          placeholder="https://company.service-now.com"
+          className="input w-full"
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Username</label>
+          <input
+            type="text"
+            value={config.username || ''}
+            onChange={(e) => onChange('username', e.target.value)}
+            placeholder="admin"
+            className="input w-full"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Password</label>
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={config.password || ''}
+              onChange={(e) => onChange('password', e.target.value)}
+              placeholder="password"
+              className="input w-full pr-10"
+            />
+            <button
+              type="button"
+              onClick={onTogglePassword}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-fg-faint hover:text-fg-muted"
+            >
+              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Table</label>
+          <input
+            type="text"
+            value={config.table || ''}
+            onChange={(e) => onChange('table', e.target.value)}
+            placeholder="incident"
+            className="input w-full font-mono"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Max Records</label>
+          <input
+            type="number"
+            value={config.max_records ?? 5000}
+            onChange={(e) => onChange('max_records', Number(e.target.value))}
+            min={1}
+            className="input w-full"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Snowflake config ─────────────────────────────────────────────────────────
+
+interface SnowflakeConfigProps {
+  config: Record<string, any>;
+  onChange: (key: string, value: any) => void;
+  showPassword: boolean;
+  onTogglePassword: () => void;
+}
+
+function SnowflakeConfig({ config, onChange, showPassword, onTogglePassword }: SnowflakeConfigProps) {
+  return (
+    <div className="space-y-4 p-4 bg-surface-1 rounded-xl border border-line">
+      <h3 className="text-sm font-semibold text-fg-secondary">Snowflake Settings</h3>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">Account</label>
+        <input
+          type="text"
+          value={config.account || ''}
+          onChange={(e) => onChange('account', e.target.value)}
+          placeholder="company.us-east-1"
+          className="input w-full font-mono"
+        />
+        <p className="mt-1 text-[11px] text-fg-faint flex items-center gap-1">
+          <Info className="w-3 h-3" />
+          The account identifier from your Snowflake URL
+        </p>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Username</label>
+          <input
+            type="text"
+            value={config.username || ''}
+            onChange={(e) => onChange('username', e.target.value)}
+            placeholder="SVCUSER"
+            className="input w-full"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Password</label>
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={config.password || ''}
+              onChange={(e) => onChange('password', e.target.value)}
+              placeholder="password"
+              className="input w-full pr-10"
+            />
+            <button
+              type="button"
+              onClick={onTogglePassword}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-fg-faint hover:text-fg-muted"
+            >
+              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Warehouse</label>
+          <input
+            type="text"
+            value={config.warehouse || ''}
+            onChange={(e) => onChange('warehouse', e.target.value)}
+            placeholder="COMPUTE_WH"
+            className="input w-full font-mono"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Database</label>
+          <input
+            type="text"
+            value={config.database || ''}
+            onChange={(e) => onChange('database', e.target.value)}
+            placeholder="EVENTS_DB"
+            className="input w-full font-mono"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Schema</label>
+          <input
+            type="text"
+            value={config.schema || ''}
+            onChange={(e) => onChange('schema', e.target.value)}
+            placeholder="PUBLIC"
+            className="input w-full font-mono"
+          />
+        </div>
+      </div>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">SQL Query or Table</label>
+        <textarea
+          value={config.query || ''}
+          onChange={(e) => onChange('query', e.target.value)}
+          placeholder="SELECT * FROM event_log WHERE created_at > '{{last_sync}}'"
+          rows={3}
+          className="input w-full font-mono resize-none"
+        />
+        <p className="mt-1 text-[11px] text-fg-faint flex items-center gap-1">
+          <Info className="w-3 h-3" />
+          Use {'{{last_sync}}'} as a placeholder for incremental fetching
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── BigQuery config ──────────────────────────────────────────────────────────
+
+interface BigQueryConfigProps {
+  config: Record<string, any>;
+  onChange: (key: string, value: any) => void;
+}
+
+function BigQueryConfig({ config, onChange }: BigQueryConfigProps) {
+  return (
+    <div className="space-y-4 p-4 bg-surface-1 rounded-xl border border-line">
+      <h3 className="text-sm font-semibold text-fg-secondary">BigQuery Settings</h3>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Project ID</label>
+          <input
+            type="text"
+            value={config.project_id || ''}
+            onChange={(e) => onChange('project_id', e.target.value)}
+            placeholder="my-gcp-project"
+            className="input w-full font-mono"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Dataset</label>
+          <input
+            type="text"
+            value={config.dataset || ''}
+            onChange={(e) => onChange('dataset', e.target.value)}
+            placeholder="events_dataset"
+            className="input w-full font-mono"
+          />
+        </div>
+      </div>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">
+          Service Account Key (JSON)
+        </label>
+        <textarea
+          value={config.credentials_json || ''}
+          onChange={(e) => onChange('credentials_json', e.target.value)}
+          placeholder='{"type": "service_account", "project_id": "...", ...}'
+          rows={4}
+          className="input w-full font-mono resize-none text-[11px]"
+        />
+        <p className="mt-1 text-[11px] text-fg-faint flex items-center gap-1">
+          <Info className="w-3 h-3" />
+          Paste the contents of your GCP service account JSON key file
+        </p>
+      </div>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">SQL Query or Table</label>
+        <textarea
+          value={config.query || ''}
+          onChange={(e) => onChange('query', e.target.value)}
+          placeholder="SELECT * FROM `project.dataset.event_log` WHERE created_at > '{{last_sync}}'"
+          rows={3}
+          className="input w-full font-mono resize-none"
+        />
+        <p className="mt-1 text-[11px] text-fg-faint flex items-center gap-1">
+          <Info className="w-3 h-3" />
+          Use {'{{last_sync}}'} as a placeholder for incremental fetching
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Generic SaaS / ERP config ────────────────────────────────────────────────
+
+interface GenericErpConfigProps {
+  type: ConnectorType;
+  config: Record<string, any>;
+  onChange: (key: string, value: any) => void;
+  showPassword: boolean;
+  onTogglePassword: () => void;
+}
+
+function GenericErpConfig({
+  type,
+  config,
+  onChange,
+  showPassword,
+  onTogglePassword,
+}: GenericErpConfigProps) {
+  const label = types.find((t) => t.value === type)?.label ?? type;
+  return (
+    <div className="space-y-4 p-4 bg-surface-1 rounded-xl border border-line">
+      <h3 className="text-sm font-semibold text-fg-secondary">{label} Settings</h3>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">Base URL</label>
+        <input
+          type="url"
+          value={config.base_url || ''}
+          onChange={(e) => onChange('base_url', e.target.value)}
+          placeholder="https://api.example.com"
+          className="input w-full"
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Client ID</label>
+          <input
+            type="text"
+            value={config.client_id || ''}
+            onChange={(e) => onChange('client_id', e.target.value)}
+            placeholder="client_id"
+            className="input w-full font-mono"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Client Secret</label>
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={config.client_secret || ''}
+              onChange={(e) => onChange('client_secret', e.target.value)}
+              placeholder="client_secret"
+              className="input w-full pr-10 font-mono"
+            />
+            <button
+              type="button"
+              onClick={onTogglePassword}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-fg-faint hover:text-fg-muted"
+            >
+              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Entity / Table</label>
+          <input
+            type="text"
+            value={config.entity || ''}
+            onChange={(e) => onChange('entity', e.target.value)}
+            placeholder="WorkerHistory"
+            className="input w-full font-mono"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Max Records</label>
+          <input
+            type="number"
+            value={config.max_records ?? 10000}
+            onChange={(e) => onChange('max_records', Number(e.target.value))}
+            min={1}
+            className="input w-full"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
 
 const ConnectorForm: React.FC<ConnectorFormProps> = ({
   connector,
@@ -183,10 +851,26 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
   const [zendeskApiToken, setZendeskApiToken] = useState(connector?.config?.api_token || '');
   const [zendeskMaxTickets, setZendeskMaxTickets] = useState(connector?.config?.max_tickets ?? 1000);
 
+  // ERP / SaaS connector configs (SAP, Salesforce, ServiceNow, Snowflake,
+  // BigQuery, and the generic ones). Stored as free-form objects to avoid
+  // proliferating individual state variables — each sub-component patches
+  // into a typed key via the shared `erpConfig` updater.
+  const [erpConfig, setErpConfig] = useState<Record<string, any>>(
+    connector?.config ?? {}
+  );
+
+  const handleErpConfigChange = (key: string, value: any) => {
+    setErpConfig((prev) => ({ ...prev, [key]: value }));
+  };
+
   // Column mapping
   const [caseIdCol, setCaseIdCol] = useState(connector?.config?.case_id_column || '');
   const [activityCol, setActivityCol] = useState(connector?.config?.activity_column || '');
   const [timestampCol, setTimestampCol] = useState(connector?.config?.timestamp_column || '');
+
+  // Discovered columns from schema endpoint (populated after a successful test)
+  const [schemaColumns, setSchemaColumns] = useState<string[]>([]);
+  const [schemaFetching, setSchemaFetching] = useState(false);
 
   // Schedule
   const [schedule, setSchedule] = useState(connector?.schedule || '0 * * * *');
@@ -201,6 +885,7 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
       case 'postgresql': return '5432';
       case 'mysql': return '3306';
       case 'sqlserver': return '1433';
+      case 'oracle': return '1521';
       default: return '';
     }
   };
@@ -209,6 +894,7 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
     setType(newType);
     setPort(getDefaultPort(newType));
     setTestStatus('idle');
+    setSchemaColumns([]);
   };
 
   const buildConfig = () => {
@@ -218,7 +904,7 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
       timestamp_column: timestampCol,
     };
 
-    if (['postgresql', 'mysql', 'sqlserver'].includes(type)) {
+    if (['postgresql', 'mysql', 'sqlserver', 'oracle'].includes(type)) {
       Object.assign(config, { host, port: Number(port), database, username, password, query });
     } else if (type === 'csv_watch') {
       Object.assign(config, { file_path: filePath, delimiter, encoding });
@@ -266,6 +952,9 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
         api_token: zendeskApiToken,
         max_tickets: Number(zendeskMaxTickets),
       });
+    } else {
+      // ERP / SaaS types managed by erpConfig
+      Object.assign(config, erpConfig);
     }
 
     return config;
@@ -274,10 +963,27 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
   const handleTest = async () => {
     setTestStatus('testing');
     setTestMessage('');
+    setSchemaColumns([]);
     try {
       await onTest({ name, type, config: buildConfig(), schedule });
       setTestStatus('success');
       setTestMessage('Connection successful');
+
+      // After a successful test, fetch the schema if we have a saved connector
+      // ID so we can populate the column-mapping dropdowns.
+      if (connector?.id) {
+        setSchemaFetching(true);
+        try {
+          const resp = await connectorsApi.getSchema(connector.id);
+          if (resp.columns.length > 0) {
+            setSchemaColumns(resp.columns);
+          }
+        } catch {
+          // Schema fetch is best-effort; fall back to free-text silently.
+        } finally {
+          setSchemaFetching(false);
+        }
+      }
     } catch (err: any) {
       setTestStatus('error');
       setTestMessage(err?.message || 'Connection failed');
@@ -293,7 +999,9 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
     });
   };
 
-  const isDatabase = ['postgresql', 'mysql', 'sqlserver'].includes(type);
+  const isDatabase = ['postgresql', 'mysql', 'sqlserver', 'oracle'].includes(type);
+  const isManualMapped = MANUAL_MAPPED_TYPES.includes(type);
+  const isAutoMapped = AUTO_MAPPED_TYPES.includes(type);
 
   return (
     <div className="bg-surface-2 rounded-xl border border-line overflow-hidden">
@@ -334,7 +1042,7 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
           <label className="block text-[12px] font-medium text-fg-muted mb-3">
             Source Type
           </label>
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 xl:grid-cols-9">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 xl:grid-cols-10">
             {types.map((ct) => (
               <button
                 key={ct.value}
@@ -460,6 +1168,65 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
               </p>
             </div>
           </div>
+        )}
+
+        {/* Snowflake config */}
+        {type === 'snowflake' && (
+          <SnowflakeConfig
+            config={erpConfig}
+            onChange={handleErpConfigChange}
+            showPassword={showPassword}
+            onTogglePassword={() => setShowPassword(!showPassword)}
+          />
+        )}
+
+        {/* BigQuery config */}
+        {type === 'bigquery' && (
+          <BigQueryConfig
+            config={erpConfig}
+            onChange={handleErpConfigChange}
+          />
+        )}
+
+        {/* SAP config */}
+        {type === 'sap' && (
+          <SapConfig
+            config={erpConfig}
+            onChange={handleErpConfigChange}
+            showPassword={showPassword}
+            onTogglePassword={() => setShowPassword(!showPassword)}
+          />
+        )}
+
+        {/* Salesforce config */}
+        {type === 'salesforce' && (
+          <SalesforceConfig
+            config={erpConfig}
+            onChange={handleErpConfigChange}
+            showPassword={showPassword}
+            onTogglePassword={() => setShowPassword(!showPassword)}
+          />
+        )}
+
+        {/* ServiceNow config */}
+        {type === 'servicenow' && (
+          <ServiceNowConfig
+            config={erpConfig}
+            onChange={handleErpConfigChange}
+            showPassword={showPassword}
+            onTogglePassword={() => setShowPassword(!showPassword)}
+          />
+        )}
+
+        {/* Generic ERP/SaaS config for remaining enterprise types */}
+        {(['workday', 'oracle_fusion', 'coupa', 'ariba'] as ConnectorType[]).includes(type) && (
+          <GenericErpConfig
+            type={type}
+            config={erpConfig}
+            onChange={handleErpConfigChange}
+            showPassword={showPassword}
+            onTogglePassword={() => setShowPassword(!showPassword)}
+          />
         )}
 
         {/* CSV Watch config */}
@@ -1017,56 +1784,58 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
           </div>
         )}
 
-        {/* Column mapping — only for types that need manual mapping */}
-        {['postgresql', 'mysql', 'sqlserver', 'csv_watch', 'api_endpoint'].includes(type) && (
+        {/* Column mapping */}
+        {isManualMapped && (
           <div className="space-y-3 p-4 bg-surface-1 rounded-xl border border-line">
-            <h3 className="text-sm font-semibold text-fg-secondary">
-              Column Mapping
-            </h3>
-            <p className="text-[12px] text-fg-faint">
-              Specify the column names in your source data
-            </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-fg-secondary">Column Mapping</h3>
+                <p className="text-[12px] text-fg-faint mt-0.5">
+                  {schemaColumns.length > 0
+                    ? 'Columns discovered from connection — select from the dropdowns below'
+                    : 'Specify the column names in your source data'}
+                </p>
+              </div>
+              {schemaFetching && (
+                <div className="flex items-center gap-1.5 text-xs text-fg-muted">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Fetching columns…
+                </div>
+              )}
+              {schemaColumns.length > 0 && !schemaFetching && (
+                <div className="flex items-center gap-1.5 text-xs font-medium text-success bg-success/10 px-2 py-1 rounded-lg">
+                  <Columns className="w-3.5 h-3.5" />
+                  {schemaColumns.length} columns
+                </div>
+              )}
+            </div>
             <div className="grid grid-cols-3 gap-4">
-              <div>
-                <label className="block text-[11px] font-medium text-fg-faint mb-1">
-                  Case ID Column
-                </label>
-                <input
-                  type="text"
-                  value={caseIdCol}
-                  onChange={(e) => setCaseIdCol(e.target.value)}
-                  placeholder="case_id"
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-fg-faint mb-1">
-                  Activity Column
-                </label>
-                <input
-                  type="text"
-                  value={activityCol}
-                  onChange={(e) => setActivityCol(e.target.value)}
-                  placeholder="activity"
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-fg-faint mb-1">
-                  Timestamp Column
-                </label>
-                <input
-                  type="text"
-                  value={timestampCol}
-                  onChange={(e) => setTimestampCol(e.target.value)}
-                  placeholder="timestamp"
-                  className="input w-full"
-                />
-              </div>
+              <ColumnField
+                label="Case ID Column"
+                value={caseIdCol}
+                onChange={setCaseIdCol}
+                placeholder="case_id"
+                columns={schemaColumns}
+              />
+              <ColumnField
+                label="Activity Column"
+                value={activityCol}
+                onChange={setActivityCol}
+                placeholder="activity"
+                columns={schemaColumns}
+              />
+              <ColumnField
+                label="Timestamp Column"
+                value={timestampCol}
+                onChange={setTimestampCol}
+                placeholder="timestamp"
+                columns={schemaColumns}
+              />
             </div>
           </div>
         )}
-        {['jira', 'github', 'odoo', 'zendesk'].includes(type) && (
+
+        {isAutoMapped && (
           <div className="rounded-lg border border-line bg-success/5 px-4 py-3">
             <p className="text-[12px] text-success font-medium">Column mapping is automatic for this connector type — no configuration needed.</p>
           </div>

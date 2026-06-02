@@ -47,32 +47,47 @@ export default function FilterChipBar({
   // Render a small standalone "Filter by attribute" launcher even
   // when there are no chips yet, so users can start filtering from
   // scratch. When chips exist we render the full breadcrumb below.
+  //
+  // We keep the bar visible whenever the page wires up an
+  // ``eventLogId`` so it stays the universal, always-present primary
+  // filter entry point (and a stable product-tour target). Only when
+  // no log context is provided at all do we collapse to nothing.
   if (chips.length === 0) {
-    if (!eventLogId || !attributeColumns || attributeColumns.length === 0) return null;
+    if (!eventLogId) return null;
+    const hasAttributeCols = !!attributeColumns && attributeColumns.length > 0;
     return (
       <div
+        data-tour="filter-chip-bar"
         className={clsx(
           'relative flex items-center gap-1.5 rounded-lg border border-dashed border-line bg-surface-1 px-3 py-1.5',
           className,
         )}
       >
-        <span className="text-[10px] uppercase tracking-wide text-fg-faint">
+        <span
+          className="text-[10px] uppercase tracking-wide text-fg-faint"
+          title="Universal filter. Chips here scope the process map AND every analysis tab — the single source of truth for what cases you're looking at."
+        >
           No filters
         </span>
-        <select
-          onChange={(e) => {
-            if (e.target.value) setPopoverAttr(e.target.value);
-            e.target.value = '';
-          }}
-          className="rounded border border-line bg-surface-0 px-2 py-0.5 text-[10px] text-fg-muted outline-none hover:border-accent hover:text-accent"
-        >
-          <option value="">+ Filter by attribute…</option>
-          {attributeColumns.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
+        {hasAttributeCols && (
+          <select
+            onChange={(e) => {
+              if (e.target.value) setPopoverAttr(e.target.value);
+              e.target.value = '';
+            }}
+            className="rounded border border-line bg-surface-0 px-2 py-0.5 text-[10px] text-fg-muted outline-none hover:border-accent hover:text-accent"
+          >
+            <option value="">+ Filter by attribute…</option>
+            {attributeColumns!.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        )}
+        <span className="text-[10px] text-fg-ghost">
+          Click a node, type an expression, or pick an attribute to scope every view.
+        </span>
         {popoverAttr && (
           <div className="absolute left-0 top-full z-30 mt-1">
             <AttributeHistogramPopover
@@ -114,12 +129,16 @@ export default function FilterChipBar({
 
   return (
     <div
+      data-tour="filter-chip-bar"
       className={clsx(
         'relative flex flex-wrap items-center gap-1.5 rounded-lg border border-line bg-surface-1 px-3 py-2',
         className,
       )}
     >
-      <span className="text-[10px] uppercase tracking-wide text-fg-faint">
+      <span
+        className="text-[10px] uppercase tracking-wide text-fg-faint"
+        title="Universal filter. Chips here scope the process map AND every analysis tab — the single source of truth for what cases you're looking at."
+      >
         Filters
       </span>
       {chips.map((c) => {

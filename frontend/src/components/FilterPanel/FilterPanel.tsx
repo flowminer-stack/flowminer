@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { SlidersHorizontal, ChevronDown, ChevronUp, Activity, Zap, MapPin, X } from 'lucide-react';
+import { SlidersHorizontal, ChevronDown, ChevronUp, Activity, Zap, MapPin, X, Info } from 'lucide-react';
 import clsx from 'clsx';
 import type { DiscoveryResponse } from '@/types';
+import { useFilterStore } from '@/store/filterStore';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,31 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
   const [startFilter, setStartFilter] = useState<string>('');
   const [endFilter, setEndFilter] = useState<string>('');
 
+  // Finding #13 — this panel writes into the shared filterStore as well
+  // as emitting visible-node ids upward, so hiding an activity here
+  // scopes the analysis tabs too (not just the local map). Chips are
+  // tagged so we can reconcile our own entries without disturbing chips
+  // from other surfaces.
+  const addChip = useFilterStore((s) => s.addChip);
+  const reflectExcludedActivity = (id: string, hide: boolean) => {
+    const store = useFilterStore.getState();
+    const existing = store.chips.find(
+      (c) =>
+        c.payload.__source === 'panel' &&
+        c.type === 'activity_exclude' &&
+        c.payload.activity === id,
+    );
+    if (hide && !existing) {
+      addChip({
+        type: 'activity_exclude',
+        label: `exclude: ${id}`,
+        payload: { activity: id, __source: 'panel' },
+      });
+    } else if (!hide && existing) {
+      store.removeChip(existing.id);
+    }
+  };
+
   const startActivities = useMemo(
     () => discovery?.nodes.filter((n) => n.is_start).map((n) => n.id) ?? [],
     [discovery],
@@ -97,8 +123,10 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
       const next = new Set(prev);
       if (next.has(id)) {
         next.delete(id);
+        reflectExcludedActivity(id, false);
       } else {
         next.add(id);
+        reflectExcludedActivity(id, true);
       }
       computeVisibleNodes(next, startFilter, endFilter);
       return next;
@@ -116,6 +144,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
   };
 
   const clearAll = () => {
+    hiddenActivities.forEach((id) => reflectExcludedActivity(id, false));
     setHiddenActivities(new Set());
     setHideSlowPaths(false);
     setStartFilter('');
@@ -143,6 +172,12 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
         <h3 className="flex items-center gap-1.5 text-[12px] font-semibold text-fg-secondary">
           <SlidersHorizontal size={13} />
           Filters
+          <span
+            title="Scope: the process map AND every analysis tab. Hiding an activity here also adds an exclude chip to the universal filter."
+            className="cursor-help text-fg-faint hover:text-fg-muted"
+          >
+            <Info size={11} />
+          </span>
         </h3>
         {hasActiveFilters && (
           <button
@@ -197,6 +232,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
           <div className="mt-2 flex gap-2">
             <button
               onClick={() => {
+                hiddenActivities.forEach((id) => reflectExcludedActivity(id, false));
                 setHiddenActivities(new Set());
                 if (onNodeFilter) onNodeFilter(allActivities);
               }}
@@ -207,6 +243,7 @@ const FilterPanel: React.FC<FilterPanelProps> = ({
             <span className="text-[10px] text-fg-faint">·</span>
             <button
               onClick={() => {
+                allActivities.forEach((id) => reflectExcludedActivity(id, true));
                 setHiddenActivities(new Set(allActivities));
                 if (onNodeFilter) onNodeFilter([]);
               }}

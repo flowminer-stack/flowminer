@@ -1,0 +1,29 @@
+# FlowMiner capture agent — optional capture-backend dependencies
+#
+# The agent.py script imports all of these lazily; none of them are required
+# for the script to parse or for --help to work.  Install only the packages
+# that apply to your platform.
+#
+# ── Core (required on all platforms) ────────────────────────────────────────
+flowminer          # the FlowMiner SDK (provides the Client class)
+httpx>=0.27        # transitive dep of the SDK; listed here for clarity
+
+# ── Windows ──────────────────────────────────────────────────────────────────
+# Uncomment the line(s) for your preferred Windows backend:
+# pygetwindow>=0.0.9   # easiest — pip install pygetwindow
+# pywin32>=306         # lower-level Win32 API — pip install pywin32
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+# AppKit and Quartz ship with the system Python on macOS.
+# If you're using a standalone Python distribution, install pyobjc:
+# pyobjc-framework-Cocoa>=10.0    # provides AppKit
+# pyobjc-framework-Quartz>=10.0   # provides Quartz
+
+# ── Linux (X11) ───────────────────────────────────────────────────────────────
+# Uncomment one of:
+# ewmh>=0.1.6          # python-ewmh; also needs python-xlib
+# python-xlib>=0.33    # required by ewmh
+#
+# Or ensure xdotool / wmctrl is installed via your package manager:
+#   sudo apt install xdotool
+#   sudo apt install wmctrl

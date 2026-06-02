@@ -48,3 +48,10 @@ typer>=0.12,<0.16
 # Discrete-event simulation engine (Task 2 / DES endpoint).
 # MIT-licensed, pure-Python, zero heavy deps — safe to add unconditionally.
 simpy
+# Object-Centric Process Analytics — backs the OPerA object-centric
+# performance metrics endpoint in app/api/ocel.py (synchronization /
+# pooling / lagging / flow time via token-replay). Imported LAZILY
+# inside the endpoint (mirroring the optional LLM providers above) so
+# `import app.main` still works if ocpa isn't installed; the endpoint
+# returns a clear 501 in that case instead of crashing the app.
+ocpa

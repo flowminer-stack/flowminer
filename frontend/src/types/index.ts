@@ -55,6 +55,31 @@ export interface ProjectCreate {
   team_id?: string;
 }
 
+// Project export/import manifest. Event-log *files* are not embedded —
+// the manifest references them by SHA-256 checksum so the importer knows
+// which files to re-attach afterward. The exact child-resource shapes are
+// emitted by the backend and treated opaquely by the UI, so the manifest
+// is typed as an open record.
+export type ProjectExportManifest = Record<string, unknown>;
+
+export interface ProjectImportRequest {
+  manifest: ProjectExportManifest;
+  target_project_name?: string | null;
+}
+
+export interface ProjectImportResponse {
+  project_id: string;
+  imported: {
+    event_logs: number;
+    dashboards: number;
+    alerts: number;
+    custom_kpis: number;
+    initiatives: number;
+    action_rules: number;
+  };
+  notice: string;
+}
+
 // ─── Event Log ───────────────────────────────────────────────────────────────
 
 export interface EventLog {
@@ -463,6 +488,18 @@ export interface Connector {
   created_at: string;
 }
 
+// Schema introspection for column-mapping dropdowns. `columns` is a
+// best-effort flat list of field names; treat an empty array as
+// "fall back to free-text input". Never errors — introspection
+// failures come back with columns:[] and a populated `error`.
+export interface ConnectorSchemaResponse {
+  connector_id: string;
+  connector_type: string;
+  columns: string[];
+  schema: Record<string, unknown>;
+  error: string | null;
+}
+
 // ─── Template ────────────────────────────────────────────────────────────────
 
 export interface ProcessTemplate {
@@ -495,6 +532,16 @@ export interface Annotation {
   content: string;
   created_by: string;
   created_at: string;
+  // Threading — a reply points at its parent annotation.
+  parent_id: string | null;
+  // Resolution
+  resolved: boolean;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  // Assignment
+  assignee_id: string | null;
+  // Populated only when listed with nest_replies=true; flat otherwise.
+  replies: Annotation[];
 }
 
 // ─── Cases ───────────────────────────────────────────────────────────────────
@@ -783,6 +830,46 @@ export interface ConnectedComponentsResponse {
   avg_component_size: number;
 }
 
+// ─── OPerA object-centric performance ─────────────────────────────────────────
+
+export interface OPeraActivityMetrics {
+  activity: string;
+  flow_time: number | null;
+  synchronization_time: number | null;
+  pooling_time: number | null;
+  lagging_time: number | null;
+}
+
+export interface OPeraPerformanceResponse {
+  ocel_id: string;
+  activities: OPeraActivityMetrics[];
+  method: string;
+  note: string | null;
+}
+
+// ─── State-Aware OCPM ──────────────────────────────────────────────────────────
+
+export interface StateTransition {
+  oid: string;
+  object_type: string;
+  from_state: string | null;
+  to_state: string;
+  timestamp: string;
+  activity: string;
+}
+
+export interface StateAwareResponse {
+  new_events_count: number;
+  annotated_events: number;
+  state_transitions: StateTransition[];
+  distinct_states: Record<string, string[]>;
+  annotations_by_event: Record<string, Record<string, string>>;
+  method: string;
+  state_column: string | null;
+  object_type_filter: string | null;
+  note: string | null;
+}
+
 // ─── Simulation ──────────────────────────────────────────────────────────────
 
 export interface SimulationModification {
@@ -1046,6 +1133,63 @@ export interface QueueSummary {
 export interface QueueMiningResponse {
   per_activity: QueueActivity[];
   summary: QueueSummary;
+}
+
+// ─── Log Builder (multi-table) ────────────────────────────────────────────────
+
+// A single join applied while assembling a wide table from multiple
+// staging sources. `right_source` is either a 0-based index into the
+// build request's `additional_sources` array or an explicit staging
+// path string. Keys must exist on both sides; if `right_on` is omitted
+// the join uses `left_on` for both sides.
+export interface LogBuilderJoin {
+  right_source: number | string;
+  left_on: string[];
+  right_on?: string[];
+  how?: 'left' | 'inner' | 'right' | 'outer';
+  suffixes?: [string, string];
+}
+
+export interface LogBuilderEventSpec {
+  activity_name: string;
+  timestamp_column: string;
+}
+
+export interface LogBuilderBuildRequest {
+  project_id: string;
+  name: string;
+  staging_path: string;
+  case_id_column: string;
+  events: LogBuilderEventSpec[];
+  resource_column?: string | null;
+  passthrough_columns?: string[];
+  // Multi-table assembly (additive, optional). Upload each extra table
+  // via uploadRaw, collect the staging paths into `additional_sources`,
+  // and reference them by index from each join's `right_source`.
+  additional_sources?: string[];
+  joins?: LogBuilderJoin[];
+}
+
+export interface LogBuilderColumn {
+  name: string;
+  dtype: string;
+  kind: 'text' | 'numeric' | 'datetime' | 'datetime_like';
+  nunique: number;
+  null_ratio: number;
+}
+
+export interface LogBuilderUploadResponse {
+  staging_path: string;
+  columns: LogBuilderColumn[];
+  sample_rows: Record<string, unknown>[];
+  total_rows: number;
+}
+
+export interface LogBuilderBuildResponse {
+  event_log_id: string;
+  total_events: number;
+  total_cases: number;
+  activities: string[];
 }
 
 // ─── UI ──────────────────────────────────────────────────────────────────────

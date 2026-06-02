@@ -21,6 +21,9 @@ import {
   Calendar,
   Share2,
   Download,
+  Timer,
+  Workflow,
+  PackageOpen,
 } from 'lucide-react';
 import cytoscape from 'cytoscape';
 import dagre from 'cytoscape-dagre';
@@ -57,6 +60,8 @@ import type {
   OCELFeaturesResponse,
   OCELTemporalResponse,
   ConnectedComponentsResponse,
+  OPeraPerformanceResponse,
+  StateAwareResponse,
 } from '@/types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -849,12 +854,17 @@ function OCPetriNetPanel({ ocelId }: { ocelId: string }) {
     return () => { cy.destroy(); };
   }, [data, isDark]);
 
-  if (loading) return <div className="flex justify-center py-8"><LoadingSpinner size="md" text="Discovering OC Petri Net..." /></div>;
+  if (loading) return <div className="flex justify-center py-8"><LoadingSpinner size="md" text="Computing activity coverage…" /></div>;
   if (error) return <div className="rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-[11px] text-danger">{error}</div>;
-  if (!data || data.object_types.length === 0) return <p className="text-[12px] text-fg-muted py-4 text-center">No Petri Net structure found.</p>;
+  if (!data || data.object_types.length === 0) return <p className="text-[12px] text-fg-muted py-4 text-center">No activity-coverage structure found.</p>;
 
   return (
     <div className="flex flex-col gap-3">
+      <p className="text-[11px] text-fg-muted">
+        Each object type below is linked to the activities its objects participate in (derived from the
+        discovered object-centric Petri net). This is an <b>activity-coverage</b> membership view, not the
+        full Petri-net topology.
+      </p>
       {/* Stats */}
       <div className="flex flex-wrap gap-2">
         {data.object_types.map((ot) => (
@@ -1403,6 +1413,336 @@ function ConnectedComponentsPanel({ ocelId }: { ocelId: string }) {
   );
 }
 
+// ─── OPerA Performance Panel ──────────────────────────────────────────────────
+
+// Friendly metadata for the four OPerA timing metrics. Each metric is a column
+// in the table and gets its own colour for the bar chart.
+const OPERA_METRICS = [
+  { key: 'flow_time', label: 'Flow', color: '#06b6d4', help: 'Total time from first to last object-token arrival at the activity' },
+  { key: 'synchronization_time', label: 'Sync', color: '#8b5cf6', help: 'Time the activity waits for the last required object to become available' },
+  { key: 'pooling_time', label: 'Pooling', color: '#f59e0b', help: 'Time pooling objects of a single type before the activity fires' },
+  { key: 'lagging_time', label: 'Lagging', color: '#ef4444', help: 'Time an object waits because objects of other types lag behind' },
+] as const;
+
+function OPeraPerformancePanel({ ocelId }: { ocelId: string }) {
+  const theme = useUIStore((s) => s.theme);
+  const isDark = theme === 'dark';
+  const gridColor = isDark ? '#2a2a30' : '#e8eaed';
+  const tickColor = isDark ? '#71717a' : '#6c7283';
+
+  const cached = getCached<OPeraPerformanceResponse>(ocelId, 'opera_performance');
+  const [data, setData] = useState<OPeraPerformanceResponse | null>(cached);
+  const [loading, setLoading] = useState(!cached);
+  const [error, setError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState<string | null>(null);
+
+  useEffect(() => {
+    const existing = getCached<OPeraPerformanceResponse>(ocelId, 'opera_performance');
+    if (existing) { setData(existing); setLoading(false); return; }
+    setLoading(true);
+    setError(null);
+    setUnavailable(null);
+    ocel.getOPeraPerformance(ocelId)
+      .then((d) => { setCached(ocelId, 'opera_performance', d); setData(d); })
+      .catch((e) => {
+        const status = e?.response?.status;
+        const detail = e?.response?.data?.detail;
+        // 501 = optional `ocpa` package not installed. Surface as an
+        // informative empty state, not an error toast.
+        if (status === 501) {
+          setUnavailable(detail ?? 'OPerA metrics require the optional ocpa package.');
+        } else {
+          setError(detail ?? e.message ?? 'Request failed');
+        }
+      })
+      .finally(() => setLoading(false));
+  }, [ocelId]);
+
+  if (loading) return <div className="flex justify-center py-8"><LoadingSpinner size="md" text="Computing OPerA performance…" /></div>;
+
+  if (unavailable) {
+    return (
+      <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-line bg-surface-1 px-6 py-10 text-center">
+        <div className="rounded-lg bg-tint p-2.5 text-fg-muted">
+          <PackageOpen size={22} />
+        </div>
+        <div>
+          <p className="text-[13px] font-semibold text-fg">OPerA metrics unavailable</p>
+          <p className="mx-auto mt-1.5 max-w-md text-[12px] text-fg-muted">{unavailable}</p>
+        </div>
+        <code className="rounded bg-tint px-2.5 py-1 text-[11px] text-fg-secondary">pip install ocpa</code>
+      </div>
+    );
+  }
+
+  if (error) return <div className="rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-[11px] text-danger">{error}</div>;
+  if (!data) return null;
+
+  const hasMetrics = data.activities.some((a) =>
+    OPERA_METRICS.some(({ key }) => a[key] !== null && a[key] !== undefined),
+  );
+
+  if (data.activities.length === 0 || !hasMetrics) {
+    return (
+      <p className="py-6 text-center text-[12px] text-fg-muted">
+        {data.note ?? 'No per-activity OPerA timing diagnostics were produced for this OCEL.'}
+      </p>
+    );
+  }
+
+  // Chart data: top activities by flow time (the headline metric).
+  const chartData = [...data.activities]
+    .sort((a, b) => (b.flow_time ?? 0) - (a.flow_time ?? 0))
+    .slice(0, 12)
+    .map((a) => ({
+      activity: a.activity.length > 18 ? `${a.activity.slice(0, 17)}…` : a.activity,
+      fullActivity: a.activity,
+      flow_time: a.flow_time ?? 0,
+      synchronization_time: a.synchronization_time ?? 0,
+      pooling_time: a.pooling_time ?? 0,
+      lagging_time: a.lagging_time ?? 0,
+    }));
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-[11px] text-fg-muted">
+        OPerA decomposes each activity&rsquo;s time into <b>flow</b>, <b>synchronization</b>, <b>pooling</b>,
+        and <b>lagging</b> time — the object-centric analogue of the waiting/service split in a flat log.
+      </p>
+
+      <div>
+        <p className="mb-2 text-[11px] font-semibold text-fg-secondary">Timing by Activity (top {chartData.length} by flow time)</p>
+        <ResponsiveContainer width="100%" height={Math.max(200, chartData.length * 34)}>
+          <BarChart data={chartData} layout="vertical" margin={{ top: 2, right: 12, bottom: 2, left: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={gridColor} horizontal={false} />
+            <XAxis type="number" tick={{ fontSize: 9, fill: tickColor }} tickLine={false} axisLine={false} tickFormatter={(v: number) => formatDuration(v)} />
+            <YAxis type="category" dataKey="activity" tick={{ fontSize: 9, fill: tickColor }} tickLine={false} axisLine={false} width={110} />
+            <Tooltip
+              contentStyle={{ background: isDark ? '#1e1e22' : '#fff', border: `1px solid ${gridColor}`, borderRadius: 6, fontSize: 11 }}
+              formatter={(v: number, name: string) => [formatDuration(v), name]}
+              labelFormatter={(_l, payload) => payload?.[0]?.payload?.fullActivity ?? ''}
+            />
+            {OPERA_METRICS.map((m) => (
+              <Bar key={m.key} dataKey={m.key} name={m.label} stackId="opera" fill={m.color} radius={[0, 0, 0, 0]} />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+        <div className="mt-2 flex flex-wrap gap-3">
+          {OPERA_METRICS.map((m) => (
+            <div key={m.key} className="flex items-center gap-1.5" title={m.help}>
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: m.color }} />
+              <span className="text-[10px] text-fg-muted">{m.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">
+          <thead>
+            <tr>
+              <th className="border-b border-line pb-2 pr-4 text-left text-[10px] font-semibold uppercase tracking-wider text-fg-faint whitespace-nowrap">
+                Activity
+              </th>
+              {OPERA_METRICS.map((m) => (
+                <th
+                  key={m.key}
+                  className="border-b border-line pb-2 px-2 text-right text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap"
+                  style={{ color: m.color }}
+                  title={m.help}
+                >
+                  {m.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {data.activities.map((row) => (
+              <tr key={row.activity} className="hover:bg-tint/50 transition-colors">
+                <td className="border-b border-line/40 py-1.5 pr-4 font-medium text-fg-secondary whitespace-nowrap">{row.activity}</td>
+                {OPERA_METRICS.map((m) => (
+                  <td key={m.key} className="border-b border-line/40 py-1.5 px-2 text-right tabular-nums text-fg">
+                    {row[m.key] === null || row[m.key] === undefined
+                      ? <span className="text-[10px] text-fg-ghost">—</span>
+                      : formatDuration(row[m.key])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {data.note && <p className="text-[10px] text-fg-faint">{data.note}</p>}
+    </div>
+  );
+}
+
+// ─── State-Aware OCPM Panel ───────────────────────────────────────────────────
+
+function StateAwarePanel({ ocelId, objectTypes }: { ocelId: string; objectTypes: string[] }) {
+  const [stateColumn, setStateColumn] = useState('');
+  const [objectType, setObjectType] = useState('');
+  const [data, setData] = useState<StateAwareResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState<string | null>(null);
+
+  const run = useCallback(() => {
+    const col = stateColumn.trim();
+    if (!col) return;
+    setLoading(true);
+    setError(null);
+    setUnavailable(null);
+    setData(null);
+    ocel.getStateAware(ocelId, col, objectType || undefined)
+      .then((d) => setData(d))
+      .catch((e) => {
+        const status = e?.response?.status;
+        const detail = e?.response?.data?.detail;
+        if (status === 501) {
+          setUnavailable(detail ?? 'State-aware OCPM is not available in this environment.');
+        } else {
+          setError(detail ?? e.message ?? 'Request failed');
+        }
+      })
+      .finally(() => setLoading(false));
+  }, [ocelId, stateColumn, objectType]);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-[11px] text-fg-muted">
+        State-Aware OCPM (Kretzschmann, Berti &amp; van der Aalst, EDOC 2025) materializes every change of an
+        object attribute into a synthetic transition event and annotates existing events with the current
+        object state — unlocking lifecycle analysis on standard OCEL 2.0 logs.
+      </p>
+
+      {/* Controls */}
+      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-line bg-surface-1 p-3">
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-medium uppercase tracking-wider text-fg-faint">State attribute column</label>
+          <input
+            type="text"
+            value={stateColumn}
+            onChange={(e) => setStateColumn(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && run()}
+            placeholder="e.g. status"
+            className="rounded-md border border-line bg-surface-2 px-2.5 py-1.5 text-[12px] text-fg-secondary focus:border-accent/50 focus:outline-none"
+            style={{ minWidth: 180 }}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-medium uppercase tracking-wider text-fg-faint">Object type (optional)</label>
+          <select
+            value={objectType}
+            onChange={(e) => setObjectType(e.target.value)}
+            className="rounded-md border border-line bg-surface-2 px-2.5 py-1.5 text-[12px] text-fg-secondary focus:border-accent/50 focus:outline-none"
+            style={{ minWidth: 160 }}
+          >
+            <option value="">All object types</option>
+            {objectTypes.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </div>
+        <button
+          onClick={run}
+          disabled={loading || !stateColumn.trim()}
+          className="btn-primary text-[12px]"
+        >
+          {loading ? <><RefreshCw size={13} className="animate-spin" /> Enriching…</> : 'Enrich with state transitions'}
+        </button>
+      </div>
+
+      {unavailable && (
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-line bg-surface-1 px-6 py-10 text-center">
+          <div className="rounded-lg bg-tint p-2.5 text-fg-muted">
+            <PackageOpen size={22} />
+          </div>
+          <div>
+            <p className="text-[13px] font-semibold text-fg">State-aware enrichment unavailable</p>
+            <p className="mx-auto mt-1.5 max-w-md text-[12px] text-fg-muted">{unavailable}</p>
+          </div>
+        </div>
+      )}
+      {error && <div className="rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-[11px] text-danger">{error}</div>}
+
+      {data && (
+        <div className="flex flex-col gap-4">
+          {/* Summary cards */}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[
+              { label: 'New events', value: data.new_events_count.toLocaleString() },
+              { label: 'Annotated', value: data.annotated_events.toLocaleString() },
+              { label: 'Transitions', value: data.state_transitions.length.toLocaleString() },
+              { label: 'Stateful types', value: Object.keys(data.distinct_states).length.toLocaleString() },
+            ].map((card) => (
+              <div key={card.label} className="rounded-md border border-line bg-surface-1 px-3 py-2 text-center">
+                <p className="text-[18px] font-bold tabular-nums text-fg leading-none">{card.value}</p>
+                <p className="mt-0.5 text-[9px] uppercase tracking-wider text-fg-faint">{card.label}</p>
+              </div>
+            ))}
+          </div>
+
+          {data.note && <p className="text-[10px] text-fg-faint">{data.note}</p>}
+
+          {/* Distinct states per object type */}
+          {Object.keys(data.distinct_states).length > 0 && (
+            <div>
+              <p className="mb-2 text-[11px] font-semibold text-fg-secondary">Distinct States by Object Type</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {Object.entries(data.distinct_states).map(([type, states]) => (
+                  <div key={type} className="rounded-md border border-line bg-surface-1 px-3 py-2">
+                    <p className="text-[11px] font-semibold text-accent truncate" title={type}>{type}</p>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {states.map((s) => (
+                        <span key={s} className="rounded bg-tint px-1.5 py-0.5 text-[10px] font-medium text-fg-muted truncate max-w-[140px]" title={s}>
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* State transition sample */}
+          {data.state_transitions.length > 0 && (
+            <div>
+              <p className="mb-2 text-[11px] font-semibold text-fg-secondary">
+                State Transitions {data.state_transitions.length > 50 && <span className="text-fg-faint">(first 50 of {data.state_transitions.length.toLocaleString()})</span>}
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-[11px]">
+                  <thead>
+                    <tr>
+                      {['Object', 'Type', 'From', 'To', 'Activity', 'Timestamp'].map((h) => (
+                        <th key={h} className="border-b border-line pb-1.5 px-3 text-left text-[10px] font-semibold uppercase tracking-wider text-fg-faint whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.state_transitions.slice(0, 50).map((t, i) => (
+                      <tr key={i} className="hover:bg-tint/50 transition-colors">
+                        <td className="border-b border-line/40 py-1.5 px-3 font-mono text-[10px] text-fg-secondary truncate max-w-[120px]" title={t.oid}>{t.oid}</td>
+                        <td className="border-b border-line/40 py-1.5 px-3 text-fg-muted whitespace-nowrap">{t.object_type}</td>
+                        <td className="border-b border-line/40 py-1.5 px-3 text-fg-muted whitespace-nowrap">{t.from_state ?? <span className="text-fg-ghost">—</span>}</td>
+                        <td className="border-b border-line/40 py-1.5 px-3 font-medium text-fg whitespace-nowrap">{t.to_state}</td>
+                        <td className="border-b border-line/40 py-1.5 px-3 text-fg-muted whitespace-nowrap">{t.activity}</td>
+                        <td className="border-b border-line/40 py-1.5 px-3 font-mono text-[10px] text-fg-muted whitespace-nowrap">{t.timestamp.slice(0, 19).replace('T', ' ')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── OCEL-Native Analysis Hub ─────────────────────────────────────────────────
 
 interface NativeAnalysisItem {
@@ -1413,7 +1753,9 @@ interface NativeAnalysisItem {
 }
 
 const NATIVE_ANALYSIS_ITEMS: NativeAnalysisItem[] = [
-  { id: 'oc-petri-net',  label: 'OC Petri Net',          icon: Network,   description: 'Discovered Petri Net structure per object type' },
+  { id: 'oc-petri-net',  label: 'Activity Coverage',      icon: Network,   description: 'Which activities each object type participates in' },
+  { id: 'opera',         label: 'OPerA Performance',      icon: Timer,     description: 'Flow / sync / pooling / lagging time per activity' },
+  { id: 'state-aware',   label: 'State-Aware OCPM',       icon: Workflow,  description: 'Materialize object-state transitions (EDOC 2025)' },
   { id: 'object-graph',  label: 'Object Graph',           icon: Share2,    description: 'Object-level interaction / ancestry graphs' },
   { id: 'features',      label: 'Object Features',        icon: Sparkles,  description: 'Per-object feature matrix with CSV export' },
   { id: 'temporal',      label: 'Temporal Summary',       icon: Calendar,  description: 'Event distribution over time' },
@@ -1465,6 +1807,8 @@ function NativeAnalysisHub({ ocelId, objectTypes }: { ocelId: string; objectType
         </div>
         <div className="flex-1 overflow-y-auto p-4">
           {active.id === 'oc-petri-net'  && <OCPetriNetPanel key={ocelId} ocelId={ocelId} />}
+          {active.id === 'opera'         && <OPeraPerformancePanel key={ocelId} ocelId={ocelId} />}
+          {active.id === 'state-aware'   && <StateAwarePanel key={ocelId} ocelId={ocelId} objectTypes={objectTypes} />}
           {active.id === 'object-graph'  && <ObjectGraphPanel key={ocelId} ocelId={ocelId} />}
           {active.id === 'features'      && <ObjectFeaturesPanel key={ocelId} ocelId={ocelId} objectTypes={objectTypes} />}
           {active.id === 'temporal'      && <TemporalSummaryPanel key={ocelId} ocelId={ocelId} />}

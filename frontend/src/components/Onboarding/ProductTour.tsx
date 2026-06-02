@@ -45,6 +45,16 @@ export function ProductTour() {
     if (!step) return;
     const el = document.querySelector(step.selector) as HTMLElement | null;
     if (!el) {
+      // Dev-time guard: a step pointing at a selector that no longer
+      // exists in the DOM means the tour silently highlights nothing.
+      // Warn loudly during development so this drift is caught the
+      // moment a target element is renamed or removed.
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[ProductTour] step ${idx + 1} selector "${step.selector}" matched no element — the tour will show no spotlight. Add the matching data-tour attribute or fix the selector.`,
+        );
+      }
       setSpotlight(null);
       return;
     }

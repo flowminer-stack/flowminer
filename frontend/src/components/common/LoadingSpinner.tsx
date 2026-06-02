@@ -1,5 +1,34 @@
 import clsx from 'clsx';
 
+// ─── Skeleton primitives ────────────────────────────────────────────────────
+// The `.skeleton` class (animate-pulse-subtle + rounded-lg + bg-tint) lives in
+// index.css. These thin wrappers make it easy to build committed shell skeletons
+// without repeating the same Tailwind string in every page.
+
+interface SkeletonProps {
+  className?: string;
+}
+
+/** Single animate-pulse placeholder bar. Pass a `className` for size/shape. */
+export function Skeleton({ className }: SkeletonProps) {
+  return <div className={clsx('skeleton', className)} />;
+}
+
+/** A table-row of skeleton cells — used by DataTable and shareable elsewhere. */
+export function SkeletonRow({ columns }: { columns: number }) {
+  return (
+    <tr className="border-b border-line/60">
+      {Array.from({ length: columns }).map((_, i) => (
+        <td key={i} className="px-3 py-2.5">
+          <Skeleton className="h-3.5 w-full max-w-[180px]" />
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+// ─── Spinner ────────────────────────────────────────────────────────────────
+
 interface LoadingSpinnerProps {
   size?: 'sm' | 'md' | 'lg' | 'xl';
   text?: string;

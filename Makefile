@@ -1,4 +1,4 @@
-.PHONY: init-env dev prod setup migrate seed clean test localhost wait
+.PHONY: init-env dev prod setup migrate seed clean test test-quick test-backend test-frontend localhost wait
 
 # First-run helper — generate .env with strong secrets.
 init-env:
@@ -52,9 +52,21 @@ clean:
 	rm -rf frontend/node_modules frontend/dist
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
-# Test
-test-backend:
-	cd backend && python -m pytest tests/ -v
+# Test — regression gate. `make test` runs backend pytest + frontend
+# typecheck + build (see scripts/run-tests.sh). Run it after making changes.
+test:
+	./scripts/run-tests.sh
 
+# Faster inner loop: skip the vite build, keep backend tests + tsc.
+test-quick:
+	./scripts/run-tests.sh --quick
+
+# Granular targets. test-backend prefers the backend venv interpreter, falling
+# back to python3, so it works whether or not a venv is set up.
+test-backend:
+	cd backend && PY=$$([ -x venv/bin/python ] && echo venv/bin/python || command -v python3 || echo python); $$PY -m pytest tests/ -q -W ignore
+
+# `npm test` is wired to `tsc --noEmit` (type regressions). A unit-test runner
+# (vitest) needs a network install; tsc + the vite build are the offline gate.
 test-frontend:
 	cd frontend && npm test
