@@ -4,16 +4,33 @@ from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from app.config import settings
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=False,
+# When DATABASE_URL is unset (its insecure empty default), fall back to a
+# parseable placeholder so the engine objects can be constructed at import
+# time. SQLAlchemy connects lazily, so no connection is attempted here; the
+# loud failure on a missing URL still happens in
+# ``settings.validate_production_secrets`` (called from app.config at import)
+# and on the first real query. This keeps ``import app.main`` working in
+# tooling/CI that never sets a DB URL while preserving the security intent.
+_PLACEHOLDER_ASYNC_URL = "postgresql+asyncpg://localhost/flowminer_unset"
+
+_async_url = settings.DATABASE_URL or _PLACEHOLDER_ASYNC_URL
+
+# SQLite (used by the test suite) is backed by StaticPool, which rejects the
+# QueuePool tuning args below. Only apply the pool sizing for real (Postgres)
+# deployments so ``import app.database`` works under a sqlite test URL too.
+_is_sqlite = _async_url.startswith("sqlite")
+_async_engine_kwargs: dict = {"echo": False}
+if not _is_sqlite:
     # Pool sized for ~100 concurrent requests before connections start
     # queueing. Raise further if workers report pool exhaustion.
-    pool_size=50,
-    max_overflow=20,
-    pool_pre_ping=True,
-    pool_recycle=3600,
-)
+    _async_engine_kwargs.update(
+        pool_size=50,
+        max_overflow=20,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
+
+engine = create_async_engine(_async_url, **_async_engine_kwargs)
 
 async_session = async_sessionmaker(
     engine,
@@ -29,7 +46,7 @@ Base = declarative_base()
 _sync_url = settings.SYNC_DATABASE_URL
 if not _sync_url or "asyncpg" in _sync_url or "aiopg" in _sync_url:
     _sync_url = (
-        settings.DATABASE_URL
+        _async_url
         .replace("postgresql+asyncpg://", "postgresql://")
         .replace("postgresql+aiopg://", "postgresql://")
     )
