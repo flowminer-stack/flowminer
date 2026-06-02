@@ -8,6 +8,7 @@ Create Date: 2026-04-12
 from typing import Sequence, Union
 
 from alembic import op
+from sqlalchemy import inspect
 import sqlalchemy as sa
 
 revision: str = "b2c3d4e5f6a7"
@@ -17,6 +18,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # [idempotent-guard] baseline create_all already builds this on fresh DBs; skip if present.
+    if inspect(op.get_bind()).has_table("api_keys"):
+        return
     op.create_table(
         "api_keys",
         sa.Column("id", sa.UUID(), nullable=False),

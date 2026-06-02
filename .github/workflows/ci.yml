@@ -41,6 +41,57 @@ jobs:
         run: |
           python -m pytest -q --tb=short
 
+  migrations:
+    name: Migrations (fresh Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: flowminer
+          POSTGRES_PASSWORD: flowminer
+          POSTGRES_DB: flowminer
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flowminer"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install system deps for pm4py
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y graphviz
+
+      - name: Install Python deps
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Guards the migration chain: a fresh `alembic upgrade head` must run the
+      # whole chain cleanly (the baseline uses metadata.create_all, so every
+      # later migration must be idempotent), and `alembic check` must report no
+      # drift between the migrated schema and the ORM models.
+      - name: alembic upgrade head (fresh DB) + check for drift
+        working-directory: backend
+        env:
+          ENV: development
+          SECRET_KEY: ci-test-secret-key-long-enough
+          DATABASE_URL: postgresql+asyncpg://flowminer:flowminer@localhost:5432/flowminer
+          SYNC_DATABASE_URL: postgresql://flowminer:flowminer@localhost:5432/flowminer
+        run: |
+          alembic upgrade head
+          alembic check
+
   frontend:
     name: Frontend typecheck & build
     runs-on: ubuntu-latest

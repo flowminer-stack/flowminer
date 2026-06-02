@@ -6,6 +6,7 @@ Create Date: 2026-04-14 14:00:00.000000
 
 """
 from alembic import op
+from sqlalchemy import inspect
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -17,6 +18,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # [idempotent-guard] baseline create_all already builds this on fresh DBs; skip if present.
+    if inspect(op.get_bind()).has_table("system_settings"):
+        return
     op.create_table(
         "system_settings",
         sa.Column("key", sa.String(length=128), primary_key=True),

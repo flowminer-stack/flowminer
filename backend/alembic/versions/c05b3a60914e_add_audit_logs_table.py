@@ -8,6 +8,7 @@ Create Date: 2026-04-12 09:40:31.994799
 from typing import Sequence, Union
 
 from alembic import op
+from sqlalchemy import inspect
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -19,6 +20,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # [idempotent-guard] baseline create_all already builds this on fresh DBs; skip if present.
+    if inspect(op.get_bind()).has_table("audit_logs"):
+        return
     # The baseline revision runs Base.metadata.create_all(), which creates
     # audit_logs already on a fresh DB. Skip the re-create in that case so
     # the whole transaction doesn't roll back with a DuplicateTable error.

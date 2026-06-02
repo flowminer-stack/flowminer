@@ -8,6 +8,7 @@ Create Date: 2026-06-02 12:00:00.000000
 from typing import Sequence, Union
 
 from alembic import op
+from sqlalchemy import inspect
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -19,6 +20,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # [idempotent-guard] baseline create_all already adds these columns on fresh DBs; skip if present.
+    _insp = inspect(op.get_bind())
+    if _insp.has_table("annotations") and any(c["name"] == "parent_id" for c in _insp.get_columns("annotations")):
+        return
     # Self-referential FK for threaded replies
     op.add_column(
         "annotations",

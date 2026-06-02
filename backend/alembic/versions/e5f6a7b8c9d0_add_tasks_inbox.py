@@ -8,6 +8,7 @@ Create Date: 2026-04-13
 from typing import Sequence, Union
 
 from alembic import op
+from sqlalchemy import inspect
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -18,6 +19,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # [idempotent-guard] baseline create_all already builds this on fresh DBs; skip if present.
+    if inspect(op.get_bind()).has_table("tasks"):
+        return
     op.create_table(
         "tasks",
         sa.Column("id", sa.UUID(), nullable=False),
