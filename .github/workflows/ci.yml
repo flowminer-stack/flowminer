@@ -36,8 +36,8 @@ jobs:
         env:
           ENV: development
           SECRET_KEY: ci-test-secret-key-long-enough
-          DATABASE_URL: sqlite+aiosqlite:///:memory:
-          SYNC_DATABASE_URL: sqlite:///:memory:
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          SYNC_DATABASE_URL: "sqlite:///:memory:"
         run: |
           python -m pytest -q --tb=short
 
@@ -86,8 +86,8 @@ jobs:
         env:
           ENV: development
           SECRET_KEY: ci-test-secret-key-long-enough
-          DATABASE_URL: postgresql+asyncpg://flowminer:flowminer@localhost:5432/flowminer
-          SYNC_DATABASE_URL: postgresql://flowminer:flowminer@localhost:5432/flowminer
+          DATABASE_URL: "postgresql+asyncpg://flowminer:flowminer@localhost:5432/flowminer"
+          SYNC_DATABASE_URL: "postgresql://flowminer:flowminer@localhost:5432/flowminer"
         run: |
           alembic upgrade head
           alembic check
