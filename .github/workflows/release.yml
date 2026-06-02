@@ -1,0 +1,86 @@
+name: Release
+
+# Triggered when a version tag is pushed (e.g. v0.1.0, v1.2.3).
+# Builds multi-arch Docker images and pushes them to GHCR.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    name: Build & push images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Extract the semver portion of the tag (strips the leading "v").
+      # e.g. refs/tags/v0.1.0 → VERSION=0.1.0, IMAGE_TAG=v0.1.0
+      - name: Derive version
+        id: version
+        run: |
+          RAW="${GITHUB_REF_NAME}"          # e.g. v0.1.0
+          VERSION="${RAW#v}"                # strip leading v → 0.1.0
+          echo "version=${VERSION}"   >> "$GITHUB_OUTPUT"
+          echo "image_tag=${RAW}"     >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU (multi-arch emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ─── Backend ───────────────────────────────────────────────────
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          build-contexts: |
+            examples=./docs/examples
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/flowminer-backend:${{ steps.version.outputs.image_tag }}
+            ghcr.io/${{ github.repository_owner }}/flowminer-backend:latest
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+          labels: |
+            org.opencontainers.image.title=FlowMiner Backend
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      # ─── Frontend ──────────────────────────────────────────────────
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/flowminer-frontend:${{ steps.version.outputs.image_tag }}
+            ghcr.io/${{ github.repository_owner }}/flowminer-frontend:latest
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+          labels: |
+            org.opencontainers.image.title=FlowMiner Frontend
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}

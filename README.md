@@ -1,8 +1,15 @@
 # FlowMiner
 
-Open-source process mining platform. Upload an event log, get an
-interactive process map, drill into bottlenecks and variants, and
-ask an AI assistant about your process in plain English.
+**The depth of Celonis, the self-host freedom of open source — without
+the AGPL trap, the open-core paywall, or the six-figure non-cancelable
+contract.**
+
+FlowMiner is a complete, self-hostable process mining platform —
+process discovery, conformance, simulation, object-centric mining, and
+a data-grounded AI assistant — under a permissive MIT licence, that
+runs on a 4GB VPS you control. Upload an event log, get an interactive
+process map, drill into bottlenecks and variants, and ask an AI
+assistant about your process in plain English.
 
 <p align="center">
   <img src="docs/media/screenshot-process-map.png" alt="Process map screenshot" width="720" />
@@ -10,6 +17,58 @@ ask an AI assistant about your process in plain English.
 
 > **Status:** actively developed, pre-1.0. API is mostly stable, UI
 > is still evolving. Issues and PRs welcome.
+
+## Why FlowMiner
+
+Process mining usually asks you to trade depth for freedom. The
+commercial platforms (Celonis, Signavio) are deep but cloud-only,
+priced in six figures, and sold on multi-year contracts that put your
+data on someone else's infrastructure. The open-source tools are free
+but either copyleft (pm4py is AGPL-3.0), open-core (Apromore walls
+conformance, simulation, and connectors behind its enterprise edition
+and archived its OSS repos), or a research toolkit with no product
+around it. FlowMiner refuses the trade.
+
+| | **FlowMiner** | Celonis | Apromore CE | Disco | pm4py |
+|---|---|---|---|---|---|
+| **License** | MIT (permissive) | Proprietary | Open-core | Proprietary | AGPL-3.0 (copyleft) |
+| **Self-host** | Yes — full stack | No (cloud-only) | CE only; rest enterprise | Desktop only | Yes (library) |
+| **Conformance** | Yes | Yes | Enterprise tier | No | Yes (library) |
+| **Simulation** | Yes (discrete-event) | Yes | Enterprise tier | No | Partial (library) |
+| **OCEL / object-centric** | Yes — OCEL 2.0 + state-aware OCPM | Yes (flagship) | Limited | No | Yes (library) |
+| **AI assistant** | Yes — grounded chat + MCP | Yes (cloud) | No | No | No |
+| **Connectors** | CSV, XES, OCEL 2.0, REST, SQL, Jira, GitHub, Zendesk, Odoo | 150+ (enterprise) | Enterprise tier | File import | File import (library) |
+| **Pricing** | Free (MIT) | Six-figure, multi-year | Free CE / paid enterprise | Per-seat licence | Free (AGPL) |
+
+The headline reasons to switch:
+
+- **Permissive MIT.** No AGPL trap, no open-core paywall — conformance,
+  simulation, object-centric mining, every connector, and the AI
+  assistant are all in this one repository under the one licence.
+- **Your data, your exit.** Full project export to JSON
+  (`GET /projects/{id}/export`), analysis export to CSV / Excel /
+  BPMN, OCEL 2.0 in and out, and any-source ingestion mean no lock-in
+  — no three-year non-cancelable contract and no per-query data-access
+  tax. (The Celonis-vs-SAP data-access dispute and the S/4HANA
+  migration deadline are exactly the kind of toll booth this avoids.)
+- **No Center of Excellence, no SI engagement, no proprietary query
+  language.** Auto column-mapping on upload, a data-anchored AI chat
+  instead of Celonis's PQL, and an Extraction Copilot that writes the
+  SQL for you.
+- **Disco-fast to start.** `git clone` → first process map in minutes
+  on a 4GB VPS — no Apromore CE Java 8 / MySQL 5.6 / Kafka install
+  dance, no ProM Gatekeeper friction.
+- **On-prem and sovereign by default.** Regulated buyers that cloud-only
+  Celonis/Signavio structurally cannot serve. Privacy is, precisely,
+  **pseudonymisation + RBAC + audit** — the built-in anonymiser is a
+  deterministic, *reversible* hash, so RBAC is the real boundary, not
+  the hash.
+- **Object-centric process mining open and MIT.** OCEL 2.0 plus
+  state-aware OCPM — the capability Celonis is proudest of. (OPerA-style
+  performance overlays are on the near-term roadmap, not shipped yet.)
+
+Read the full argument, including the honest caveats, in
+[`docs/why-flowminer.md`](./docs/why-flowminer.md).
 
 ---
 
@@ -20,10 +79,11 @@ ask an AI assistant about your process in plain English.
   alpha miner
 - Variant explorer with happy-path comparison
 - Bottleneck + rework + conformance analysis
+- Discrete-event simulation (Simod-style) for what-if scenarios
 - Dotted chart, process spectrum, social network, four-eyes
 - Animated process replay
 - OCEL 2.0 object-centric process mining (OC-DFG, OC-Petri-net,
-  object lifecycle, cross-object improvement reports)
+  object lifecycle, state-aware OCPM, cross-object improvement reports)
 - Case clustering, declare-rule discovery, log skeleton,
   feature export, agent mining
 
@@ -31,6 +91,8 @@ ask an AI assistant about your process in plain English.
 - Floating Ask-AI chat panel scoped to the current log
 - Tool-use mode: the LLM calls backend tools and renders charts
   or filter proposals inline in the chat
+- Extraction Copilot — conversational helper that writes the SQL to
+  turn raw source-system tables into a clean event log
 - OCPM improvement narrative tuned against real findings (with
   resource-type detection and legitimate-wait reclassification
   so it doesn't tell you to "cut inventory dwell in half")
@@ -50,6 +112,9 @@ ask an AI assistant about your process in plain English.
 - Postgres + Redis + Celery worker + beat scheduler
 - Connectors: CSV, XES, OCEL 2.0, REST API, SQL databases,
   Jira, GitHub, Zendesk, Odoo
+- Pseudonymisation + per-role raw-data gating + full audit log
+- Full project export/import (JSON manifest); analysis export to
+  CSV / Excel / BPMN
 - Scheduled ingestion + alerting
 - Data-quality + timestamp-repair tools
 
