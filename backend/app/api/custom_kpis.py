@@ -1,5 +1,6 @@
 """Custom KPI builder: define, compute, and track custom process metrics."""
 
+import re
 from uuid import UUID
 from datetime import datetime, timezone
 
@@ -12,6 +13,17 @@ from app.database import get_db
 from app.models import User
 from app.models.custom_kpi import CustomKPI
 from app.api.deps import get_current_active_user, assert_project_access, assert_event_log_access
+
+# Regex used to detect whether an expression looks like the filter-DSL
+# (uses `case.`, `activity`, `resource`, `attr.`, or duration literals like
+# `7d`/`30m`) rather than a plain arithmetic formula on base metric names.
+_FILTER_DSL_RE = re.compile(
+    r"\bcase\.|"
+    r"\bactivity\b|"
+    r"\bresource\b|"
+    r"\battr\.|"
+    r"\d+[smhd]\b"
+)
 
 router = APIRouter()
 
@@ -132,6 +144,41 @@ async def delete_kpi(
     await db.commit()
 
 
+def _compute_base_metrics(df: "pd.DataFrame", mining_engine: object) -> dict[str, float]:  # type: ignore[name-defined]
+    """Compute all 9 base metric scalars from an event log DataFrame.
+
+    Returns a dict keyed by metric name (the same names accepted by the
+    ``metric`` field) so callers can either look up a single value or
+    expose the whole dict as a one-row DataFrame for safe_eval arithmetic.
+    """
+    # Lazy import — avoid pulling pandas into module-level scope.
+    import pandas as pd  # noqa: F401 — used inside helpers called from here
+    from app.services.ingestion import CASE_COL, ACTIVITY_COL, TIMESTAMP_COL
+
+    durations = df.groupby(CASE_COL)[TIMESTAMP_COL].apply(
+        lambda x: (x.max() - x.min()).total_seconds()
+    )
+
+    rework = mining_engine.get_rework(df)
+    variants = mining_engine.run_variant_analysis(df)
+    conf = mining_engine.run_conformance(df)
+    bn = mining_engine.run_bottleneck_analysis(df)
+
+    return {
+        "avg_case_duration": float(durations.mean()) if len(durations) > 0 else 0.0,
+        "case_count": float(df[CASE_COL].nunique()),
+        "event_count": float(len(df)),
+        "activity_count": float(df[ACTIVITY_COL].nunique()),
+        "rework_rate": float(rework.get("overall_rework_rate", 0)),
+        "variant_count": float(variants.get("total_variants", 0)),
+        "conformance_fitness": float(conf.get("fitness", 0)),
+        "bottleneck_count": float(
+            len([b for b in bn.get("bottlenecks", []) if b.get("is_bottleneck")])
+        ),
+        "median_case_duration": float(durations.median()) if len(durations) > 0 else 0.0,
+    }
+
+
 @router.post("/{kpi_id}/compute")
 async def compute_kpi(
     kpi_id: UUID,
@@ -139,11 +186,32 @@ async def compute_kpi(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Compute a KPI value against an event log."""
+    """Compute a KPI value against an event log.
+
+    When ``expression`` is set on the KPI the evaluator is chosen as follows:
+
+    1. **Filter-DSL expression** — if the expression contains process-aware
+       tokens such as ``case.``, ``activity``, ``resource``, ``attr.``, or
+       duration literals (``7d``, ``30m`` …), it is passed to the same
+       recursive-descent filter evaluator used by the ``/filter-expression``
+       endpoint (``_evaluate_filter`` from ``competitive.py``). The returned
+       value is the **count of matching cases**.
+
+    2. **Arithmetic formula** — otherwise the expression is evaluated by the
+       safe AST-walking evaluator in ``safe_expression.py``, with the nine
+       base metric scalars available as column names (e.g.
+       ``avg_case_duration / 86400`` converts seconds to days, or
+       ``rework_rate * case_count`` gives an absolute rework count).
+
+    When ``expression`` is absent the traditional ``metric`` enum path is used.
+    ``python eval()`` is never called.
+    """
+    import os
+    import pandas as pd
+
     from app.models import EventLog
     from app.services.mining_engine import mining_engine
     from app.services.ingestion import CASE_COL, ACTIVITY_COL, TIMESTAMP_COL
-    import os
 
     result = await db.execute(select(CustomKPI).where(CustomKPI.id == kpi_id))
     kpi = result.scalar_one_or_none()
@@ -166,43 +234,103 @@ async def compute_kpi(
         cost_col=event_log.cost_column,
     )
 
-    # Compute the metric
-    value = None
-    metric = kpi.metric
+    # ── Expression path ────────────────────────────────────────────────────
+    # When an expression is stored we evaluate it instead of (or in addition
+    # to) the metric enum.  The metric enum is still the fallback when no
+    # expression is present.
+    expression_warnings: list[str] = []
+    value: float | None = None
 
-    if metric == "avg_case_duration":
-        durations = df.groupby(CASE_COL)[TIMESTAMP_COL].apply(lambda x: (x.max() - x.min()).total_seconds())
-        value = float(durations.mean()) if len(durations) > 0 else 0
-    elif metric == "case_count":
-        value = float(df[CASE_COL].nunique())
-    elif metric == "event_count":
-        value = float(len(df))
-    elif metric == "activity_count":
-        value = float(df[ACTIVITY_COL].nunique())
-    elif metric == "rework_rate":
-        rework = mining_engine.get_rework(df)
-        value = float(rework.get("overall_rework_rate", 0))
-    elif metric == "variant_count":
-        variants = mining_engine.run_variant_analysis(df)
-        value = float(variants.get("total_variants", 0))
-    elif metric == "conformance_fitness":
-        conf = mining_engine.run_conformance(df)
-        value = float(conf.get("fitness", 0))
-    elif metric == "bottleneck_count":
-        bn = mining_engine.run_bottleneck_analysis(df)
-        value = float(len([b for b in bn.get("bottlenecks", []) if b.get("is_bottleneck")]))
-    elif metric == "median_case_duration":
-        durations = df.groupby(CASE_COL)[TIMESTAMP_COL].apply(lambda x: (x.max() - x.min()).total_seconds())
-        value = float(durations.median()) if len(durations) > 0 else 0
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown metric: {metric}")
+    if kpi.expression:
+        expr = kpi.expression.strip()
 
-    # Update cached value
+        if _FILTER_DSL_RE.search(expr):
+            # ── Path 1: process-aware filter DSL ──────────────────────────
+            # Import only what we need — avoids a circular import at module
+            # load time (competitive.py imports from app.api.mining).
+            from app.api.competitive import _evaluate_filter  # lazy import
+
+            all_case_ids = set(str(c) for c in df[CASE_COL].unique())
+            try:
+                matched_ids, expression_warnings = _evaluate_filter(expr, df, all_case_ids)
+                value = float(len(matched_ids))
+            except Exception as exc:  # pragma: no cover
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Filter expression error: {exc}",
+                )
+        else:
+            # ── Path 2: arithmetic formula over base metrics ───────────────
+            # Build a one-row DataFrame whose columns are the nine base
+            # metric names, then let safe_eval resolve them as Series/scalar.
+            from app.services.safe_expression import safe_eval, UnsafeExpressionError
+
+            base = _compute_base_metrics(df, mining_engine)
+            metrics_df = pd.DataFrame([base])
+            try:
+                result_val = safe_eval(expr, metrics_df)
+                # safe_eval may return a Series (one-row) or a scalar.
+                if isinstance(result_val, pd.Series):
+                    if result_val.empty:
+                        raise HTTPException(
+                            status_code=400, detail="Expression produced an empty result"
+                        )
+                    value = float(result_val.iloc[0])
+                else:
+                    value = float(result_val)
+            except UnsafeExpressionError as exc:
+                raise HTTPException(status_code=400, detail=f"Expression error: {exc}")
+            except Exception as exc:  # pragma: no cover
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Expression evaluation failed: {exc}",
+                )
+
+    # ── Enum/hardcoded path (fallback when no expression is given) ─────────
+    if value is None:
+        metric = kpi.metric
+        if metric == "avg_case_duration":
+            durations = df.groupby(CASE_COL)[TIMESTAMP_COL].apply(
+                lambda x: (x.max() - x.min()).total_seconds()
+            )
+            value = float(durations.mean()) if len(durations) > 0 else 0
+        elif metric == "case_count":
+            value = float(df[CASE_COL].nunique())
+        elif metric == "event_count":
+            value = float(len(df))
+        elif metric == "activity_count":
+            value = float(df[ACTIVITY_COL].nunique())
+        elif metric == "rework_rate":
+            rework = mining_engine.get_rework(df)
+            value = float(rework.get("overall_rework_rate", 0))
+        elif metric == "variant_count":
+            variants = mining_engine.run_variant_analysis(df)
+            value = float(variants.get("total_variants", 0))
+        elif metric == "conformance_fitness":
+            conf = mining_engine.run_conformance(df)
+            value = float(conf.get("fitness", 0))
+        elif metric == "bottleneck_count":
+            bn = mining_engine.run_bottleneck_analysis(df)
+            value = float(len([b for b in bn.get("bottlenecks", []) if b.get("is_bottleneck")]))
+        elif metric == "median_case_duration":
+            durations = df.groupby(CASE_COL)[TIMESTAMP_COL].apply(
+                lambda x: (x.max() - x.min()).total_seconds()
+            )
+            value = float(durations.median()) if len(durations) > 0 else 0
+        elif metric == "custom_expression":
+            # metric=custom_expression but expression field is empty/None
+            raise HTTPException(
+                status_code=400,
+                detail="metric is 'custom_expression' but no expression was provided",
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown metric: {metric}")
+
+    # ── Persist and return ─────────────────────────────────────────────────
     kpi.last_value = value
     kpi.last_computed_at = datetime.now(timezone.utc)
     await db.commit()
 
-    # Determine status based on thresholds
     kpi_status = "ok"
     if kpi.critical_threshold is not None and value >= kpi.critical_threshold:
         kpi_status = "critical"
@@ -216,4 +344,5 @@ async def compute_kpi(
         "unit": kpi.unit,
         "target_value": kpi.target_value,
         "status": kpi_status,
+        "expression_warnings": expression_warnings,
     }

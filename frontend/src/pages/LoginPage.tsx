@@ -50,7 +50,8 @@ export default function LoginPage() {
         </div>
 
         <p className="text-[12px] text-fg-ghost">
-          Open-source process mining platform.
+          Open-source process mining platform.{' '}
+          <span className="text-fg-faint">MIT licensed — embed, fork, self-host freely. No lock-in.</span>
         </p>
       </div>
 

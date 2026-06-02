@@ -15,6 +15,8 @@ import {
   BarChart3,
   Home,
   Inbox,
+  ShieldCheck,
+  Network,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore, useUIStore } from '@/store';
@@ -46,6 +48,17 @@ const navSections: NavSection[] = [
       { label: 'Dashboards', path: '/dashboards', icon: LayoutDashboard },
       { label: 'Benchmark', path: '/benchmark', icon: BarChart3 },
       { label: 'Initiatives', path: '/initiatives', icon: Target },
+    ],
+  },
+  {
+    label: 'Govern',
+    items: [
+      { label: 'Governance', path: '/governance', icon: ShieldCheck },
+      { label: 'Capability Map', path: '/capability-map', icon: Network },
+      // Mission Control is scoped to /mission-control/:eventLogId — there is no
+      // bare /mission-control route in App.tsx, so it must be reached from an
+      // event-log detail page, not from a top-level sidebar link. Removed to
+      // prevent a navigation 404.
     ],
   },
   {
@@ -146,6 +159,7 @@ export default function Sidebar() {
                         if (window.innerWidth < 1024) setSidebarOpen(false);
                       }}
                       title={!sidebarOpen ? item.label : undefined}
+                      aria-current={isActive ? 'page' : undefined}
                       className={clsx(
                         'relative group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-all duration-100',
                         isActive

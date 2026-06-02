@@ -273,3 +273,103 @@ class Client:
 
     async def measure_initiative(self, initiative_id: str) -> dict:
         return await self._request("POST", f"/initiatives/{initiative_id}/measure")
+
+    # ── Task mining ─────────────────────────────────────────────────────────
+
+    async def create_recording(
+        self,
+        project_id: str,
+        agent_version: str | None = None,
+        hostname: str | None = None,
+        notes: str | None = None,
+    ) -> dict:
+        """Start a new desktop-capture recording.
+
+        Returns ``{"id": "<uuid>", "project_id": "<uuid>", "started_at": "..."}``.
+        Pass the returned ``id`` to :meth:`ingest_events` and :meth:`end_recording`.
+        """
+        body: dict = {"project_id": project_id}
+        if agent_version is not None:
+            body["agent_version"] = agent_version
+        if hostname is not None:
+            body["hostname"] = hostname
+        if notes is not None:
+            body["notes"] = notes
+        return await self._request("POST", "/task-mining/recordings", json=body)
+
+    async def ingest_events(self, recording_id: str, events: list[dict]) -> dict:
+        """Ingest a batch of desktop events into an active recording.
+
+        Each event must contain ``ts`` (ISO-8601 string or Unix timestamp) and
+        ``event_type``.  Optional fields: ``application``, ``window_title``,
+        ``url``, ``details``.
+
+        The backend caps batches at 5 000 events per call. This method
+        automatically splits larger lists into sequential 5 000-event chunks
+        and returns the aggregate count.
+
+        Returns ``{"ingested": <n>, "total_on_recording": <n>}``.
+        """
+        BATCH_CAP = 5000
+        total_ingested = 0
+        last_response: dict = {"ingested": 0, "total_on_recording": 0}
+        for start in range(0, max(len(events), 1), BATCH_CAP):
+            chunk = events[start : start + BATCH_CAP]
+            if not chunk:
+                break
+            last_response = await self._request(
+                "POST",
+                f"/task-mining/recordings/{recording_id}/events",
+                json={"events": chunk},
+            )
+            total_ingested += last_response.get("ingested", 0)
+        return {
+            "ingested": total_ingested,
+            "total_on_recording": last_response.get("total_on_recording", total_ingested),
+        }
+
+    async def end_recording(self, recording_id: str) -> dict:
+        """Mark a recording as complete.
+
+        Returns ``{"id": "<uuid>", "ended_at": "..."}``.
+        """
+        return await self._request(
+            "POST", f"/task-mining/recordings/{recording_id}/end"
+        )
+
+    async def list_recordings(
+        self, project_id: str, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        return await self._request(
+            "GET",
+            "/task-mining/recordings",
+            params={"project_id": project_id, "limit": limit, "offset": offset},
+        )
+
+    async def mine_task_patterns(
+        self,
+        project_id: str,
+        min_frequency: int = 3,
+        min_sequence_length: int = 3,
+        max_sequence_length: int = 8,
+    ) -> dict:
+        """Run the n-gram pattern miner over all recordings in a project."""
+        return await self._request(
+            "POST",
+            "/task-mining/mine",
+            json={
+                "project_id": project_id,
+                "min_frequency": min_frequency,
+                "min_sequence_length": min_sequence_length,
+                "max_sequence_length": max_sequence_length,
+            },
+        )
+
+    async def list_task_patterns(
+        self, project_id: str, limit: int = 50, offset: int = 0
+    ) -> list[dict]:
+        return await self._request(
+            "GET",
+            "/task-mining/patterns",
+            params={"project_id": project_id, "limit": limit, "offset": offset},
+        )

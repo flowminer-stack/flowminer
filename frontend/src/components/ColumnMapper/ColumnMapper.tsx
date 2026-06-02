@@ -28,8 +28,12 @@ interface ColumnMapping {
 interface ColumnMapperProps {
   eventLogId: string;
   columns: string[];
-  sampleRows: Record<string, any>[];
+  sampleRows: Record<string, unknown>[];
   onMappingComplete: (mapping: ColumnMapping) => void;
+  /** Optional per-field confidence scores (0–1) from the parent's name-based
+   *  auto-mapper. When provided they replace the plain "Auto-detected" badge
+   *  with a percentage pill, matching the Mehrwerk mpmX pattern. */
+  confidenceScores?: Partial<Record<'case_id' | 'activity' | 'timestamp' | 'resource' | 'cost', number>>;
 }
 
 const HINTS: Record<string, string[]> = {
@@ -39,6 +43,76 @@ const HINTS: Record<string, string[]> = {
   resource: ['resource', 'user', 'agent', 'employee', 'assigned', 'worker', 'operator', 'performer'],
   cost: ['cost', 'price', 'amount', 'value', 'fee', 'total'],
 };
+
+// ISO-8601 / common date patterns used by content-based timestamp detection
+const ISO_TIMESTAMP_RE =
+  /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+const EPOCH_MILLIS_RE = /^1[0-9]{12}$/;
+const EPOCH_SECS_RE = /^1[0-9]{9}$/;
+
+function looksLikeTimestamp(value: string): boolean {
+  const v = String(value).trim();
+  return ISO_TIMESTAMP_RE.test(v) || EPOCH_MILLIS_RE.test(v) || EPOCH_SECS_RE.test(v);
+}
+
+function looksLikeUUID(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    String(value).trim()
+  );
+}
+
+/** Content-based column inference.
+ *
+ * Scans up to `maxRows` sample rows and returns the best guess for each
+ * unmapped XES role. Used as a fallback when name-based matching yields
+ * nothing (anonymised exports like col_a, F1, etc.).
+ */
+function contentInfer(
+  columns: string[],
+  sampleRows: Record<string, unknown>[],
+  exclude: Set<string>
+): Partial<Record<'case_id' | 'activity' | 'timestamp', string>> {
+  const candidates = columns.filter((c) => !exclude.has(c));
+  const maxRows = Math.min(sampleRows.length, 20);
+  const result: Partial<Record<'case_id' | 'activity' | 'timestamp', string>> = {};
+
+  // Timestamp: column where >=60 % of sampled values parse as ISO-8601 / epoch
+  for (const col of candidates) {
+    if (result.timestamp) break;
+    const values = sampleRows.slice(0, maxRows).map((r) => String(r[col] ?? ''));
+    const hits = values.filter(looksLikeTimestamp).length;
+    if (values.length > 0 && hits / values.length >= 0.6) {
+      result.timestamp = col;
+    }
+  }
+
+  // Case ID: column where >=50 % look like UUIDs, OR cardinality equals row
+  // count (each row is unique — classic case-id signature)
+  for (const col of candidates) {
+    if (result.case_id) break;
+    if (col === result.timestamp) continue;
+    const values = sampleRows.slice(0, maxRows).map((r) => String(r[col] ?? ''));
+    const uuidHits = values.filter(looksLikeUUID).length;
+    const uniqueCount = new Set(values).size;
+    if (values.length > 0 && (uuidHits / values.length >= 0.5 || uniqueCount === values.length)) {
+      result.case_id = col;
+    }
+  }
+
+  // Activity: low-cardinality string column (not already used)
+  for (const col of candidates) {
+    if (result.activity) break;
+    if (col === result.timestamp || col === result.case_id) continue;
+    const values = sampleRows.slice(0, maxRows).map((r) => String(r[col] ?? ''));
+    const uniqueCount = new Set(values).size;
+    // Low cardinality: <= 20 distinct values relative to sample size
+    if (values.length > 0 && uniqueCount <= Math.max(3, values.length * 0.4)) {
+      result.activity = col;
+    }
+  }
+
+  return result;
+}
 
 function autoDetectColumn(columns: string[], hints: string[]): string | null {
   const lowerColumns = columns.map((c) => c.toLowerCase());
@@ -66,6 +140,9 @@ interface MappingDropdownProps {
   columns: string[];
   required?: boolean;
   autoDetected?: boolean;
+  /** 0–1 confidence score from name-based mapper; renders a percentage pill
+   *  instead of the plain "Auto-detected" label when non-zero. */
+  confidenceScore?: number;
   error?: string;
   description?: string;
   disabledColumns?: string[];
@@ -79,10 +156,21 @@ const MappingDropdown: React.FC<MappingDropdownProps> = ({
   columns,
   required = false,
   autoDetected = false,
+  confidenceScore,
   error,
   description,
   disabledColumns = [],
-}) => (
+}) => {
+  const showBadge = autoDetected && value;
+  const pct = confidenceScore !== undefined ? Math.round(confidenceScore * 100) : 0;
+  const badgeTone =
+    pct >= 70
+      ? 'bg-success/10 text-success border-success/20'
+      : pct >= 40
+        ? 'bg-warning/10 text-warning border-warning/20'
+        : 'bg-accent/10 text-accent border-line';
+
+  return (
   <div>
     <div className="flex items-center justify-between mb-1.5">
       <label className="flex items-center gap-1.5 text-[12px] font-medium text-fg-muted">
@@ -90,10 +178,13 @@ const MappingDropdown: React.FC<MappingDropdownProps> = ({
         {label}
         {required && <span className="text-danger">*</span>}
       </label>
-      {autoDetected && value && (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-accent/10 text-accent border border-line">
+      {showBadge && (
+        <span
+          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${badgeTone}`}
+          title="Auto-mapping confidence"
+        >
           <Sparkles className="w-3 h-3" />
-          Auto-detected
+          {pct > 0 ? `auto · ${pct}%` : 'Auto-detected'}
         </span>
       )}
     </div>
@@ -133,13 +224,15 @@ const MappingDropdown: React.FC<MappingDropdownProps> = ({
       </p>
     )}
   </div>
-);
+  );
+};
 
 const ColumnMapper: React.FC<ColumnMapperProps> = ({
   eventLogId: _eventLogId,
   columns,
   sampleRows,
   onMappingComplete,
+  confidenceScores,
 }) => {
   const [caseId, setCaseId] = useState('');
   const [activity, setActivity] = useState('');
@@ -151,17 +244,17 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
     new Set()
   );
 
-  // Auto-detect columns on mount
+  // Auto-detect columns on mount — name-based first, content-based fallback
   useEffect(() => {
     const detected = new Set<string>();
 
-    const detectedCaseId = autoDetectColumn(columns, HINTS.case_id);
+    let detectedCaseId = autoDetectColumn(columns, HINTS.case_id);
     if (detectedCaseId) {
       setCaseId(detectedCaseId);
       detected.add('case_id');
     }
 
-    const detectedActivity = autoDetectColumn(
+    let detectedActivity = autoDetectColumn(
       columns.filter((c) => c !== detectedCaseId),
       HINTS.activity
     );
@@ -170,13 +263,41 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
       detected.add('activity');
     }
 
-    const detectedTimestamp = autoDetectColumn(
+    let detectedTimestamp = autoDetectColumn(
       columns.filter((c) => c !== detectedCaseId && c !== detectedActivity),
       HINTS.timestamp
     );
     if (detectedTimestamp) {
       setTimestamp(detectedTimestamp);
       detected.add('timestamp');
+    }
+
+    // Content-based fallback: if any of the three required fields still have
+    // no match (e.g. anonymised exports: col_a, F1, …), scan sample values
+    const nameMissing =
+      !detectedCaseId || !detectedActivity || !detectedTimestamp;
+
+    if (nameMissing && sampleRows.length > 0) {
+      const alreadyUsed = new Set(
+        [detectedCaseId, detectedActivity, detectedTimestamp].filter(Boolean) as string[]
+      );
+      const inferred = contentInfer(columns, sampleRows, alreadyUsed);
+
+      if (!detectedCaseId && inferred.case_id) {
+        detectedCaseId = inferred.case_id;
+        setCaseId(inferred.case_id);
+        detected.add('case_id');
+      }
+      if (!detectedActivity && inferred.activity) {
+        detectedActivity = inferred.activity;
+        setActivity(inferred.activity);
+        detected.add('activity');
+      }
+      if (!detectedTimestamp && inferred.timestamp) {
+        detectedTimestamp = inferred.timestamp;
+        setTimestamp(inferred.timestamp);
+        detected.add('timestamp');
+      }
     }
 
     const detectedResource = autoDetectColumn(
@@ -209,7 +330,7 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
     }
 
     setAutoDetectedFields(detected);
-  }, [columns]);
+  }, [columns, sampleRows]);
 
   // Columns used by required/optional mappings
   const usedColumns = useMemo(
@@ -324,6 +445,7 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
                 columns={columns}
                 required
                 autoDetected={autoDetectedFields.has('case_id')}
+                confidenceScore={confidenceScores?.case_id}
                 error={errors.case_id}
                 description="Unique identifier for each process instance"
                 disabledColumns={disabledColumnsForRequired(caseId)}
@@ -336,6 +458,7 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
                 columns={columns}
                 required
                 autoDetected={autoDetectedFields.has('activity')}
+                confidenceScore={confidenceScores?.activity}
                 error={errors.activity}
                 description="The activity or step name in the process"
                 disabledColumns={disabledColumnsForRequired(activity)}
@@ -348,6 +471,7 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
                 columns={columns}
                 required
                 autoDetected={autoDetectedFields.has('timestamp')}
+                confidenceScore={confidenceScores?.timestamp}
                 error={errors.timestamp}
                 description="When the activity occurred"
                 disabledColumns={disabledColumnsForRequired(timestamp)}
@@ -368,6 +492,7 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
                 onChange={setResource}
                 columns={columns}
                 autoDetected={autoDetectedFields.has('resource')}
+                confidenceScore={confidenceScores?.resource}
                 description="Who performed the activity"
               />
               <MappingDropdown
@@ -377,6 +502,7 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
                 onChange={setCost}
                 columns={columns}
                 autoDetected={autoDetectedFields.has('cost')}
+                confidenceScore={confidenceScores?.cost}
                 description="Cost associated with the activity"
               />
             </div>

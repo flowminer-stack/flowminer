@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
@@ -23,3 +23,16 @@ class Annotation(Base):
     content = Column(Text, nullable=False)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Threading: nullable FK back to the same table for replies
+    parent_id = Column(
+        UUID(as_uuid=True), ForeignKey("annotations.id"), nullable=True
+    )
+
+    # Resolution tracking
+    resolved = Column(Boolean, nullable=False, default=False, server_default="false")
+    resolved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Assignment
+    assignee_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)

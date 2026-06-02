@@ -199,7 +199,15 @@ export default function AnalysisHub({ eventLogId, initialAnalysisId }: AnalysisH
         <div className="border-b border-line px-3 py-2">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-fg-faint">Analysis Types</p>
         </div>
-        <nav className="py-1 flex md:flex-col overflow-x-auto md:overflow-x-visible">
+        {/*
+          On small screens this nav scrolls horizontally. The fade-mask on the
+          right edge is a scroll affordance — it hints that more analysis types
+          exist past the visible edge. The mask is removed at md: where the nav
+          becomes a full vertical sidebar with no horizontal overflow.
+        */}
+        <nav
+          className="py-1 flex md:flex-col overflow-x-auto md:overflow-x-visible [mask-image:linear-gradient(to_right,black_calc(100%-2rem),transparent)] md:[mask-image:none]"
+        >
           {ANALYSIS_ITEMS.map((item) => {
             const isActive = item.id === selected;
             return (

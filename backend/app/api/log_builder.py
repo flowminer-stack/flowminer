@@ -28,6 +28,21 @@ class BuilderEvent(BaseModel):
     cost_column: str | None = None
 
 
+class BuilderJoin(BaseModel):
+    """Spec for joining one additional source onto the primary staging table.
+
+    ``right_source`` is either a 0-based index into ``additional_sources`` (the
+    common case from the wizard, which uploads each table and references it by
+    position) or an explicit staging path. Keys must exist on both sides.
+    """
+
+    right_source: int | str
+    left_on: list[str]
+    right_on: list[str] | None = None
+    how: str = "left"
+    suffixes: list[str] | None = None
+
+
 class BuildRequest(BaseModel):
     project_id: UUID
     name: str
@@ -36,12 +51,36 @@ class BuildRequest(BaseModel):
     events: list[BuilderEvent]
     resource_column: str | None = None
     passthrough_columns: list[str] | None = None
+    # Optional multi-table support. Single-source requests omit both and behave
+    # exactly as before. Each additional source is a staging path uploaded via
+    # /upload-raw; joins reference them by index (or explicit path).
+    additional_sources: list[str] = []
+    joins: list[BuilderJoin] = []
 
 
 def _staging_dir() -> str:
     path = os.path.join(settings.UPLOAD_DIR, "_builder_staging")
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def _validate_staging_path(raw_path: str) -> str:
+    """Ensure ``raw_path`` exists and resolves inside the staging dir.
+
+    Uses ``os.path.commonpath`` on realpaths (not a text ``startswith``) so
+    ``/data/uploads2`` is not accepted as "inside" ``/data/uploads`` and
+    symlinks are resolved. Raises HTTPException on any violation.
+    """
+    if not os.path.exists(raw_path):
+        raise HTTPException(status_code=404, detail="Staging file not found (please re-upload)")
+    staging = os.path.realpath(_staging_dir())
+    resolved = os.path.realpath(raw_path)
+    try:
+        if os.path.commonpath([resolved, staging]) != staging:
+            raise ValueError("outside staging dir")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid staging path")
+    return resolved
 
 
 @router.post("/upload-raw")
@@ -88,25 +127,32 @@ async def build(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Run the builder spec and create a new EventLog from the result."""
+    """Run the builder spec and create a new EventLog from the result.
+
+    Supports single-source builds and multi-table assembly: when
+    ``additional_sources`` + ``joins`` are supplied the primary staging table
+    is merged with the additional staging tables (header+line+status ERP
+    shape) into one wide table before the wide->long pivot. Every staging path
+    — primary and additional — is validated to live inside the staging dir.
+    """
     # Verify the caller can write to the target project before doing disk I/O
     await assert_project_access(body.project_id, db, current_user)
 
-    if not os.path.exists(body.staging_path):
-        raise HTTPException(status_code=404, detail="Staging file not found (please re-upload)")
+    # Validate the primary staging path is inside the staging directory.
+    _validate_staging_path(body.staging_path)
 
-    # Verify path is inside the staging directory. ``startswith`` on
-    # raw paths would accept ``/data/uploads2`` as "inside"
-    # ``/data/uploads`` — use ``os.path.commonpath`` which compares
-    # full path components instead of text prefixes and also handles
-    # symlink resolution via ``os.path.realpath``.
-    staging = os.path.realpath(_staging_dir())
-    staging_path = os.path.realpath(body.staging_path)
-    try:
-        if os.path.commonpath([staging_path, staging]) != staging:
-            raise ValueError("outside staging dir")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid staging path")
+    # Validate every additional source path the same way before any I/O.
+    for src in body.additional_sources:
+        _validate_staging_path(src)
+
+    # Validate every join's right_source that is given as an explicit path.
+    # A numeric right_source references an already-validated additional source
+    # by index, so it needs no separate check; only string paths can escape the
+    # staging dir and must pass the same guard as the primary/additional paths.
+    for join in body.joins:
+        right = join.right_source
+        if isinstance(right, str) and not right.isdigit():
+            _validate_staging_path(right)
 
     # Write output into the regular project upload dir
     project_dir = os.path.join(settings.UPLOAD_DIR, str(body.project_id))
@@ -122,7 +168,16 @@ async def build(
             resource_column=body.resource_column,
             passthrough_columns=body.passthrough_columns,
             output_path=output_path,
+            additional_sources=body.additional_sources,
+            joins=[j.model_dump() for j in body.joins],
+            # Defense-in-depth: re-validate every explicit string join
+            # right_source inside the build so a path can never escape the
+            # staging dir even if the loop above is bypassed.
+            path_validator=_validate_staging_path,
         )
+    except HTTPException:
+        # Raised by the staging-path guard; preserve its 400/404 status.
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -150,11 +205,12 @@ async def build(
     await db.commit()
     await db.refresh(event_log)
 
-    # Clean up staging file — not needed after build
-    try:
-        os.remove(body.staging_path)
-    except OSError:
-        pass
+    # Clean up staging files — not needed after build (primary + additional).
+    for path in [body.staging_path, *body.additional_sources]:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
     return {
         "event_log_id": str(event_log.id),

@@ -223,10 +223,107 @@ async def benchmark(
 # ─── SQL sandbox ─────────────────────────────────────────────────────────────
 
 
+class SqlTableRef(BaseModel):
+    """A secondary table to register alongside ``log`` for multi-table SQL.
+
+    Exactly one of ``event_log_id`` / ``staging_path`` must be set. The table is
+    exposed in the query under ``table_name`` (a SQL identifier). Event logs go
+    through the same row-level access check as the primary ``log`` table;
+    staging paths must resolve inside the configured upload directory.
+    """
+
+    table_name: str
+    event_log_id: UUID | None = None
+    # Staging paths are authorized too: a project-scoped path
+    # (UPLOAD_DIR/<project_id>/...) goes through the same project access check
+    # as event logs; only the transient builder staging dir is project-agnostic.
+    staging_path: str | None = None
+
+
 class SqlRequest(BaseModel):
     event_log_id: UUID
     query: str
     limit: int = 1000
+    # Optional extra tables to register so users can write multi-table SQL
+    # (DuckDB supports joins across them). Default: only the "log" table.
+    tables: list[SqlTableRef] = []
+
+
+# A registrable SQL identifier: letters/digits/underscore, not starting with a
+# digit. Prevents injection / clobbering of the reserved ``log`` table name.
+_SQL_TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+async def _load_staging_dataframe(
+    staging_path: str,
+    db: AsyncSession,
+    user: User,
+) -> pd.DataFrame:
+    """Load a staging/source table for SQL registration, validating the path
+    AND authorizing the caller against whatever it belongs to.
+
+    Resolving inside ``settings.UPLOAD_DIR`` alone is NOT sufficient: uploads
+    are laid out as ``UPLOAD_DIR/<project_id>/<file>`` (see event_logs.upload /
+    log_builder.build) so a bare commonpath check would let any authenticated
+    user read another tenant's uploaded log as a SQL table (cross-tenant IDOR).
+
+    We therefore classify the resolved path:
+
+    * ``UPLOAD_DIR/<project_id>/...`` — a project-scoped file. The first path
+      component must be a UUID and the caller must pass the SAME access check
+      used everywhere else (``_user_can_access_project``); otherwise 404.
+    * ``UPLOAD_DIR/_builder_staging/...`` — transient per-upload builder files
+      written by ``/upload-raw`` (not tenant-scoped); accepted, mirroring the
+      log-builder's own staging semantics.
+
+    Anything else under (or outside) the upload root is rejected.
+    """
+    from app.config import settings
+
+    upload_root = os.path.realpath(settings.UPLOAD_DIR)
+    resolved = os.path.realpath(staging_path)
+    try:
+        if os.path.commonpath([resolved, upload_root]) != upload_root:
+            raise ValueError("outside upload dir")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid staging path")
+
+    # Determine which subtree of UPLOAD_DIR the file lives in. The relative
+    # path's first component is either the builder staging dir or a project id.
+    rel = os.path.relpath(resolved, upload_root)
+    first_component = rel.split(os.sep, 1)[0]
+    if first_component in ("", os.pardir):
+        # Sits directly in UPLOAD_DIR with no project scoping — not a resource
+        # any tenant owns; refuse rather than expose it.
+        raise HTTPException(status_code=400, detail="Invalid staging path")
+
+    if first_component != "_builder_staging":
+        # Project-scoped path: the directory name must be a real project the
+        # caller can access. Reject (as 404, matching deps.py) otherwise so we
+        # neither leak existence nor serve another tenant's data.
+        try:
+            project_id = UUID(first_component)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid staging path")
+        proj_result = await db.execute(select(Project).where(Project.id == project_id))
+        project = proj_result.scalar_one_or_none()
+        if project is None or not _user_can_access_project(user, project):
+            raise HTTPException(status_code=404, detail="Staging table not found")
+
+    if not os.path.exists(resolved):
+        raise HTTPException(status_code=404, detail="Staging table not found")
+
+    ext = os.path.splitext(resolved)[1].lower()
+    if ext == ".csv":
+        try:
+            return pd.read_csv(resolved, encoding="utf-8")
+        except UnicodeDecodeError:
+            return pd.read_csv(resolved, encoding="latin-1")
+    if ext == ".parquet":
+        return pd.read_parquet(resolved)
+    if ext in (".xlsx", ".xls"):
+        return pd.read_excel(resolved)
+    raise HTTPException(status_code=400, detail=f"Unsupported staging file type: {ext}")
 
 
 _ALLOWED_SQL_PREFIX = re.compile(r"^\s*select\b", re.IGNORECASE)
@@ -258,8 +355,10 @@ async def sql_sandbox(
 ):
     """
     Execute a read-only SELECT query against an event log (exposed as a table
-    named `log`). Uses DuckDB when available, falling back to sqlite in-memory.
-    Only SELECT statements are permitted.
+    named `log`). Additional event logs / staging tables may be registered
+    under distinct names via ``body.tables`` so users can write multi-table
+    SQL joins (DuckDB supports this natively). Uses DuckDB when available,
+    falling back to sqlite in-memory. Only SELECT statements are permitted.
     """
     q = body.query.strip().rstrip(";")
     # Strip comments BEFORE scanning — otherwise attackers can hide
@@ -274,6 +373,37 @@ async def sql_sandbox(
         raise HTTPException(status_code=400, detail="Query contains forbidden keywords")
 
     _el, df = await _load_df(body.event_log_id, db, current_user)
+
+    # Resolve any additional tables BEFORE opening the connection so auth /
+    # path validation failures surface as clean HTTP errors. Each goes through
+    # the same _load_df access check (event logs) or upload-dir validation
+    # (staging paths). The reserved "log" name cannot be overridden.
+    extra_tables: dict[str, pd.DataFrame] = {}
+    seen_names = {"log"}
+    for ref in body.tables:
+        name = ref.table_name
+        if not _SQL_TABLE_NAME.match(name):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid table name '{name}': use letters, digits, underscore",
+            )
+        if name in seen_names:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate or reserved table name '{name}'",
+            )
+        if (ref.event_log_id is None) == (ref.staging_path is None):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Table '{name}' needs exactly one of event_log_id or staging_path",
+            )
+        if ref.event_log_id is not None:
+            _el2, extra_df = await _load_df(ref.event_log_id, db, current_user)
+        else:
+            extra_df = await _load_staging_dataframe(ref.staging_path, db, current_user)  # type: ignore[arg-type]
+        extra_tables[name] = extra_df
+        seen_names.add(name)
+
     # Restrict row count up front
     limit = max(1, min(body.limit, 10000))
 
@@ -310,6 +440,8 @@ async def sql_sandbox(
                     ),
                 )
             con.register("log", df)
+            for name, extra_df in extra_tables.items():
+                con.register(name, extra_df)
             result_df = con.execute(wrapped_query).fetchdf()
         finally:
             try:
@@ -321,6 +453,8 @@ async def sql_sandbox(
         con = sqlite3.connect(":memory:")
         try:
             df.to_sql("log", con, index=False)
+            for name, extra_df in extra_tables.items():
+                extra_df.to_sql(name, con, index=False)
             result_df = pd.read_sql_query(wrapped_query, con)
         finally:
             con.close()

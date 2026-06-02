@@ -42,3 +42,13 @@ export function checkVersion(eventLogId: string, version: string): void {
   }
   versionMap.set(eventLogId, version);
 }
+
+/**
+ * Return the cached event log name for a given ID without making a network
+ * call. Returns null if the event log has not yet been fetched and cached.
+ * Used by the breadcrumb logic in Header to resolve UUIDs to human names.
+ */
+export function getEventLogName(eventLogId: string): string | null {
+  const log = getCached<{ name: string }>(eventLogId, 'eventLog');
+  return log?.name ?? null;
+}

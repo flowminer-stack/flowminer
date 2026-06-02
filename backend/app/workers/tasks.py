@@ -391,6 +391,18 @@ def sync_connector(self, connector_id: str):
         elif connector.connector_type == ConnectorType.sap:
             from app.services.connectors.sap_connector import SAPConnector
             service = SAPConnector()
+        elif connector.connector_type == ConnectorType.workday:
+            from app.services.connectors.workday_connector import WorkdayConnector
+            service = WorkdayConnector()
+        elif connector.connector_type == ConnectorType.coupa:
+            from app.services.connectors.coupa_connector import CoupaConnector
+            service = CoupaConnector()
+        elif connector.connector_type == ConnectorType.ariba:
+            from app.services.connectors.ariba_connector import AribaConnector
+            service = AribaConnector()
+        elif connector.connector_type == ConnectorType.oracle_fusion:
+            from app.services.connectors.oracle_fusion_connector import OracleFusionConnector
+            service = OracleFusionConnector()
         elif connector.connector_type == ConnectorType.oracle:
             service = DatabaseConnector()  # Oracle uses SQLAlchemy like other DBs
 

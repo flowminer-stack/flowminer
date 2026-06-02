@@ -26,7 +26,7 @@ import clsx from 'clsx';
 import { projects as projectsApi, eventLogs as eventLogsApi } from '@/api/client';
 import { useEventLogsStore, useUIStore, useProjectsStore, useAuthStore } from '@/store';
 import type { Project, EventLog } from '@/types';
-import LoadingSpinner from '@/components/common/LoadingSpinner';
+import { Skeleton } from '@/components/common/LoadingSpinner';
 import PageHeader from '@/components/common/PageHeader';
 
 const statusConfig = {
@@ -83,6 +83,89 @@ const configureTools = [
   { label: 'Log Builder', icon: Wand2, path: (id: string) => `/builder/${id}`, desc: 'Build & transform' },
 ];
 
+// Shell skeleton rendered while the project and event-logs are fetching.
+// Mirrors the real page structure (header → stats → tool-cards → log list)
+// so the layout is committed immediately and content "pops in" rather than
+// the whole page appearing from nothing.
+function ProjectDetailSkeleton() {
+  return (
+    <div>
+      {/* Header skeleton */}
+      <div className="mb-7">
+        <Skeleton className="mb-3 h-3 w-16" />
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-6 w-56 max-w-xs" />
+            <Skeleton className="h-3.5 w-80 max-w-sm" />
+            <Skeleton className="h-3 w-32" />
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <Skeleton className="h-8 w-24 rounded-lg" />
+            <Skeleton className="h-8 w-28 rounded-lg" />
+          </div>
+        </div>
+      </div>
+
+      {/* Stat cards skeleton */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 mb-7">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="stat-card">
+            <Skeleton className="h-9 w-9 shrink-0 rounded-lg" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-5 w-20" />
+              <Skeleton className="h-3 w-24" />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tool-cards skeleton — two groups (Analyze + Configure) */}
+      <div className="mb-7">
+        <Skeleton className="mb-3 h-3.5 w-14" />
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 rounded-xl border border-line bg-surface-2 px-4 py-3" style={{ boxShadow: 'var(--shadow-xs)' }}>
+              <Skeleton className="h-9 w-9 shrink-0 rounded-lg" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-3.5 w-20" />
+                <Skeleton className="h-3 w-28" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <Skeleton className="mb-3 mt-5 h-3.5 w-20" />
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          <div className="flex items-center gap-3 rounded-xl border border-line bg-surface-2 px-4 py-3" style={{ boxShadow: 'var(--shadow-xs)' }}>
+            <Skeleton className="h-9 w-9 shrink-0 rounded-lg" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3 w-28" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Event logs skeleton */}
+      <div>
+        <Skeleton className="mb-3 h-3.5 w-20" />
+        <div className="space-y-2.5">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="card p-4">
+              <div className="flex items-start gap-3.5">
+                <Skeleton className="mt-0.5 h-10 w-10 shrink-0 rounded-xl" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-3.5 w-48 max-w-xs" />
+                  <Skeleton className="h-3 w-72 max-w-sm" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function lastIngestedAt(logs: EventLog[]): Date | null {
   if (logs.length === 0) return null;
   const times = logs.map((l) => new Date(l.created_at).getTime());
@@ -121,7 +204,7 @@ export default function ProjectDetailPage() {
   }, [projectId, fetchEventLogs, setCurrentProject, addNotification, navigate]);
 
   if (loading || !project) {
-    return <LoadingSpinner size="lg" text="Loading project…" fullPage />;
+    return <ProjectDetailSkeleton />;
   }
 
   const readyLogs = eventLogs.filter((el) => el.status === 'ready');
@@ -211,8 +294,18 @@ export default function ProjectDetailPage() {
         </div>
 
         {logsLoading && eventLogs.length === 0 ? (
-          <div className="mt-4">
-            <LoadingSpinner text="Loading event logs…" />
+          <div className="mt-1 space-y-2.5">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="card p-4">
+                <div className="flex items-start gap-3.5">
+                  <Skeleton className="mt-0.5 h-10 w-10 shrink-0 rounded-xl" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-3.5 w-48 max-w-xs" />
+                    <Skeleton className="h-3 w-72 max-w-sm" />
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         ) : eventLogs.length === 0 ? (
           <div className="empty-state">

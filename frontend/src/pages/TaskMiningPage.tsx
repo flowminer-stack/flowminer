@@ -178,7 +178,9 @@ export default function TaskMiningPage() {
             <Cpu className="text-fg-ghost" size={40} />
             <p className="mt-4 text-[14px] font-semibold text-fg">No task patterns yet</p>
             <p className="mt-1 max-w-md text-[12px] text-fg-muted">
-              Task patterns come from desktop recordings captured via the FlowMiner desktop agent. Upload recordings first, then click <b>Run pattern mining</b> above.
+              Task patterns come from desktop recordings captured by the reference capture agent in{' '}
+              <code className="rounded bg-tint px-1 py-0.5 text-[11px] text-fg-secondary">tools/capture_agent/</code>.
+              Run the agent to stream active-window events into FlowMiner, then click <b>Run pattern mining</b> above.
             </p>
           </div>
         ) : (

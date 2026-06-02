@@ -39,11 +39,17 @@ router = APIRouter()
 
 
 def _get_connector_service(connector_type: ConnectorType) -> BaseConnector:
-    """Return the appropriate connector service instance for the given type."""
+    """Return the appropriate connector service instance for the given type.
+
+    Enterprise connector services are imported lazily so the app still
+    boots if an optional client library (snowflake, google-cloud-bigquery,
+    pyrfc, …) is not installed in the running environment.
+    """
     if connector_type in (
         ConnectorType.postgresql,
         ConnectorType.mysql,
         ConnectorType.sqlserver,
+        ConnectorType.oracle,
     ):
         return DatabaseConnector()
     elif connector_type == ConnectorType.csv_watch:
@@ -58,6 +64,33 @@ def _get_connector_service(connector_type: ConnectorType) -> BaseConnector:
         return OdooConnector()
     elif connector_type == ConnectorType.zendesk:
         return ZendeskConnector()
+    elif connector_type == ConnectorType.sap:
+        from app.services.connectors.sap_connector import SAPConnector
+        return SAPConnector()
+    elif connector_type == ConnectorType.salesforce:
+        from app.services.connectors.salesforce_connector import SalesforceConnector
+        return SalesforceConnector()
+    elif connector_type == ConnectorType.servicenow:
+        from app.services.connectors.servicenow_connector import ServiceNowConnector
+        return ServiceNowConnector()
+    elif connector_type == ConnectorType.snowflake:
+        from app.services.connectors.snowflake_connector import SnowflakeConnector
+        return SnowflakeConnector()
+    elif connector_type == ConnectorType.bigquery:
+        from app.services.connectors.bigquery_connector import BigQueryConnector
+        return BigQueryConnector()
+    elif connector_type == ConnectorType.workday:
+        from app.services.connectors.workday_connector import WorkdayConnector
+        return WorkdayConnector()
+    elif connector_type == ConnectorType.coupa:
+        from app.services.connectors.coupa_connector import CoupaConnector
+        return CoupaConnector()
+    elif connector_type == ConnectorType.ariba:
+        from app.services.connectors.ariba_connector import AribaConnector
+        return AribaConnector()
+    elif connector_type == ConnectorType.oracle_fusion:
+        from app.services.connectors.oracle_fusion_connector import OracleFusionConnector
+        return OracleFusionConnector()
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -294,6 +327,86 @@ async def test_connector(
     await db.refresh(connector)
 
     return test_result
+
+
+@router.get("/{connector_id}/schema")
+async def get_connector_schema(
+    connector_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Introspect the connector's data source and return the available
+    columns/fields so the frontend can offer column-mapping dropdowns
+    instead of free-text inputs.
+
+    The raw shape returned by each connector's ``get_schema()`` varies
+    (some return ``{"tables": [...]}`` with per-table columns, others
+    return flat lists of endpoints/resources/views). This endpoint
+    normalizes a best-effort ``columns`` list of unique column names on
+    top of the raw payload. If the connector lacks introspection or the
+    source is unreachable, it returns an empty result rather than 500.
+    """
+    result = await db.execute(
+        select(Connector).where(Connector.id == connector_id)
+    )
+    connector = result.scalar_one_or_none()
+    if connector is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found"
+        )
+    await assert_project_access(connector.project_id, db, current_user)
+
+    raw: dict = {}
+    error_message: str | None = None
+    try:
+        service = _get_connector_service(connector.connector_type)
+        from app.services.secret_box import decrypt_connector_config
+        schema = await service.get_schema(decrypt_connector_config(connector.config))
+        if isinstance(schema, dict):
+            raw = schema
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Introspection is best-effort: a missing client library or an
+        # unreachable source should degrade to an empty result, not 500.
+        logger.warning(f"Connector schema introspection failed: {e}")
+        error_message = str(e)
+
+    # Normalize the varied get_schema() shapes into a flat list of unique
+    # column/field names, preserving order of first appearance.
+    columns: list[str] = []
+    seen: set[str] = set()
+
+    def _add(name: object) -> None:
+        if isinstance(name, str) and name and name not in seen:
+            seen.add(name)
+            columns.append(name)
+
+    for table in raw.get("tables", []) or []:
+        if isinstance(table, dict):
+            for col in table.get("columns", []) or []:
+                if isinstance(col, dict):
+                    _add(col.get("name"))
+                else:
+                    _add(col)
+    # Connectors that expose endpoint/resource/view catalogs rather than
+    # column lists (Workday, Coupa, Ariba, Oracle Fusion) — surface those
+    # names too so the UI has something to offer.
+    for key in ("columns", "fields", "endpoints", "resources", "views"):
+        for item in raw.get(key, []) or []:
+            if isinstance(item, dict):
+                _add(item.get("name"))
+            else:
+                _add(item)
+
+    return {
+        "connector_id": str(connector_id),
+        "connector_type": connector.connector_type.value,
+        "columns": columns,
+        "schema": raw,
+        "error": error_message,
+    }
 
 
 @router.post("/{connector_id}/sync")

@@ -84,7 +84,8 @@ export default function RegisterPage() {
         </div>
 
         <p className="text-[12px] text-fg-ghost">
-          Open-source process mining for everyone.
+          Open-source process mining for everyone.{' '}
+          <span className="text-fg-faint">MIT licensed — embed, fork, self-host freely. No lock-in.</span>
         </p>
       </div>
 

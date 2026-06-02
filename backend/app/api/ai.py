@@ -164,13 +164,31 @@ async def _build_ocel_context(event_log_id: UUID, db: AsyncSession, user: User) 
     return "\n".join(lines)
 
 
-async def _build_log_context(event_log_id: UUID, db: AsyncSession, user: User) -> str:
+async def _build_log_context(
+    event_log_id: UUID,
+    db: AsyncSession,
+    user: User,
+    *,
+    algorithm: str | None = None,
+    noise_threshold: float | None = None,
+    complexity: int | None = None,
+    visible_nodes: int | None = None,
+    visible_edges: int | None = None,
+) -> str:
     """Assemble the compact context block fed to the LLM for a chat turn.
 
     For standard event logs: summary stats, top 5 variants, top 5
     bottlenecks, top 5 insights. For OCEL logs: delegate to the
     OCEL-aware context builder because ``_load_event_log_and_df``
     rejects OCEL rows.
+
+    The optional ``algorithm`` / ``noise_threshold`` / ``complexity`` /
+    ``visible_nodes`` / ``visible_edges`` params describe the process map
+    the user is currently looking at (the narrate endpoint passes them so
+    the report reflects the chosen discovery algorithm, noise filtering,
+    and how aggressively the complexity slider trimmed the rendered
+    graph). They are all optional so chat / best-practice callers that
+    only know about the raw log keep working unchanged.
 
     Best-effort — any fetch that fails is dropped instead of
     throwing.
@@ -201,6 +219,29 @@ async def _build_log_context(event_log_id: UUID, db: AsyncSession, user: User) -
         if 'avg_case_duration_seconds' in stats:
             secs = stats['avg_case_duration_seconds']
             lines.append(f"Avg case duration: {secs/3600:.1f} hours")
+
+    # Map-level metadata describing the rendered graph the user is
+    # looking at, so the narration reflects the chosen algorithm / noise
+    # filtering / complexity trim instead of just the raw log.
+    map_lines: list[str] = []
+    if algorithm is not None:
+        map_lines.append(f"  - Discovery algorithm: {algorithm}")
+    if noise_threshold is not None:
+        map_lines.append(
+            f"  - Noise filter threshold: {noise_threshold*100:.0f}% "
+            "(prunes infrequent paths)"
+        )
+    if complexity is not None:
+        map_lines.append(
+            f"  - Complexity slider: {complexity}% of edges kept"
+        )
+    if visible_nodes is not None:
+        map_lines.append(f"  - Visible activity nodes: {visible_nodes}")
+    if visible_edges is not None:
+        map_lines.append(f"  - Visible directed edges: {visible_edges}")
+    if map_lines:
+        lines.append("\nCurrently displayed process map:")
+        lines.extend(map_lines)
 
     if variants and variants.get("variants"):
         lines.append("\nTop variants:")
@@ -776,13 +817,34 @@ async def ai_agent_run(
 @router.get("/narrate/{event_log_id}")
 async def ai_narrate(
     event_log_id: UUID,
+    algorithm: str | None = Query(None),
+    noise_threshold: float | None = Query(None),
+    complexity: int | None = Query(None),
+    visible_nodes: int | None = Query(None),
+    visible_edges: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
     """Produce a Markdown document describing the discovered process,
-    suitable for pasting into Confluence or Notion."""
+    suitable for pasting into Confluence or Notion.
+
+    The optional query params describe the process map the user is
+    currently viewing (the chosen discovery ``algorithm``, the
+    ``noise_threshold`` applied, the ``complexity`` slider position, and
+    the number of ``visible_nodes`` / ``visible_edges`` after pruning) so
+    the narration reflects what's on screen rather than just the raw log.
+    """
     await _assert_event_log_access(event_log_id, db, current_user)
-    context = await _build_log_context(event_log_id, db, current_user)
+    context = await _build_log_context(
+        event_log_id,
+        db,
+        current_user,
+        algorithm=algorithm,
+        noise_threshold=noise_threshold,
+        complexity=complexity,
+        visible_nodes=visible_nodes,
+        visible_edges=visible_edges,
+    )
 
     system = (
         "You write concise process-mining reports in Markdown. Use "

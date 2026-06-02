@@ -30,11 +30,26 @@ export default function ProjectPickerPage({
     fetchProjects();
   }, [fetchProjects]);
 
+  // Auto-skip the picker when there is exactly one project — no flicker
+  // because the spinner is still showing at that point, and replace:true
+  // prevents a back-button trap.
+  useEffect(() => {
+    if (!loading && projects.length === 1) {
+      navigate(nextPathTemplate.replace(':projectId', projects[0].id), { replace: true });
+    }
+  }, [loading, projects, nextPathTemplate, navigate]);
+
   const go = (projectId: string) => {
     navigate(nextPathTemplate.replace(':projectId', projectId));
   };
 
   if (loading && projects.length === 0) {
+    return <LoadingSpinner size="lg" text="Loading projects…" fullPage />;
+  }
+
+  // Still rendering the spinner while the single-project redirect is pending
+  // (loading finished but the navigate call hasn't flushed yet).
+  if (!loading && projects.length === 1) {
     return <LoadingSpinner size="lg" text="Loading projects…" fullPage />;
   }
 

@@ -21,6 +21,7 @@ import {
   Inbox,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { SkeletonRow } from './LoadingSpinner';
 
 interface DataTableProps<T> {
   data: T[];
@@ -34,18 +35,6 @@ interface DataTableProps<T> {
   onRowSelection?: (selectedRows: T[]) => void;
   emptyMessage?: string;
   emptyDescription?: string;
-}
-
-function SkeletonRow({ columns }: { columns: number }) {
-  return (
-    <tr className="border-b border-line/60">
-      {Array.from({ length: columns }).map((_, i) => (
-        <td key={i} className="px-3 py-2.5">
-          <div className="skeleton h-3.5 w-full max-w-[180px]" />
-        </td>
-      ))}
-    </tr>
-  );
 }
 
 export default function DataTable<T>({

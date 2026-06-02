@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Check, Upload } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Upload, BarChart2 } from 'lucide-react';
 import clsx from 'clsx';
 import { eventLogs as eventLogsApi, projects as projectsApi } from '@/api/client';
 import type { Project, EventLogPreview, ColumnMapping } from '@/types';
@@ -9,6 +9,7 @@ import LoadingSpinner from '@/components/common/LoadingSpinner';
 import PageHeader from '@/components/common/PageHeader';
 import { useUIStore, useEventLogsStore, useAuthStore } from '@/store';
 import DataQualityCard from '@/components/DataQuality/DataQualityCard';
+import ColumnMapper from '@/components/ColumnMapper/ColumnMapper';
 
 type Step = 'upload' | 'mapping' | 'done';
 
@@ -25,26 +26,20 @@ export default function UploadPage() {
   const [uploadedLogType, setUploadedLogType] = useState<string>('standard');
   const [preview, setPreview] = useState<EventLogPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [mapping, setMapping] = useState<ColumnMapping>({
-    case_id_column: '',
-    activity_column: '',
-    timestamp_column: '',
-  });
   // Confidence score (0-1) per target field, populated by the fuzzy
-  // auto-mapper. Shown in the mapping UI as a small percentage pill
-  // next to each field (Mehrwerk mpmX parity).
+  // auto-mapper. Surfaced in ColumnMapper's badge pill (Mehrwerk mpmX parity).
   const [confidence, setConfidence] = useState<{
-    case_id_column: number;
-    activity_column: number;
-    timestamp_column: number;
-    resource_column: number;
-    cost_column: number;
+    case_id: number;
+    activity: number;
+    timestamp: number;
+    resource: number;
+    cost: number;
   }>({
-    case_id_column: 0,
-    activity_column: 0,
-    timestamp_column: 0,
-    resource_column: 0,
-    cost_column: 0,
+    case_id: 0,
+    activity: 0,
+    timestamp: 0,
+    resource: 0,
+    cost: 0,
   });
   const [mappingSaving, setMappingSaving] = useState(false);
 
@@ -73,7 +68,8 @@ export default function UploadPage() {
       return;
     }
 
-    // Standard logs: load preview and auto-detect column mapping
+    // Standard logs: load preview and run name-based auto-detection to
+    // pre-populate confidence scores that ColumnMapper surfaces as pills.
     setPreviewLoading(true);
     try {
       const p = await eventLogsApi.preview(log.id);
@@ -85,7 +81,7 @@ export default function UploadPage() {
       // per target field and surface the score as a pill in the UI,
       // mirroring Mehrwerk mpmX's "94% confident" column mapper.
       const targets: Record<string, Array<[string, number]>> = {
-        case_id_column: [
+        case_id: [
           ['case', 0.6],
           ['trace', 0.5],
           ['journey', 0.4],
@@ -95,7 +91,7 @@ export default function UploadPage() {
           ['_id', 0.3],
           ['id', 0.2],
         ],
-        activity_column: [
+        activity: [
           ['activity', 0.7],
           ['event', 0.5],
           ['action', 0.4],
@@ -104,7 +100,7 @@ export default function UploadPage() {
           ['stage', 0.3],
           ['task', 0.4],
         ],
-        timestamp_column: [
+        timestamp: [
           ['time', 0.5],
           ['date', 0.4],
           ['ts', 0.4],
@@ -114,7 +110,7 @@ export default function UploadPage() {
           ['completed', 0.4],
           ['timestamp', 0.7],
         ],
-        resource_column: [
+        resource: [
           ['resource', 0.7],
           ['user', 0.4],
           ['agent', 0.4],
@@ -123,7 +119,7 @@ export default function UploadPage() {
           ['performed_by', 0.6],
           ['handler', 0.4],
         ],
-        cost_column: [
+        cost: [
           ['cost', 0.7],
           ['price', 0.5],
           ['amount', 0.4],
@@ -140,34 +136,27 @@ export default function UploadPage() {
         return Math.min(1, s);
       };
 
-      const autoMapping: ColumnMapping = {
-        case_id_column: '',
-        activity_column: '',
-        timestamp_column: '',
-      };
       const autoConf = {
-        case_id_column: 0,
-        activity_column: 0,
-        timestamp_column: 0,
-        resource_column: 0,
-        cost_column: 0,
+        case_id: 0,
+        activity: 0,
+        timestamp: 0,
+        resource: 0,
+        cost: 0,
       };
-      for (const field of Object.keys(targets)) {
-        let best: { col: string; score: number } | null = null;
+      for (const field of Object.keys(targets) as Array<keyof typeof autoConf>) {
+        let best: { score: number } | null = null;
         for (const col of p.columns) {
           const s = scoreCol(col, targets[field]);
-          if (s > 0 && (!best || s > best.score)) best = { col, score: s };
+          if (s > 0 && (!best || s > best.score)) best = { score: s };
         }
         if (best) {
-          (autoMapping as any)[field] = best.col;
-          (autoConf as any)[field] = best.score;
+          autoConf[field] = best.score;
         }
       }
 
-      setMapping(autoMapping);
       setConfidence(autoConf);
     } catch {
-      // Preview may fail, continue anyway
+      // Preview may fail; ColumnMapper still works without a preview
     } finally {
       setPreviewLoading(false);
     }
@@ -175,8 +164,29 @@ export default function UploadPage() {
     setStep('mapping');
   };
 
-  const handleSaveMapping = async () => {
+  // Called by ColumnMapper when the user clicks "Start Mining".
+  // Adapts ColumnMapper's {case_id, activity, timestamp, resource, cost}
+  // to UploadPage's backend-facing ColumnMapping shape and saves it.
+  const handleMappingComplete = async (mapperResult: {
+    case_id: string;
+    activity: string;
+    timestamp: string;
+    resource?: string;
+    cost?: string;
+    additional_columns?: string[];
+  }) => {
     if (!eventLogId) return;
+
+    const mapping: ColumnMapping = {
+      case_id_column: mapperResult.case_id,
+      activity_column: mapperResult.activity,
+      timestamp_column: mapperResult.timestamp,
+      ...(mapperResult.resource && { resource_column: mapperResult.resource }),
+      ...(mapperResult.cost && { cost_column: mapperResult.cost }),
+      ...(mapperResult.additional_columns && {
+        additional_columns: mapperResult.additional_columns,
+      }),
+    };
 
     setMappingSaving(true);
     try {
@@ -248,7 +258,7 @@ export default function UploadPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto max-w-5xl">
       <PageHeader
         title="Upload Event Log"
         icon={Upload}
@@ -327,222 +337,30 @@ export default function UploadPage() {
 
         {step === 'mapping' && (
           <div className="card p-6">
-            <h2 className="text-[14px] font-semibold text-fg">
-              Map your columns
-            </h2>
-            <p className="mt-1 text-[12px] text-fg-muted">
-              Tell us which columns contain the case ID, activity, and timestamp.
-            </p>
-
             {previewLoading ? (
-              <div className="mt-6">
+              <div className="py-12">
                 <LoadingSpinner text="Loading file preview..." />
+              </div>
+            ) : mappingSaving ? (
+              <div className="py-12">
+                <LoadingSpinner text="Saving column mapping..." />
               </div>
             ) : (
               <>
-                {/* Column mapping form */}
-                <div className="mt-6 space-y-4">
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <label className="block text-[12px] font-medium text-fg-muted">
-                        Case ID Column <span className="text-danger">*</span>
-                      </label>
-                      <ConfidencePill score={confidence.case_id_column} />
-                    </div>
-                    <select
-                      value={mapping.case_id_column}
-                      onChange={(e) =>
-                        setMapping({ ...mapping, case_id_column: e.target.value })
-                      }
-                      className="select mt-1.5"
-                    >
-                      <option value="">Select column...</option>
-                      {preview?.columns.map((col) => (
-                        <option key={col} value={col}>
-                          {col}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <label className="block text-[12px] font-medium text-fg-muted">
-                        Activity Column <span className="text-danger">*</span>
-                      </label>
-                      <ConfidencePill score={confidence.activity_column} />
-                    </div>
-                    <select
-                      value={mapping.activity_column}
-                      onChange={(e) =>
-                        setMapping({ ...mapping, activity_column: e.target.value })
-                      }
-                      className="select mt-1.5"
-                    >
-                      <option value="">Select column...</option>
-                      {preview?.columns.map((col) => (
-                        <option key={col} value={col}>
-                          {col}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <label className="block text-[12px] font-medium text-fg-muted">
-                        Timestamp Column <span className="text-danger">*</span>
-                      </label>
-                      <ConfidencePill score={confidence.timestamp_column} />
-                    </div>
-                    <select
-                      value={mapping.timestamp_column}
-                      onChange={(e) =>
-                        setMapping({
-                          ...mapping,
-                          timestamp_column: e.target.value,
-                        })
-                      }
-                      className="select mt-1.5"
-                    >
-                      <option value="">Select column...</option>
-                      {preview?.columns.map((col) => (
-                        <option key={col} value={col}>
-                          {col}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[12px] font-medium text-fg-muted">
-                      Resource Column{' '}
-                      <span className="font-normal text-fg-faint">
-                        (optional)
-                      </span>
-                    </label>
-                    <select
-                      value={mapping.resource_column ?? ''}
-                      onChange={(e) =>
-                        setMapping({
-                          ...mapping,
-                          resource_column: e.target.value || undefined,
-                        })
-                      }
-                      className="select mt-1.5"
-                    >
-                      <option value="">None</option>
-                      {preview?.columns.map((col) => (
-                        <option key={col} value={col}>
-                          {col}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[12px] font-medium text-fg-muted">
-                      Cost Column{' '}
-                      <span className="font-normal text-fg-faint">
-                        (optional)
-                      </span>
-                    </label>
-                    <select
-                      value={mapping.cost_column ?? ''}
-                      onChange={(e) =>
-                        setMapping({
-                          ...mapping,
-                          cost_column: e.target.value || undefined,
-                        })
-                      }
-                      className="select mt-1.5"
-                    >
-                      <option value="">None</option>
-                      {preview?.columns.map((col) => (
-                        <option key={col} value={col}>
-                          {col}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Preview table */}
-                {preview && preview.sample_rows.length > 0 && (
-                  <div className="mt-6">
-                    <h3 className="text-[13px] font-medium text-fg-secondary">
-                      Data Preview
-                    </h3>
-                    <div className="mt-2 overflow-x-auto rounded-lg border border-line">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="bg-surface-3">
-                            {preview.columns.map((col) => (
-                              <th
-                                key={col}
-                                className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-fg-muted"
-                              >
-                                {col}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {preview.sample_rows.slice(0, 5).map((row, i) => (
-                            <tr
-                              key={i}
-                              className="border-t border-line/40"
-                            >
-                              {preview.columns.map((col) => (
-                                <td
-                                  key={col}
-                                  className="whitespace-nowrap px-3 py-2 text-[12px] text-fg-secondary"
-                                >
-                                  {String(row[col] ?? '')}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    <p className="mt-1 text-[11px] text-fg-faint">
-                      Showing {Math.min(5, preview.sample_rows.length)} of{' '}
-                      {preview.total_rows.toLocaleString()} rows
-                    </p>
-                  </div>
-                )}
-
-                {/* Actions */}
-                <div className="mt-6 flex justify-end gap-3">
+                <ColumnMapper
+                  eventLogId={eventLogId ?? ''}
+                  columns={preview?.columns ?? []}
+                  sampleRows={preview?.sample_rows ?? []}
+                  onMappingComplete={handleMappingComplete}
+                  confidenceScores={confidence}
+                />
+                <div className="mt-4 flex justify-start">
                   <button
                     onClick={() => setStep('upload')}
                     className="btn-secondary"
                   >
                     <ArrowLeft size={16} />
                     Back
-                  </button>
-                  <button
-                    onClick={handleSaveMapping}
-                    disabled={
-                      mappingSaving ||
-                      !mapping.case_id_column ||
-                      !mapping.activity_column ||
-                      !mapping.timestamp_column
-                    }
-                    className="btn-primary"
-                  >
-                    {mappingSaving ? (
-                      <div className="flex items-center gap-2">
-                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                        Saving...
-                      </div>
-                    ) : (
-                      <>
-                        Save & Process
-                        <ArrowRight size={16} />
-                      </>
-                    )}
                   </button>
                 </div>
               </>
@@ -563,13 +381,18 @@ export default function UploadPage() {
                 Your event log is being processed. You can view the process map
                 once processing is complete.
               </p>
-              <div className="mt-8 flex gap-3">
-                <button
-                  onClick={() => navigate(`/projects/${projectId}`)}
-                  className="btn-secondary"
-                >
-                  Back to Project
-                </button>
+              <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+                {/* Primary CTA: See Insights — most valuable next step */}
+                {eventLogId && uploadedLogType !== 'ocel' && (
+                  <button
+                    onClick={() => navigate(`/mission-control/${eventLogId}`)}
+                    className="btn-primary"
+                  >
+                    <BarChart2 size={16} />
+                    See Insights
+                  </button>
+                )}
+                {/* Secondary CTAs */}
                 {eventLogId && (
                   <button
                     onClick={() => navigate(
@@ -577,12 +400,18 @@ export default function UploadPage() {
                         ? `/ocpm/${eventLogId}`
                         : `/process/${eventLogId}`,
                     )}
-                    className="btn-primary"
+                    className="btn-secondary"
                   >
                     {uploadedLogType === 'ocel' ? 'View OCPM' : 'View Process Map'}
                     <ArrowRight size={16} />
                   </button>
                 )}
+                <button
+                  onClick={() => navigate(`/projects/${projectId}`)}
+                  className="btn-secondary"
+                >
+                  Back to Project
+                </button>
               </div>
             </div>
 
@@ -593,20 +422,5 @@ export default function UploadPage() {
         )}
       </div>
     </div>
-  );
-}
-
-// Small confidence badge next to each auto-mapped column. Shown only
-// when a suggestion exists. Colour scales with the score so users can
-// tell at a glance which suggestions to double-check.
-function ConfidencePill({ score }: { score: number }) {
-  if (!score) return null;
-  const pct = Math.round(score * 100);
-  const tone =
-    pct >= 70 ? 'text-success bg-success/10' : pct >= 40 ? 'text-warning bg-warning/10' : 'text-fg-muted bg-tint';
-  return (
-    <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${tone}`} title="Auto-mapping confidence">
-      auto · {pct}%
-    </span>
   );
 }

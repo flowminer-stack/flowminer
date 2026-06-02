@@ -16,8 +16,10 @@ import {
   Layers,
   Boxes,
   Filter as FilterIcon,
+  Download,
+  Upload,
 } from 'lucide-react';
-import type { Project } from '@/types';
+import type { Project, ProjectExportManifest } from '@/types';
 import { format } from 'date-fns';
 import { useProjectsStore, useUIStore, useAuthStore } from '@/store';
 import Modal from '@/components/common/Modal';
@@ -95,6 +97,9 @@ export default function ProjectsPage() {
   const [seedingLoading, setSeedingLoading] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   // Active filter lives in the URL so deep-links from Overview / Initiatives
   // can drop the user straight into a filtered view.
@@ -220,6 +225,61 @@ export default function ProjectsPage() {
     setOpenMenuId(null);
   };
 
+  // Anti-lock-in: download the full project manifest (metadata, dashboards,
+  // alerts, KPIs, initiatives, action rules). Event-log files are referenced
+  // by checksum, not embedded — they are re-uploaded after import.
+  const handleExport = async (projectId: string, projectName: string) => {
+    setExportingId(projectId);
+    try {
+      await projectsApi.downloadExport(projectId, projectName);
+      addNotification({
+        type: 'success',
+        title: 'Project exported',
+        message: 'Manifest downloaded. Event-log files are referenced by checksum — re-upload them after import.',
+      });
+    } catch {
+      addNotification({ type: 'error', title: 'Failed to export project' });
+    } finally {
+      setExportingId(null);
+      setOpenMenuId(null);
+    }
+  };
+
+  // Import a previously exported manifest into a brand-new project.
+  const handleImportFile = async (file: File) => {
+    setImporting(true);
+    try {
+      const text = await file.text();
+      let manifest: ProjectExportManifest;
+      try {
+        manifest = JSON.parse(text) as ProjectExportManifest;
+      } catch {
+        addNotification({
+          type: 'error',
+          title: 'Invalid manifest',
+          message: 'The selected file is not valid FlowMiner project JSON.',
+        });
+        return;
+      }
+      const result = await projectsApi.import(manifest);
+      await fetchProjects();
+      const counts = result.imported;
+      addNotification({
+        type: 'success',
+        title: 'Project imported',
+        message:
+          `Restored ${counts.event_logs} log${counts.event_logs !== 1 ? 's' : ''}, ` +
+          `${counts.dashboards} dashboard${counts.dashboards !== 1 ? 's' : ''}, ` +
+          `${counts.alerts} alert${counts.alerts !== 1 ? 's' : ''}. ${result.notice}`,
+      });
+      navigate(`/projects/${result.project_id}`);
+    } catch {
+      addNotification({ type: 'error', title: 'Failed to import project' });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   if (loading && projects.length === 0) {
     return <LoadingSpinner size="lg" text="Loading projects…" fullPage />;
   }
@@ -248,6 +308,19 @@ export default function ProjectsPage() {
             demoMode ? null : (
               <>
                 <button
+                  onClick={() => importInputRef.current?.click()}
+                  disabled={importing}
+                  className="btn-secondary"
+                  title="Import a project from an exported .flowminer.json manifest"
+                >
+                  {importing ? (
+                    <div className="h-3.5 w-3.5 animate-spin rounded-full border-[1.5px] border-line-strong border-t-fg-secondary" />
+                  ) : (
+                    <Upload size={14} />
+                  )}
+                  Import
+                </button>
+                <button
                   onClick={handleSeedSample}
                   disabled={seedingLoading}
                   className="btn-secondary"
@@ -271,6 +344,20 @@ export default function ProjectsPage() {
           }
         />
       </div>
+
+      {/* Hidden file input for project import */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".json,application/json"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void handleImportFile(file);
+          // Reset so selecting the same file again re-triggers onChange.
+          e.target.value = '';
+        }}
+      />
 
       {/* Empty state */}
       {projects.length === 0 ? (
@@ -303,6 +390,19 @@ export default function ProjectsPage() {
                   <FlaskConical size={14} />
                 )}
                 Try with Sample Data
+              </button>
+              <button
+                onClick={() => importInputRef.current?.click()}
+                disabled={importing}
+                className="btn-secondary"
+                title="Import a project from an exported .flowminer.json manifest"
+              >
+                {importing ? (
+                  <div className="h-3.5 w-3.5 animate-spin rounded-full border-[1.5px] border-line-strong border-t-fg-secondary" />
+                ) : (
+                  <Upload size={14} />
+                )}
+                Import Project
               </button>
             </div>
           )}
@@ -448,6 +548,18 @@ export default function ProjectsPage() {
                           >
                             <Pencil size={12} />
                             Open
+                          </button>
+                          <button
+                            onClick={() => handleExport(project.id, project.name)}
+                            disabled={exportingId === project.id}
+                            className="flex w-full items-center gap-2.5 px-3 py-2 text-[12px] text-fg-muted hover:bg-tint hover:text-fg transition-colors disabled:opacity-50"
+                          >
+                            {exportingId === project.id ? (
+                              <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-line-strong border-t-fg-secondary" />
+                            ) : (
+                              <Download size={12} />
+                            )}
+                            Export
                           </button>
                           <button
                             onClick={() => handleDelete(project.id, project.name)}

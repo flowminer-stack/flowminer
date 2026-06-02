@@ -384,6 +384,89 @@ def _apply_filters(df: pd.DataFrame, filters: ProcessFilter | None) -> pd.DataFr
     return filtered
 
 
+def _build_log_context(
+    df: "pd.DataFrame",
+    *,
+    algorithm: str | None = None,
+    noise_threshold: float | None = None,
+    complexity: float | None = None,
+    visible_nodes: int | None = None,
+    visible_edges: int | None = None,
+) -> dict:
+    """Build a compact context dict for AI narration of a process map.
+
+    Called by endpoints that want to narrate "what does this map mean?"
+    in an algorithm- and filter-aware way.  All map-level params are
+    optional so existing callers (and any future callers that don't have
+    map context) can pass only the DataFrame and still get a useful
+    context block.
+
+    Parameters
+    ----------
+    df:
+        The event-log DataFrame already loaded and filtered for this request.
+    algorithm:
+        Discovery algorithm used to produce the map (e.g. "dfg", "inductive",
+        "heuristic", "alpha").  ``None`` means the map was produced by the
+        default algorithm or the caller does not know.
+    noise_threshold:
+        Noise/frequency threshold applied during discovery (0.0–1.0).
+        Higher values prune low-frequency paths.  ``None`` if not applied.
+    complexity:
+        Complexity score of the resulting model (e.g. CFC or arc density),
+        if computed by the caller.  ``None`` if unavailable.
+    visible_nodes:
+        Number of activity nodes visible in the rendered map after pruning.
+        ``None`` if the caller does not track this.
+    visible_edges:
+        Number of directed edges visible in the rendered map after pruning.
+        ``None`` if the caller does not track this.
+
+    Returns
+    -------
+    dict
+        A flat dict with stats, map metadata, and top-activity entries.
+        Designed to be serialised as JSON and embedded in an LLM prompt.
+    """
+    context: dict = {}
+
+    # ── Basic log stats ──────────────────────────────────────────────────
+    try:
+        context["total_cases"] = int(df[CASE_COL].nunique())
+        context["total_events"] = int(len(df))
+        context["total_activities"] = int(df[ACTIVITY_COL].nunique())
+    except Exception:
+        pass
+
+    # ── Map-level metadata ────────────────────────────────────────────────
+    if algorithm is not None:
+        context["algorithm"] = algorithm
+    if noise_threshold is not None:
+        context["noise_threshold"] = noise_threshold
+    if complexity is not None:
+        context["complexity"] = complexity
+    if visible_nodes is not None:
+        context["visible_nodes"] = visible_nodes
+    if visible_edges is not None:
+        context["visible_edges"] = visible_edges
+
+    # ── Top activities by frequency ───────────────────────────────────────
+    try:
+        top_acts = (
+            df[ACTIVITY_COL]
+            .value_counts()
+            .head(10)
+            .rename_axis("activity")
+            .reset_index(name="count")
+            .to_dict(orient="records")
+        )
+        context["top_activities"] = top_acts
+    except Exception:
+        pass
+
+    return context
+
+
 @router.get("/filter-options/{event_log_id}")
 async def get_filter_options(
     event_log_id: UUID,
@@ -2942,7 +3025,9 @@ async def predict_remaining_time(
         return cached
 
     _event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
-    result = predictive_service.predict_remaining_time(df)
+    # predict_remaining_time trains a model synchronously; run it in the
+    # threadpool so it doesn't block the event loop during the fit+predict.
+    result = await _run_in_thread(predictive_service.predict_remaining_time, df)
     _set_cached(event_log_id, "predict_remaining_time", result)
     return result
 
