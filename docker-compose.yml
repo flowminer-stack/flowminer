@@ -13,12 +13,6 @@
 #
 #         docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 #
-# Image tags: pre-built multi-arch images are published to GHCR by
-# .github/workflows/release.yml on every `v*` tag push.  To build
-# locally instead, use docker-compose.dev.yml (or pass `--build`):
-#
-#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up
-#
 # Requirements:
 #   * Docker Engine 20.10+
 #   * Docker Compose V2 (the `docker compose` plugin, NOT the
@@ -145,10 +139,17 @@ services:
 
   # ─── FastAPI backend ───────────────────────────────────────────────
   backend:
-    # Pinned GHCR release image (built by .github/workflows/release.yml).
-    # To build locally instead, overlay docker-compose.dev.yml which
-    # re-adds the `build:` block.
-    image: ghcr.io/flowminer/flowminer-backend:0.1.0
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      # Pull docs/examples into the build even though it lives outside
+      # the backend context, so the demo seeder can find the sample
+      # logs inside the image without needing a runtime bind mount.
+      # Requires Docker Compose v2.17+ / BuildKit; both Dokploy and
+      # modern Docker Engine support this.
+      additional_contexts:
+        examples: ./docs/examples
+    image: flowminer-backend:local
     restart: *restart_policy
     logging: *logging
     environment: *app_env
@@ -176,10 +177,17 @@ services:
 
   # ─── Celery worker ─────────────────────────────────────────────────
   worker:
-    # Same image as the backend service — worker and beat share the
-    # backend image and differ only in their `command:`.
-    # To build locally, overlay docker-compose.dev.yml.
-    image: ghcr.io/flowminer/flowminer-backend:0.1.0
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      # Pull docs/examples into the build even though it lives outside
+      # the backend context, so the demo seeder can find the sample
+      # logs inside the image without needing a runtime bind mount.
+      # Requires Docker Compose v2.17+ / BuildKit; both Dokploy and
+      # modern Docker Engine support this.
+      additional_contexts:
+        examples: ./docs/examples
+    image: flowminer-backend:local
     restart: *restart_policy
     logging: *logging
     environment: *app_env
@@ -213,10 +221,17 @@ services:
 
   # ─── Celery beat (scheduler) ───────────────────────────────────────
   beat:
-    # Same image as the backend service — worker and beat share the
-    # backend image and differ only in their `command:`.
-    # To build locally, overlay docker-compose.dev.yml.
-    image: ghcr.io/flowminer/flowminer-backend:0.1.0
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      # Pull docs/examples into the build even though it lives outside
+      # the backend context, so the demo seeder can find the sample
+      # logs inside the image without needing a runtime bind mount.
+      # Requires Docker Compose v2.17+ / BuildKit; both Dokploy and
+      # modern Docker Engine support this.
+      additional_contexts:
+        examples: ./docs/examples
+    image: flowminer-backend:local
     restart: *restart_policy
     logging: *logging
     environment:
@@ -262,9 +277,10 @@ services:
 
   # ─── Frontend (nginx serving built SPA) ────────────────────────────
   frontend:
-    # Pinned GHCR release image (built by .github/workflows/release.yml).
-    # To build locally instead, overlay docker-compose.dev.yml.
-    image: ghcr.io/flowminer/flowminer-frontend:0.1.0
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: flowminer-frontend:local
     restart: *restart_policy
     logging: *logging
     expose:
