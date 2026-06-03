@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { type Core } from 'cytoscape';
 import {
   ArrowLeft,
@@ -7,26 +7,15 @@ import {
   Clock,
   BarChart3,
   GitBranch,
-  AlertTriangle,
   CheckCircle2,
-  Search,
   Play,
   X,
-  ChevronDown,
   FileCode2,
-  ScatterChart,
-  Network,
-  Repeat,
-  GitCompareArrows,
   Map,
   Table2,
-  FlaskConical,
-  Leaf,
-  Film,
   Filter,
   Wand2,
   Sparkles,
-  TrendingUp,
   HelpCircle,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -50,285 +39,19 @@ import ActivityDetailModal from '@/components/ActivityDetail/ActivityDetailModal
 import EdgeDetailModal from '@/components/ProcessMap/EdgeDetailModal';
 import HappyPathView from '@/components/ProcessMap/HappyPathView';
 import DataQualityCard from '@/components/DataQuality/DataQualityCard';
-import AnalysisHub, { ANALYSIS_ITEMS } from '@/components/AnalysisHub/AnalysisHub';
+import AnalysisHub from '@/components/AnalysisHub/AnalysisHub';
 import InsightsPanel from '@/components/InsightsPanel/InsightsPanel';
 import FilterPanel from '@/components/ProcessMap/FilterPanel';
 import ComplexityScoreBadge from '@/components/ProcessMap/ComplexityScoreBadge';
+import AnalysisDropdown from '@/components/ProcessMap/AnalysisDropdown';
+import { algorithmOptions, detailLevels, type Algorithm } from '@/components/ProcessMap/mapControlsConfig';
+import { useProcessFilters } from '@/hooks/useProcessFilters';
 import { mining as miningApi, ai as aiApi } from '@/api/client';
 import { useUIStore } from '@/store';
 import { formatDuration } from '@/utils/format';
 import type { ProcessFilter } from '@/types';
 
 type Tab = 'map' | 'happy_path' | 'bpmn' | 'cases' | 'analysis';
-type Algorithm = 'dfg' | 'alpha' | 'heuristic' | 'inductive' | 'split_miner';
-
-// ``help`` is a short "when to use this" hint surfaced as the button
-// tooltip so users aren't left guessing which discovery algorithm fits
-// their question (finding #15: spaghetti guidance).
-const algorithmOptions: { value: Algorithm; label: string; short: string; help: string }[] = [
-  {
-    value: 'dfg',
-    label: 'Directly-Follows Graph',
-    short: 'DFG',
-    help: 'DFG — fastest, most literal. Shows every observed hand-off as a frequency/performance graph. Best for a first look and for spotting the busiest paths, but can look like spaghetti on noisy logs.',
-  },
-  {
-    value: 'alpha',
-    label: 'Alpha Miner',
-    short: 'Alpha',
-    help: 'Alpha Miner — classic Petri-net discovery. Good for clean, well-structured logs; struggles with noise, loops, and short cases.',
-  },
-  {
-    value: 'heuristic',
-    label: 'Heuristic Miner',
-    short: 'Heuristic',
-    help: 'Heuristic Miner — frequency-based with a noise filter. Use the Noise slider to drop rare edges and tame a spaghetti DFG while keeping the dominant behaviour.',
-  },
-  {
-    value: 'inductive',
-    label: 'Inductive Miner',
-    short: 'Inductive',
-    help: 'Inductive Miner — always returns a sound, block-structured model. Use the Noise slider to control how much infrequent behaviour is filtered. Best when you need a guaranteed-replayable model.',
-  },
-  {
-    value: 'split_miner',
-    label: 'Split Miner',
-    short: 'Split',
-    help: 'Split Miner — modern algorithm balancing fitness and precision with clean gateways. A strong default for a readable BPMN-like model on real-world logs.',
-  },
-];
-
-const detailLevels = [
-  { label: 'Simple', value: 20 },
-  { label: 'Low', value: 40 },
-  { label: 'Medium', value: 60 },
-  { label: 'High', value: 80 },
-  { label: 'Full', value: 100 },
-];
-
-// Use LucideIcon type directly from the imports
-import type { LucideIcon } from 'lucide-react';
-
-type AnalysisItem = {
-  label: string;
-  description: string;
-  icon: LucideIcon;
-  path: string;
-};
-
-type AnalysisGroup = {
-  label: string;
-  items: AnalysisItem[];
-};
-
-const analysisGroups: AnalysisGroup[] = [
-  {
-    label: 'Performance',
-    items: [
-      { label: 'Bottlenecks', description: 'Slowest activities & queues', icon: AlertTriangle, path: 'bottlenecks' },
-      { label: 'Concept Drift', description: 'Detect process behavioural shifts', icon: TrendingUp, path: 'drift' },
-      { label: 'Rework', description: 'Repeated activities per case', icon: Repeat, path: 'rework' },
-      { label: 'Root Cause', description: 'Attributes driving slow cases', icon: Search, path: 'root-cause' },
-    ],
-  },
-  {
-    label: 'Behavior',
-    items: [
-      { label: 'Variants', description: 'Unique process paths', icon: GitBranch, path: 'variants' },
-      { label: 'Conformance', description: 'Fitness & precision checks', icon: CheckCircle2, path: 'conformance' },
-      { label: 'Dotted Chart', description: 'Events plotted over time', icon: ScatterChart, path: 'dotted-chart' },
-    ],
-  },
-  {
-    label: 'Organization',
-    items: [
-      { label: 'Social Network', description: 'Resource handover graph', icon: Network, path: 'social-network' },
-    ],
-  },
-  {
-    label: 'Operations',
-    items: [
-      { label: 'Simulate', description: 'What-if modifications', icon: FlaskConical, path: 'simulate' },
-      { label: 'Animation', description: 'Replay cases on the map', icon: Film, path: 'animation' },
-      { label: 'Compare', description: 'Diff two time periods', icon: GitCompareArrows, path: 'comparison' },
-      { label: 'Sustainability', description: 'CO₂ & ESG footprint', icon: Leaf, path: 'sustainability' },
-    ],
-  },
-];
-
-// Merge two ProcessFilters into one (sidebar state + chip-derived
-// filter). Lists are unioned, scalar bounds take the *tighter* value,
-// and attribute filters are combined per-column. Used so the universal
-// filter chips and the sidebar FilterPanel both scope the map without
-// one clobbering the other (finding #13).
-function mergeProcessFilters(a: ProcessFilter, b: ProcessFilter): ProcessFilter {
-  const out: ProcessFilter = {};
-  const unionList = (x?: string[], y?: string[]): string[] | undefined => {
-    const set = new Set<string>([...(x ?? []), ...(y ?? [])]);
-    return set.size ? Array.from(set) : undefined;
-  };
-  const unionEdges = (
-    x?: Array<[string, string]>,
-    y?: Array<[string, string]>,
-  ): Array<[string, string]> | undefined => {
-    const seen = new Set<string>();
-    const merged: Array<[string, string]> = [];
-    for (const [s, t] of [...(x ?? []), ...(y ?? [])]) {
-      const key = `${s}->${t}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        merged.push([s, t]);
-      }
-    }
-    return merged.length ? merged : undefined;
-  };
-
-  out.activities_include = unionList(a.activities_include, b.activities_include);
-  out.activities_exclude = unionList(a.activities_exclude, b.activities_exclude);
-  out.start_activities = unionList(a.start_activities, b.start_activities);
-  out.end_activities = unionList(a.end_activities, b.end_activities);
-  out.required_edges = unionEdges(a.required_edges, b.required_edges);
-  out.forbidden_edges = unionEdges(a.forbidden_edges, b.forbidden_edges);
-
-  const variants = Array.from(new Set([...(a.variants ?? []), ...(b.variants ?? [])]));
-  if (variants.length) out.variants = variants;
-
-  // Scalar bounds: take the more restrictive (max of mins, min of maxes).
-  const mins = [a.duration_min, b.duration_min].filter((v): v is number => v != null);
-  if (mins.length) out.duration_min = Math.max(...mins);
-  const maxs = [a.duration_max, b.duration_max].filter((v): v is number => v != null);
-  if (maxs.length) out.duration_max = Math.min(...maxs);
-
-  out.time_start = a.time_start ?? b.time_start;
-  out.time_end = a.time_end ?? b.time_end;
-
-  // Attribute filters — combine per column, unioning values. (We use a
-  // plain record rather than a Map because `Map` is shadowed by the
-  // lucide-react icon import in this module.)
-  const byColumn: Record<string, { column: string; values: string[]; exclude?: boolean }> = {};
-  for (const attr of [...(a.attributes ?? []), ...(b.attributes ?? [])]) {
-    const existing = byColumn[attr.column];
-    if (existing) {
-      existing.values = Array.from(new Set([...existing.values, ...attr.values]));
-      if (attr.exclude) existing.exclude = true;
-    } else {
-      byColumn[attr.column] = { ...attr, values: [...attr.values] };
-    }
-  }
-  const columns = Object.values(byColumn);
-  if (columns.length) out.attributes = columns;
-
-  // Strip undefined keys so Object.keys()-based "has filters" checks
-  // stay accurate.
-  (Object.keys(out) as Array<keyof ProcessFilter>).forEach((k) => {
-    if (out[k] === undefined) delete out[k];
-  });
-  return out;
-}
-
-/* ── Deep Analyses dropdown ───────────────────────────────────────────── */
-
-interface AnalysisDropdownProps {
-  eventLogId: string;
-}
-
-function AnalysisDropdown({ eventLogId }: AnalysisDropdownProps) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className={clsx(
-          'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-semibold transition-all duration-100',
-          open
-            ? 'bg-accent/10 text-accent'
-            : 'btn-secondary',
-        )}
-      >
-        <BarChart3 size={13} />
-        Deep analyses
-        <ChevronDown size={11} className={clsx('transition-transform duration-150', open && 'rotate-180')} />
-      </button>
-      {open && (
-        <div
-          className="absolute right-0 top-full mt-2 w-[780px] max-w-[calc(100vw-2rem)] animate-fade-in rounded-xl border border-line bg-surface-2 p-3 z-50"
-          style={{ boxShadow: 'var(--shadow-lg)' }}
-        >
-          <div className="grid grid-cols-3 gap-3">
-            {/* Left two-thirds: standalone analyses */}
-            <div className="col-span-2">
-              <p className="px-1 pb-2 text-[10px] font-bold uppercase tracking-widest text-fg-faint">
-                Standalone analyses
-              </p>
-              <div className="grid grid-cols-2 gap-3">
-                {analysisGroups.map((group) => (
-                  <div key={group.label}>
-                    <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg-muted">
-                      {group.label}
-                    </p>
-                    <div className="space-y-0.5">
-                      {group.items.map((item) => (
-                        <Link
-                          key={item.path}
-                          to={`/${item.path}/${eventLogId}`}
-                          onClick={() => setOpen(false)}
-                          className="flex items-start gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-tint"
-                        >
-                          <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent/10">
-                            <item.icon size={12} className="text-accent" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[12px] font-semibold text-fg leading-tight">{item.label}</p>
-                            <p className="mt-0.5 text-[11px] text-fg-muted leading-tight">{item.description}</p>
-                          </div>
-                        </Link>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Right third: AnalysisHub subviews */}
-            <div className="border-l border-line pl-3">
-              <p className="px-1 pb-2 text-[10px] font-bold uppercase tracking-widest text-fg-faint">
-                In Analysis Hub
-              </p>
-              <div className="max-h-[420px] overflow-y-auto space-y-0.5">
-                {ANALYSIS_ITEMS.map((item) => (
-                  <Link
-                    key={item.id}
-                    to={`/process/${eventLogId}?tab=analysis&analysis=${item.id}`}
-                    onClick={() => setOpen(false)}
-                    className="flex items-start gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-tint"
-                  >
-                    <item.icon size={12} className="mt-0.5 shrink-0 text-fg-faint" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[11px] font-medium text-fg leading-tight">{item.label}</p>
-                      <p className="mt-0.5 text-[10px] text-fg-faint leading-tight line-clamp-1">
-                        {item.description}
-                      </p>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 /* ── Page ─────────────────────────────────────────────────────────────── */
 
@@ -346,26 +69,11 @@ export default function ProcessViewPage() {
   // Finding #13 — unify the filter systems. The chip bar / DSL bar
   // write to the shared filterStore (which drives the analysis tabs),
   // while the sidebar FilterPanel drives the map via local ``filters``.
-  // We project the active chips into a ProcessFilter and merge them
-  // with the sidebar state, so the universal chips now scope the *map*
-  // too — closing the silent inconsistency where chips moved the
-  // analysis tabs but left the map untouched.
-  const chips = useFilterStore((s) => s.chips);
-  const chipDisabled = useFilterStore((s) => s.disabled);
-  const toProcessFilter = useFilterStore((s) => s.toProcessFilter);
-  const chipFilter = useMemo(
-    () => toProcessFilter(),
-    // Recompute whenever the active chip set changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chips, chipDisabled, toProcessFilter],
-  );
-
-  const mergedFilters = useMemo(
-    () => mergeProcessFilters(filters, chipFilter),
-    [filters, chipFilter],
-  );
-  const stableFilters = useMemo(() => mergedFilters, [JSON.stringify(mergedFilters)]);
-  const hasFilters = Object.keys(mergedFilters).length > 0;
+  // ``useProcessFilters`` projects the active chips into a ProcessFilter,
+  // merges them with the sidebar state (so the universal chips now scope
+  // the *map* too), and reflects panel-originated facets back into the
+  // shared store so the analysis tabs stay in sync.
+  const { stableFilters, hasFilters } = useProcessFilters(filters);
   // Only send threshold param when it's non-zero and algorithm supports it
   const supportsNoise = algorithm === 'inductive' || algorithm === 'heuristic';
   const stableParams = useMemo(
@@ -422,62 +130,9 @@ export default function ProcessViewPage() {
   const [contextMenu, setContextMenu] = useState<{ node: ProcessNode; x: number; y: number } | null>(null);
   const [treemapActivity, setTreemapActivity] = useState<string | null>(null);
   const addChip = useFilterStore((s) => s.addChip);
-  const removeChip = useFilterStore((s) => s.removeChip);
   useFilterUrlSync(eventLogId);
 
   const cyRef = useRef<Core | null>(null);
-
-  // Finding #13 — reflect the sidebar FilterPanel's state into the
-  // shared filterStore so the analysis tabs see the same scope the map
-  // does. We tag panel-originated chips with ``__source: 'panel'`` and
-  // reconcile them whenever the sidebar (or edge-modal) ``filters``
-  // change: drop the stale panel chips and re-derive fresh ones. Chips
-  // added by other surfaces (map clicks, DSL bar) are left untouched.
-  // The merge into the map is a set-union, so a facet living in both
-  // ``filters`` and a panel chip never double-counts.
-  useEffect(() => {
-    const stalePanelChipIds = useFilterStore
-      .getState()
-      .chips.filter((c) => c.payload.__source === 'panel')
-      .map((c) => c.id);
-    stalePanelChipIds.forEach((id) => removeChip(id));
-
-    const tag = { __source: 'panel' as const };
-    for (const act of filters.activities_include ?? []) {
-      addChip({ type: 'activity', label: `activity: ${act}`, payload: { activity: act, ...tag } });
-    }
-    for (const act of filters.activities_exclude ?? []) {
-      addChip({ type: 'activity_exclude', label: `exclude: ${act}`, payload: { activity: act, ...tag } });
-    }
-    for (const [s, t] of filters.required_edges ?? []) {
-      addChip({ type: 'edge', label: `edge: ${s} → ${t}`, payload: { source: s, target: t, ...tag } });
-    }
-    if (filters.duration_min != null || filters.duration_max != null) {
-      addChip({
-        type: 'duration_range',
-        label: `duration: ${filters.duration_min ?? '0'}–${filters.duration_max ?? '∞'}s`,
-        payload: { min: filters.duration_min ?? null, max: filters.duration_max ?? null, ...tag },
-      });
-    }
-    if (filters.time_start || filters.time_end) {
-      addChip({
-        type: 'time_range',
-        label: `time: ${filters.time_start ?? '…'} – ${filters.time_end ?? '…'}`,
-        payload: { start: filters.time_start ?? null, end: filters.time_end ?? null, ...tag },
-      });
-    }
-    for (const attr of filters.attributes ?? []) {
-      for (const v of attr.values) {
-        addChip({
-          type: 'attribute_value',
-          label: `${attr.column}: ${v}`,
-          payload: { attribute: attr.column, value: v, ...tag },
-        });
-      }
-    }
-    // Only re-run when the sidebar/edge-modal filter object changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(filters)]);
 
   const handleAlgorithmChange = (algo: Algorithm) => {
     setAlgorithm(algo);
