@@ -5,8 +5,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request as StarletteRequest
 
 from app.config import settings
 from app.database import init_db
@@ -14,6 +12,8 @@ from app.services.infra.audit import AuditLogMiddleware
 from app.services.infra.logging_setup import configure_logging, init_sentry, request_id_ctx
 from app.services.infra.rate_limit import limiter, rate_limit_handler
 from app.services.infra.request_id import RequestIDMiddleware
+from app.middleware.demo_guard import DemoWriteGuardMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
@@ -116,200 +116,6 @@ async def _unhandled_exception_handler(request: Request, exc: Exception):
         content={"detail": detail, "request_id": rid},
         headers={"X-Request-ID": rid},
     )
-
-
-class DemoWriteGuardMiddleware:
-    """Block file uploads and destructive mutations for the demo user.
-
-    Only armed when ``settings.DEMO_MODE`` is true. Uses a blocklist
-    approach: everything is allowed EXCEPT the specific endpoints that
-    create/delete data (upload, project CRUD, settings, user mgmt).
-    This avoids the whack-a-mole of maintaining an allowlist every
-    time a new analytics endpoint is added.
-
-    Pure ASGI (not BaseHTTPMiddleware) to avoid buffering streaming
-    responses from endpoints like ``/api/v1/ai/chat``.
-    """
-
-    # Only block PUT/PATCH/DELETE unconditionally + POST on specific paths.
-    # Most POST endpoints are read-only analytics queries with request bodies.
-    _ALWAYS_BLOCKED_METHODS = {"PUT", "PATCH", "DELETE"}
-
-    # POST requests to these prefixes are blocked for the demo user.
-    # Everything else (mining, AI, competitive, OCEL, analytics, etc.)
-    # is allowed through.
-    _BLOCKED_POST_PREFIXES = (
-        "/api/v1/event-logs/upload",
-        "/api/v1/event-logs/ingest",
-        "/api/v1/projects",
-        "/api/v1/admin/",
-        "/api/v1/settings",
-        "/api/v1/users",
-        "/api/v1/teams",
-        "/api/v1/api-keys",
-        "/api/v1/connectors",
-        "/api/v1/scheduled-reports",
-        "/api/v1/privacy",
-    )
-
-    def __init__(self, app) -> None:
-        self.app = app
-        # The demo user's UUID is resolved lazily on first request so
-        # this middleware can be instantiated before the seeder runs.
-        self._demo_user_id: str | None = None
-
-    async def _resolve_demo_user_id(self) -> str | None:
-        if self._demo_user_id is not None:
-            return self._demo_user_id
-        try:
-            from app.database import async_session
-            from app.models import User
-            from sqlalchemy import select
-
-            async with async_session() as session:
-                result = await session.execute(
-                    select(User.id).where(User.email == settings.DEMO_USER_EMAIL)
-                )
-                row = result.first()
-                if row is None:
-                    return None
-                self._demo_user_id = str(row[0])
-                return self._demo_user_id
-        except Exception:
-            logger.exception("demo guard: failed to resolve demo user id")
-            return None
-
-    async def __call__(self, scope, receive, send) -> None:
-        if scope["type"] != "http" or not settings.DEMO_MODE:
-            await self.app(scope, receive, send)
-            return
-
-        method = scope.get("method", "").upper()
-        if method == "GET":
-            await self.app(scope, receive, send)
-            return
-
-        path = scope.get("path", "")
-
-        # PUT/PATCH/DELETE are always blocked for the demo user.
-        # POST is only blocked on specific write-heavy endpoints.
-        if method == "POST":
-            is_blocked = any(path.startswith(p) for p in self._BLOCKED_POST_PREFIXES)
-            if not is_blocked:
-                await self.app(scope, receive, send)
-                return
-        elif method not in self._ALWAYS_BLOCKED_METHODS:
-            await self.app(scope, receive, send)
-            return
-
-        # Decode the bearer token from headers. We tolerate missing /
-        # malformed tokens by just passing through — the route's own
-        # auth dependency will reject the request normally.
-        auth_header = ""
-        for name, value in scope.get("headers", []):
-            if name == b"authorization":
-                auth_header = value.decode("latin-1", errors="ignore")
-                break
-        if not auth_header.lower().startswith("bearer "):
-            await self.app(scope, receive, send)
-            return
-
-        token = auth_header.split(None, 1)[1].strip()
-        try:
-            from jose import jwt, JWTError
-            payload = jwt.decode(
-                token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
-            )
-            sub = str(payload.get("sub") or "")
-        except Exception:
-            # Token couldn't be decoded — let the route reject it.
-            await self.app(scope, receive, send)
-            return
-
-        if not sub:
-            await self.app(scope, receive, send)
-            return
-
-        demo_user_id = await self._resolve_demo_user_id()
-        if demo_user_id is None or sub != demo_user_id:
-            await self.app(scope, receive, send)
-            return
-
-        # It's the demo user hitting an unsafe non-allowlisted endpoint.
-        import json as _json
-
-        body = _json.dumps(
-            {
-                "detail": (
-                    "Demo sessions are read-only. Self-host FlowMiner "
-                    "to upload logs, create projects, or change settings — "
-                    "see https://github.com/flowminer/flowminer."
-                ),
-                "demo_mode": True,
-            }
-        ).encode("utf-8")
-
-        await send(
-            {
-                "type": "http.response.start",
-                "status": 403,
-                "headers": [
-                    (b"content-type", b"application/json"),
-                    (b"content-length", str(len(body)).encode()),
-                ],
-            }
-        )
-        await send({"type": "http.response.body", "body": body})
-
-
-class SecurityHeadersMiddleware:
-    """Adds standard security headers to every HTTP response.
-
-    Implemented as pure ASGI middleware (not ``BaseHTTPMiddleware``)
-    because the latter buffers streaming response bodies, breaking
-    ``StreamingResponse`` endpoints like ``/api/v1/ai/chat``.
-    """
-
-    def __init__(self, app) -> None:
-        self.app = app
-
-    async def __call__(self, scope, receive, send) -> None:
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        async def send_wrapper(message):
-            if message["type"] == "http.response.start":
-                from starlette.datastructures import MutableHeaders
-                headers = MutableHeaders(scope=message)
-                headers["X-Content-Type-Options"] = "nosniff"
-                headers["X-Frame-Options"] = "DENY"
-                headers["X-XSS-Protection"] = "1; mode=block"
-                headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-                headers["Permissions-Policy"] = (
-                    "geolocation=(), microphone=(), camera=(), payment=()"
-                )
-                # HSTS only in production — we don't want to pin a dev
-                # hostname to HTTPS during local Docker testing.
-                if settings.ENV.lower() == "production":
-                    headers["Strict-Transport-Security"] = (
-                        "max-age=31536000; includeSubDomains; preload"
-                    )
-                # CSP — conservative defaults for the API host. The SPA
-                # serves its own CSP via nginx; this protects the docs
-                # page and any directly-served HTML (e.g. /docs).
-                headers["Content-Security-Policy"] = (
-                    "default-src 'self'; "
-                    "script-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
-                    "style-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
-                    "img-src 'self' data: https:; "
-                    "font-src 'self' data: cdn.jsdelivr.net; "
-                    "connect-src 'self'; "
-                    "frame-ancestors 'none';"
-                )
-            await send(message)
-
-        await self.app(scope, receive, send_wrapper)
 
 
 app.add_middleware(SecurityHeadersMiddleware)
