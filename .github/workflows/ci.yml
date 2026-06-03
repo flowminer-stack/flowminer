@@ -136,6 +136,11 @@ jobs:
         with:
           context: ./backend
           file: ./backend/Dockerfile
+          # backend/Dockerfile's `COPY --from=examples` needs this named
+          # build context (resolved from the repo root, like release.yml).
+          # Without it the build errors on an undefined context.
+          build-contexts: |
+            examples=./docs/examples
           push: false
           load: true
           tags: flowminer-backend:ci

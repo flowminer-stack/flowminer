@@ -1,0 +1,25 @@
+# Demo-only Compose override for demo.flowminer.io.
+#
+# On the demo VPS, Caddy runs on the HOST (systemd-managed
+# /etc/caddy/Caddyfile) and reverse-proxies to the SPA and backend over
+# the host loopback. The base docker-compose.yml only `expose`s those
+# ports on the internal Docker network (for Dokploy/Traefik), so without
+# this override Caddy gets connection-refused on 127.0.0.1:3000 / :8000.
+#
+# This publishes them on the LOOPBACK INTERFACE ONLY (127.0.0.1) — never
+# on a public interface. Caddy alone terminates TLS and faces the
+# internet on :80/:443; the containers stay private.
+#
+# The base docker-compose.yml MUST remain ports-free (Dokploy/Traefik
+# routes over the internal network). This override is ONLY for the
+# standalone demo host. Activate with:
+#
+#     docker compose -f docker-compose.yml -f deploy/demo/docker-compose.demo.yml up -d
+#
+services:
+  frontend:
+    ports:
+      - "127.0.0.1:3000:80"
+  backend:
+    ports:
+      - "127.0.0.1:8000:8000"

@@ -1,0 +1,15 @@
+# Virtual uv workspace root (not a package itself).
+#
+# Declares the repo's standalone Python packages as workspace members so the
+# capture agent can depend on the local SDK (distribution `flowminer-sdk`,
+# import name `flowminer`) WITHOUT it being published to PyPI — which is what
+# the bare `flowminer` line in tools/capture_agent used to (wrongly) require.
+#
+# The BACKEND is intentionally NOT a member: it ships via
+# backend/requirements.txt + backend/Dockerfile and is unaffected by this file.
+#
+#     uv sync     # resolve + install all workspace members into one venv
+#     uv lock     # resolve the dependency graph (no install)
+#
+[tool.uv.workspace]
+members = ["sdk", "tools/capture_agent"]

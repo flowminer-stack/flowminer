@@ -23,8 +23,8 @@ demo.flowminer.io {
 	}
 
 	# Backend API — proxied to the uvicorn container on the
-	# Docker host's loopback port 8000 (published by
-	# docker-compose.yml). WebSocket and SSE streams both flow
+	# Docker host's loopback port 8000 (published on 127.0.0.1 by
+	# deploy/demo/docker-compose.demo.yml). WebSocket and SSE streams both flow
 	# through here; Caddy auto-detects and keeps the connection
 	# open for /api/v1/ai/chat.
 	handle_path /api/* {

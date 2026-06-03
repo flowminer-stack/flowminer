@@ -1,12 +1,17 @@
-# FlowMiner capture agent — optional capture-backend dependencies
+# FlowMiner capture agent — OPTIONAL platform capture-backend dependencies.
 #
-# The agent.py script imports all of these lazily; none of them are required
-# for the script to parse or for --help to work.  Install only the packages
-# that apply to your platform.
+# Core deps (the FlowMiner SDK + httpx) live in pyproject.toml and resolve
+# from the local workspace — there is NO PyPI package named "flowminer".
+# Install the core + your platform backend with uv:
 #
-# ── Core (required on all platforms) ────────────────────────────────────────
-flowminer          # the FlowMiner SDK (provides the Client class)
-httpx>=0.27        # transitive dep of the SDK; listed here for clarity
+#     uv sync --extra linux        # (or --extra macos / --extra windows)
+#
+# or with plain pip from the repo root:
+#
+#     pip install ./sdk && pip install ./tools/capture_agent
+#
+# The platform backends below are imported lazily by agent.py; install only
+# the one(s) for your OS (equivalently, use the matching pyproject extra).
 
 # ── Windows ──────────────────────────────────────────────────────────────────
 # Uncomment the line(s) for your preferred Windows backend:

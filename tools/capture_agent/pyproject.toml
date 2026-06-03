@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flowminer-capture-agent"
+version = "0.1.0"
+description = "FlowMiner task-mining capture agent — polls the active window and streams events to a FlowMiner instance via the SDK"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "flowminer-sdk",   # the FlowMiner SDK (Client class); resolved from the workspace, see [tool.uv.sources]
+    "httpx>=0.27",
+]
+
+# Platform-specific active-window backends. agent.py imports these lazily, so
+# install only the group(s) for your OS, e.g. `uv sync --extra linux`.
+[project.optional-dependencies]
+windows = ["pygetwindow>=0.0.9"]
+macos = ["pyobjc-framework-Cocoa>=10.0", "pyobjc-framework-Quartz>=10.0"]
+linux = ["ewmh>=0.1.6", "python-xlib>=0.33"]
+
+# Resolve the SDK from the sibling workspace member rather than PyPI.
+[tool.uv.sources]
+flowminer-sdk = { workspace = true }
+
+[tool.setuptools]
+py-modules = ["agent"]

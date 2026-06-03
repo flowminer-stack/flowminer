@@ -16,9 +16,12 @@ on a dedicated VPS. The demo is a full FlowMiner instance with:
 - **Ask AI** backed by a project-owned **OpenRouter** key, so the
   chat panel works with no credentials.
 
-None of this changes the normal self-host path: the demo is a single
-env flag — `DEMO_MODE=1` in `.env` — on top of the stock
-`docker-compose.yml`. No compose override, no extra files.
+None of this changes the normal self-host path: the demo behaviour is a
+single env flag — `DEMO_MODE=1` in `.env`. The only extra piece is a tiny
+Compose override (`deploy/demo/docker-compose.demo.yml`) that publishes the
+SPA + API on the host loopback so the host-side Caddy can reach them; the
+base `docker-compose.yml` everyone else uses stays ports-free for
+Dokploy/Traefik.
 
 ## Server sizing
 
@@ -86,10 +89,11 @@ turn goes through Haiku 4.5.
 
 ## 3 · First run
 
-Launch the stack:
+Launch the stack (the demo override publishes the SPA + API on the host
+loopback so Caddy can reach them; the base compose alone is ports-free):
 
 ```bash
-docker compose up -d --build
+docker compose -f docker-compose.yml -f deploy/demo/docker-compose.demo.yml up -d --build
 ```
 
 Watch the backend logs and wait for the seeder to finish:
@@ -206,8 +210,10 @@ deployments.
 |---|---|
 | `README.md` | This doc. |
 | `Caddyfile` | Reverse-proxy config for Caddy — TLS + HTTP/2 + the demo hostname. |
-| `flowminer-demo.service` | Systemd unit that runs `docker compose up` on boot. |
+| `docker-compose.demo.yml` | Loopback port-publish override so the host-side Caddy can reach the SPA + API. Layered on top of the base compose. |
+| `flowminer-demo.service` | Systemd unit that runs the compose stack (base + demo override) on boot. |
 
-Demo behaviour is purely runtime — flip `DEMO_MODE=1` in `.env`
-and the same `docker-compose.yml` everyone else uses turns into
-the locked-down public demo.
+Demo behaviour is mostly runtime — flip `DEMO_MODE=1` in `.env`. The only
+structural addition is the small loopback Compose override above, needed so
+the host-side Caddy can reach the containers; the base `docker-compose.yml`
+everyone else uses stays ports-free for Dokploy/Traefik.
