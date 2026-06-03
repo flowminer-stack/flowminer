@@ -36,7 +36,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user
-from app.api.mining import _assert_event_log_access, _load_event_log_and_df
+from app.api._mining_deps import _assert_event_log_access, _load_event_log_and_df
 from app.database import get_db
 from app.models import User
 from app.services.ai import llm
@@ -95,7 +95,7 @@ async def _build_ocel_context(event_log_id: UUID, db: AsyncSession, user: User) 
     compact text context the LLM can read. Falls back to a minimal
     summary block if the report isn't cached yet.
     """
-    from app.api.mining import _assert_event_log_access
+    from app.api._mining_deps import _assert_event_log_access
     from app.services.infra.result_cache import cache_get
 
     # Authorization — same check the mining endpoints apply.
@@ -583,7 +583,7 @@ async def ai_chat_suggestions(
     """
     await _assert_event_log_access(event_log_id, db, current_user)
 
-    from app.api.mining import _get_cached, _set_cached
+    from app.api._mining_deps import _get_cached, _set_cached
     from app.services.infra.result_cache import cache_get as _raw_cache_get
     import hashlib as _hashlib
 

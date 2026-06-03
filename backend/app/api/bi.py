@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user
-from app.api.mining import (
+from app.api._mining_deps import (
     _assert_event_log_access,
     _load_event_log_and_df,
 )

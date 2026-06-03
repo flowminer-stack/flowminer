@@ -235,7 +235,7 @@ def _ingest_ocel_stats(file_path: str) -> dict:
     record can land as ``ready``."""
     try:
         import pm4py
-        from app.api.ocel import _read_ocel, _ocel_store
+        from app.services.ocel_store import _read_ocel, _ocel_store
     except ImportError as e:
         logger.error("demo seeder: OCEL parsing unavailable — %s", e)
         return {
@@ -306,7 +306,7 @@ async def seed_demo_data(db: AsyncSession) -> None:
 
     # Lazy import so the call chain stays cheap when demo mode is off.
     try:
-        from app.api.ocel import _ocel_store
+        from app.services.ocel_store import _ocel_store
     except ImportError:
         _ocel_store = {}  # type: ignore
 
@@ -447,7 +447,7 @@ async def purge_demo_data(db: AsyncSession) -> None:
     # into the in-memory store. Failing silently is fine — the store is
     # rebuilt by the next seed pass.
     try:
-        from app.api.ocel import _ocel_store
+        from app.services.ocel_store import _ocel_store
         _ocel_store.clear()
     except Exception:
         pass

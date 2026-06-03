@@ -305,7 +305,7 @@ async def cross_link_patterns_to_process(
     from difflib import SequenceMatcher
     from app.models import EventLog
     from app.services.ingestion import ACTIVITY_COL
-    from app.api.mining import _load_event_log_and_df, _assert_event_log_access
+    from app.api._mining_deps import _load_event_log_and_df, _assert_event_log_access
 
     await assert_project_access(body.project_id, db, current_user)
     await _assert_event_log_access(body.event_log_id, db, current_user)

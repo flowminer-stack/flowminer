@@ -266,7 +266,7 @@ def _parse_uuid(raw: Any) -> UUID:
 async def _load_df(event_log_id: UUID):
     """Load the (event_log, df) pair using the same guarded path the
     REST API uses. Raises if the user can't access the log."""
-    from app.api.mining import _load_event_log_and_df
+    from app.api._mining_deps import _load_event_log_and_df
     from app.database import async_session
 
     async with async_session() as db:

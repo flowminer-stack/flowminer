@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user
-from app.api.mining import _assert_event_log_access, _load_event_log_and_df, _run_in_thread
+from app.api._mining_deps import _assert_event_log_access, _load_event_log_and_df, _run_in_thread
 from app.database import get_db
 from app.models import User
 from app.services.mining_engine import mining_engine

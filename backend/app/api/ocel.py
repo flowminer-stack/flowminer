@@ -67,109 +67,21 @@ def _ocel_cache_set(ocel_id: str, kind: str, value: dict, params: dict | None = 
     _raw_cache_set(ocel_id, kind, value, _ocel_params_hash(params))
 
 # ---------------------------------------------------------------------------
-# In-memory store: ocel_id -> pm4py OCEL object
-# Bounded to avoid unbounded memory growth (OCEL objects can be large).
+# In-memory OCEL store + file readers live in the services layer so they can
+# be shared process-wide as a single singleton. Imported here (never
+# re-instantiated) and used by the endpoints below.
 # ---------------------------------------------------------------------------
-class _BoundedOcelStore:
-    """Simple LRU-ish bounded store for OCEL objects (maxsize=50)."""
-    def __init__(self, maxsize: int = 50):
-        self._data: dict = {}
-        self._maxsize = maxsize
-
-    def __setitem__(self, key, value):
-        if len(self._data) >= self._maxsize:
-            # Remove oldest 20% of entries
-            keys_to_remove = list(self._data.keys())[:max(1, self._maxsize // 5)]
-            for k in keys_to_remove:
-                del self._data[k]
-        self._data[key] = value
-
-    def get(self, key, default=None):
-        return self._data.get(key, default)
-
-    def __contains__(self, key):
-        return key in self._data
-
-
-_ocel_store = _BoundedOcelStore(maxsize=50)
-
-
-# Per-ocel_id locks so that when multiple threadpool requests miss the
-# in-memory store at the same time (the panel-loading thundering herd
-# on the first OCPM page visit) only ONE thread re-parses the file from
-# disk; the rest wait and reuse the resulting OCEL object.
-import threading as _threading
-_ocel_load_locks: dict[str, _threading.Lock] = {}
-_ocel_load_locks_guard = _threading.Lock()
-
-
-def _get_ocel_load_lock(ocel_id: str) -> _threading.Lock:
-    with _ocel_load_locks_guard:
-        lock = _ocel_load_locks.get(ocel_id)
-        if lock is None:
-            lock = _threading.Lock()
-            _ocel_load_locks[ocel_id] = lock
-        return lock
-
-# Allowed OCEL file extensions and the pm4py reader to use
-_OCEL_EXTENSIONS = {".jsonocel", ".xmlocel", ".sqlite", ".json", ".xml"}
-
-
-def _read_ocel(file_path: str):
-    """
-    Read an OCEL file from disk using the appropriate pm4py reader based on
-    its extension.  Raises ValueError for unsupported extensions.
-    """
-    import pm4py
-
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext not in _OCEL_EXTENSIONS:
-        raise ValueError(
-            f"Unsupported OCEL file extension: {ext}. "
-            f"Supported: {', '.join(sorted(_OCEL_EXTENSIONS))}"
-        )
-
-    # Try the OCEL 2.0 reader first; fall back to format-specific OCEL 1.0
-    # readers for .json/.xml so legacy files work too.
-    try:
-        return pm4py.read_ocel2(file_path)
-    except Exception as ocel2_err:
-        logger.debug("read_ocel2 failed (%s), trying format-specific reader", ocel2_err)
-
-    if ext in (".json", ".jsonocel"):
-        return pm4py.read_ocel_json(file_path)
-    if ext in (".xml", ".xmlocel"):
-        return pm4py.read_ocel_xml(file_path)
-
-    # SQLite only supported via read_ocel2; if that failed above, re-raise
-    raise ValueError(
-        f"Could not read OCEL file '{os.path.basename(file_path)}': "
-        "file may be corrupted or in an unsupported format."
-    )
-
-
-def _ocel_counts(ocel) -> tuple[int, int]:
-    """Return (event_count, object_count) for an OCEL object."""
-    import pm4py
-
-    try:
-        event_count = len(ocel.get_extended_table())
-    except Exception:
-        try:
-            event_count = len(ocel.events)
-        except Exception:
-            event_count = 0
-
-    try:
-        summary = pm4py.ocel_objects_summary(ocel)
-        object_count = len(summary)
-    except Exception:
-        try:
-            object_count = len(ocel.objects)
-        except Exception:
-            object_count = 0
-
-    return event_count, object_count
+from app.services.ocel_store import (
+    _OCEL_EXTENSIONS,
+    _BoundedOcelStore,  # noqa: F401  (kept importable for backward references)
+    _get_ocel_load_lock,
+    _ocel_counts,
+    _ocel_load_locks,  # noqa: F401
+    _ocel_load_locks_guard,  # noqa: F401
+    _ocel_owners,
+    _ocel_store,
+    _read_ocel,
+)
 
 
 def _sanitize_id(name: str) -> str:
@@ -470,12 +382,6 @@ async def _assert_ocel_access(ocel_id: str, db, user) -> None:
     if user.role == UserRole.admin or owner_id == user.id:
         return
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OCEL not found")
-
-
-# Ownership map for OCELs created via ``convert_log_to_ocel`` (synthetic
-# UUIDs that don't correspond to an EventLog row). Populated in the
-# convert endpoint and consulted from ``_assert_ocel_access``.
-_ocel_owners: dict[str, UUID] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -2299,7 +2205,7 @@ async def get_ocpm_improvement_report(
     import pandas as pd
     import pm4py
 
-    from app.api.mining import _get_cached, _set_cached
+    from app.api._mining_deps import _get_cached, _set_cached
     from app.services.mining_engine import mining_engine
 
     await _assert_ocel_access(ocel_id, db, current_user)
@@ -2760,7 +2666,7 @@ async def narrate_improvement_report(
     endpoints so Redis invalidation (on log edit, re-upload, etc.)
     already drops both the report and its narrative together.
     """
-    from app.api.mining import _get_cached, _set_cached
+    from app.api._mining_deps import _get_cached, _set_cached
     from app.services.ai import llm as llm_service
 
     await _assert_ocel_access(ocel_id, db, current_user)
@@ -2853,7 +2759,7 @@ async def explain_improvement_finding(
     Not cached — users only call this on demand and the input is the
     finding itself, so there's nothing stable to key on.
     """
-    from app.api.mining import _get_cached
+    from app.api._mining_deps import _get_cached
     from app.services.ai import llm as llm_service
 
     await _assert_ocel_access(ocel_id, db, current_user)
@@ -2921,7 +2827,7 @@ async def generate_ocel_report(
     """
     from datetime import date
 
-    from app.api.mining import _get_cached, _set_cached
+    from app.api._mining_deps import _get_cached, _set_cached
 
     await _assert_ocel_access(ocel_id, db, current_user)
 

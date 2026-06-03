@@ -246,9 +246,9 @@ async def compute_kpi(
 
         if _FILTER_DSL_RE.search(expr):
             # ── Path 1: process-aware filter DSL ──────────────────────────
-            # Import only what we need — avoids a circular import at module
-            # load time (competitive.py imports from app.api.mining).
-            from app.api.competitive import _evaluate_filter  # lazy import
+            # Import only what we need from the services layer (the engine
+            # used to live in competitive.py — a router-imports-router smell).
+            from app.services.filter_engine import _evaluate_filter
 
             all_case_ids = set(str(c) for c in df[CASE_COL].unique())
             try:

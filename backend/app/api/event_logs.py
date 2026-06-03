@@ -212,7 +212,7 @@ async def upload_event_log(
         # Process OCEL file inline — parse with pm4py, extract stats
         try:
             import pm4py
-            from app.api.ocel import _read_ocel, _ocel_store
+            from app.services.ocel_store import _read_ocel, _ocel_store
 
             ocel_obj = _read_ocel(file_path)
             # Cache in OCEL store so discover/flatten endpoints work
@@ -404,7 +404,7 @@ async def set_column_mapping(
 
     # Clear any cached mining results for this event log
     try:
-        from app.api.mining import _clear_cache_for_event_log
+        from app.api._mining_deps import _clear_cache_for_event_log
         _clear_cache_for_event_log(event_log_id)
     except ImportError:
         pass
@@ -501,7 +501,7 @@ async def apply_timestamp_repair(
 
     # Clear cached mining results so future requests use repaired data
     try:
-        from app.api.mining import _clear_cache_for_event_log
+        from app.api._mining_deps import _clear_cache_for_event_log
         _clear_cache_for_event_log(event_log.id)
     except Exception:
         pass
