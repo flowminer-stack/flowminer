@@ -186,7 +186,7 @@ async def create_connector(
             f"Must be one of: {[e.value for e in ConnectorType]}",
         )
 
-    from app.services.secret_box import encrypt_connector_config
+    from app.services.infra.secret_box import encrypt_connector_config
 
     connector = Connector(
         project_id=body.project_id,
@@ -244,7 +244,7 @@ async def update_connector(
     if body.name is not None:
         connector.name = body.name
     if body.config is not None:
-        from app.services.secret_box import encrypt_connector_config
+        from app.services.infra.secret_box import encrypt_connector_config
         connector.config = encrypt_connector_config(body.config)
     if body.column_mapping is not None:
         connector.column_mapping = body.column_mapping
@@ -307,7 +307,7 @@ async def test_connector(
 
     try:
         service = _get_connector_service(connector.connector_type)
-        from app.services.secret_box import decrypt_connector_config
+        from app.services.infra.secret_box import decrypt_connector_config
         test_result = await service.test_connection(decrypt_connector_config(connector.config))
     except HTTPException:
         raise
@@ -361,7 +361,7 @@ async def get_connector_schema(
     error_message: str | None = None
     try:
         service = _get_connector_service(connector.connector_type)
-        from app.services.secret_box import decrypt_connector_config
+        from app.services.infra.secret_box import decrypt_connector_config
         schema = await service.get_schema(decrypt_connector_config(connector.config))
         if isinstance(schema, dict):
             raw = schema
@@ -437,7 +437,7 @@ async def sync_connector(
     # Fetch data from the source. Decrypt the stored config first so
     # the connector service sees the real credentials — the DB stores
     # them encrypted when an encryption key is present.
-    from app.services.secret_box import decrypt_connector_config
+    from app.services.infra.secret_box import decrypt_connector_config
     decrypted_config = decrypt_connector_config(connector.config)
     try:
         file_path = await service.fetch_data(

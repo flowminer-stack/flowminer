@@ -45,7 +45,7 @@ from sqlalchemy.orm import Session as SyncSession
 
 from app.database import sync_engine
 from app.models import SystemSetting
-from app.services.secret_box import decrypt_value, encrypt_value
+from app.services.infra.secret_box import decrypt_value, encrypt_value
 
 logger = logging.getLogger(__name__)
 

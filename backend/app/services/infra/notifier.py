@@ -9,7 +9,7 @@ from email.mime.text import MIMEText
 
 import httpx
 
-from app.services.url_guard import UnsafeUrlError, validate_public_url
+from app.services.infra.url_guard import UnsafeUrlError, validate_public_url
 
 logger = logging.getLogger(__name__)
 

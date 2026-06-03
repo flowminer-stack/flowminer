@@ -20,7 +20,7 @@ import uuid
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from app.services.logging_setup import request_id_ctx
+from app.services.infra.logging_setup import request_id_ctx
 
 
 class RequestIDMiddleware:

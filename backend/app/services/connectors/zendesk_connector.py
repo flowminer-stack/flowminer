@@ -14,7 +14,7 @@ import pandas as pd
 import re
 
 from app.services.connectors.base import BaseConnector
-from app.services.url_guard import validate_public_url
+from app.services.infra.url_guard import validate_public_url
 
 # Zendesk subdomains are strict: letters, digits, hyphens only.
 _ZENDESK_SUBDOMAIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")

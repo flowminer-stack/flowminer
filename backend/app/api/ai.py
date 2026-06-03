@@ -1,7 +1,7 @@
 """LLM-backed AI endpoints.
 
 Provides five distinct capabilities all layered on the same LLM
-abstraction in ``app.services.llm``:
+abstraction in ``app.services.ai.llm``:
 
   1. POST /ai/chat              — Chat about a specific event log; the
                                   server assembles context (summary,
@@ -39,7 +39,7 @@ from app.api.deps import get_current_active_user
 from app.api.mining import _assert_event_log_access, _load_event_log_and_df
 from app.database import get_db
 from app.models import User
-from app.services import llm
+from app.services.ai import llm
 from app.services.mining_engine import mining_engine
 
 router = APIRouter()
@@ -96,7 +96,7 @@ async def _build_ocel_context(event_log_id: UUID, db: AsyncSession, user: User) 
     summary block if the report isn't cached yet.
     """
     from app.api.mining import _assert_event_log_access
-    from app.services.result_cache import cache_get
+    from app.services.infra.result_cache import cache_get
 
     # Authorization — same check the mining endpoints apply.
     await _assert_event_log_access(event_log_id, db, user)
@@ -299,7 +299,7 @@ async def ai_chat(
     for those cases. Older clients that only listen for ``type=chunk``
     still see all the text — they just don't render the rich widgets.
     """
-    from app.services import chat_tools
+    from app.services.ai import chat_tools
 
     await _assert_event_log_access(body.event_log_id, db, current_user)
     context = await _build_log_context(body.event_log_id, db, current_user)
@@ -584,7 +584,7 @@ async def ai_chat_suggestions(
     await _assert_event_log_access(event_log_id, db, current_user)
 
     from app.api.mining import _get_cached, _set_cached
-    from app.services.result_cache import cache_get as _raw_cache_get
+    from app.services.infra.result_cache import cache_get as _raw_cache_get
     import hashlib as _hashlib
 
     # Reuse the mining result cache so opening the same log twice in

@@ -13,7 +13,7 @@ from app.database import get_db
 from app.models import User, UserRole
 from app.schemas.user import PasswordChange, UserResponse, UserUpdate
 from app.api.deps import get_current_active_user, require_admin
-from app.services.password_policy import assert_strong_password
+from app.services.infra.password_policy import assert_strong_password
 
 
 # --- Admin-only request bodies ---

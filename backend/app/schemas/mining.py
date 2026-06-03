@@ -1,943 +1,216 @@
-from uuid import UUID
-
-from pydantic import BaseModel, Field
-
-
-# --- Process Filters ---
-
-
-class AttributeFilter(BaseModel):
-    column: str = Field(..., description="Column name to filter on")
-    values: list[str] = Field(..., description="Accepted values (OR logic)")
-    exclude: bool = Field(default=False, description="If true, exclude matching rows")
-
-
-class ProcessFilter(BaseModel):
-    """Filters applied to event log data before analysis."""
-    time_start: str | None = Field(default=None, description="ISO datetime lower bound")
-    time_end: str | None = Field(default=None, description="ISO datetime upper bound")
-    duration_min: float | None = Field(default=None, description="Min case duration in seconds")
-    duration_max: float | None = Field(default=None, description="Max case duration in seconds")
-    activities_include: list[str] | None = Field(default=None, description="Only cases containing ALL these activities")
-    activities_exclude: list[str] | None = Field(default=None, description="Exclude cases containing ANY of these activities")
-    start_activities: list[str] | None = Field(default=None, description="Only cases starting with one of these")
-    end_activities: list[str] | None = Field(default=None, description="Only cases ending with one of these")
-    variants: list[int] | None = Field(default=None, description="Variant indices (0-based) to include")
-    attributes: list[AttributeFilter] | None = Field(default=None, description="Attribute-based filters")
-    required_edges: list[tuple[str, str]] | None = Field(
-        default=None,
-        description="Only cases whose trace contains EVERY listed [source, target] directly-follows pair",
-    )
-    forbidden_edges: list[tuple[str, str]] | None = Field(
-        default=None,
-        description="Exclude cases whose trace contains ANY listed [source, target] directly-follows pair",
-    )
-
-
-# --- Process Discovery ---
-
-
-class DiscoveryRequest(BaseModel):
-    event_log_id: UUID = Field(..., description="Event log to discover process from")
-    algorithm: str = Field(
-        default="dfg",
-        description="Discovery algorithm: dfg, alpha, heuristic, inductive",
-    )
-    parameters: dict = Field(
-        default={}, description="Algorithm-specific parameters"
-    )
-    filters: ProcessFilter | None = Field(
-        default=None, description="Optional filters to apply before discovery"
-    )
-
-
-class ProcessNode(BaseModel):
-    id: str = Field(..., description="Unique node identifier")
-    label: str = Field(..., description="Activity label")
-    frequency: int = Field(..., description="Number of occurrences")
-    avg_duration: float | None = Field(
-        default=None, description="Average duration in seconds"
-    )
-    median_duration: float | None = Field(
-        default=None, description="Median duration in seconds"
-    )
-    is_start: bool = Field(default=False, description="Whether this is a start activity")
-    is_end: bool = Field(default=False, description="Whether this is an end activity")
-
-
-class ProcessEdge(BaseModel):
-    source: str = Field(..., description="Source node ID")
-    target: str = Field(..., description="Target node ID")
-    frequency: int = Field(..., description="Number of traversals")
-    avg_duration: float | None = Field(
-        default=None, description="Average transition duration in seconds"
-    )
-    median_duration: float | None = Field(
-        default=None, description="Median transition duration in seconds"
-    )
-    performance_color: str | None = Field(
-        default=None, description="Color indicator for performance visualization"
-    )
-
-
-class DiscoveryResponse(BaseModel):
-    event_log_id: UUID
-    algorithm: str
-    nodes: list[ProcessNode]
-    edges: list[ProcessEdge]
-    statistics: dict = Field(default={}, description="Additional algorithm statistics")
-
-
-# --- Variant Analysis ---
-
-
-class Variant(BaseModel):
-    id: int = Field(..., description="Variant identifier")
-    activities: list[str] = Field(..., description="Ordered list of activities")
-    frequency: int = Field(..., description="Number of cases following this variant")
-    percentage: float = Field(
-        ..., description="Percentage of total cases"
-    )
-    avg_duration: float | None = Field(
-        default=None, description="Average case duration in seconds"
-    )
-    min_duration: float | None = Field(
-        default=None, description="Minimum case duration in seconds"
-    )
-    max_duration: float | None = Field(
-        default=None, description="Maximum case duration in seconds"
-    )
-
-
-class VariantResponse(BaseModel):
-    variants: list[Variant]
-    total_cases: int
-    total_variants: int
-
-
-# --- Bottleneck Analysis ---
-
-
-class Bottleneck(BaseModel):
-    activity: str = Field(..., description="Activity name")
-    avg_duration: float = Field(..., description="Average duration in seconds")
-    median_duration: float = Field(..., description="Median duration in seconds")
-    frequency: int = Field(..., description="Number of occurrences")
-    is_bottleneck: bool = Field(
-        ..., description="Whether this activity is classified as a bottleneck"
-    )
-    severity: str = Field(
-        ..., description="Bottleneck severity: low, medium, high, critical"
-    )
-
-
-class WaitingTime(BaseModel):
-    source: str = Field(..., description="Source activity")
-    target: str = Field(..., description="Target activity")
-    avg_waiting: float = Field(..., description="Average waiting time in seconds")
-    median_waiting: float = Field(..., description="Median waiting time in seconds")
-    max_waiting: float = Field(..., description="Maximum waiting time in seconds")
-    frequency: int = Field(..., description="Number of transitions observed")
-
-
-class DBSMScore(BaseModel):
-    activity: str = Field(..., description="Activity name")
-    dbsm_score: float = Field(..., description="DBSM composite score 0-100")
-    delay_component: float = Field(..., description="Delay component score 0-100")
-    pressure_component: float = Field(..., description="Resource pressure component score 0-100")
-    impact_component: float = Field(..., description="Cycle-time impact component score 0-100")
-    rank: int = Field(..., description="Rank by DBSM score (1 = worst)")
-
-
-class BottleneckResponse(BaseModel):
-    bottlenecks: list[Bottleneck]
-    waiting_times: list[WaitingTime]
-    dbsm_scores: list[DBSMScore] = Field(default_factory=list)
-
-
-# --- Conformance Checking ---
-
-
-class ConformanceRequest(BaseModel):
-    event_log_id: UUID = Field(..., description="Event log to check conformance for")
-    reference_model: dict | None = Field(
-        default=None, description="Reference process model as a dict"
-    )
-    template_id: UUID | None = Field(
-        default=None, description="Process template ID to check against"
-    )
-
-
-class Deviation(BaseModel):
-    case_id: str = Field(..., description="Case identifier with deviation")
-    deviation_type: str = Field(
-        ..., description="Type of deviation (e.g., missing_activity, extra_activity, wrong_order)"
-    )
-    expected: str | None = Field(
-        default=None, description="Expected activity or behavior"
-    )
-    actual: str | None = Field(
-        default=None, description="Actual activity or behavior"
-    )
-    activity: str | None = Field(
-        default=None, description="Activity involved in the deviation"
-    )
-
-
-class ConformanceResponse(BaseModel):
-    fitness: float = Field(..., description="Fitness score (0.0 to 1.0)")
-    precision: float | None = Field(
-        default=None, description="Precision score (0.0 to 1.0)"
-    )
-    generalization: float | None = Field(
-        default=None, description="Generalization score (0.0 to 1.0)"
-    )
-    deviations: list[Deviation]
-    conformant_cases: int = Field(
-        ..., description="Number of fully conformant cases"
-    )
-    total_cases: int = Field(..., description="Total number of cases analyzed")
-
-
-# --- Root Cause Analysis ---
-
-
-class RootCauseFactor(BaseModel):
-    attribute: str = Field(..., description="Attribute name")
-    value: str = Field(..., description="Attribute value")
-    impact: str = Field(
-        ..., description="Impact level: low, medium, high, critical"
-    )
-    avg_duration_affected: float = Field(
-        ..., description="Average duration for affected cases in seconds"
-    )
-    avg_duration_normal: float = Field(
-        ..., description="Average duration for normal cases in seconds"
-    )
-    case_count: int = Field(
-        ..., description="Number of cases with this attribute value"
-    )
-
-
-class Correlation(BaseModel):
-    attribute: str = Field(..., description="Attribute name")
-    correlation_value: float = Field(
-        ..., description="Correlation coefficient (-1.0 to 1.0)"
-    )
-    p_value: float = Field(..., description="Statistical p-value")
-
-
-class RootCauseResponse(BaseModel):
-    factors: list[RootCauseFactor]
-    correlations: list[Correlation]
-
-
-# --- Process Statistics ---
-
-
-class ProcessStatistics(BaseModel):
-    total_cases: int
-    total_events: int
-    total_activities: int
-    avg_case_duration: float = Field(
-        ..., description="Average case duration in seconds"
-    )
-    median_case_duration: float = Field(
-        ..., description="Median case duration in seconds"
-    )
-    min_case_duration: float = Field(
-        ..., description="Minimum case duration in seconds"
-    )
-    max_case_duration: float = Field(
-        ..., description="Maximum case duration in seconds"
-    )
-    avg_events_per_case: float
-    start_activities: list[dict] = Field(
-        default=[], description="Start activities with frequencies"
-    )
-    end_activities: list[dict] = Field(
-        default=[], description="End activities with frequencies"
-    )
-    activity_frequencies: list[dict] = Field(
-        default=[], description="Activity frequency breakdown"
-    )
-    cases_over_time: list[dict] = Field(
-        default=[], description="Cases over time series data"
-    )
-    sla_compliance: float | None = Field(
-        default=None, description="SLA compliance percentage (0.0 to 100.0)"
-    )
-
-
-# --- Process Summary (Auto-analysis) ---
-
-
-class ProcessSummary(BaseModel):
-    statistics: ProcessStatistics
-    top_variants: list[Variant]
-    bottlenecks: list[Bottleneck]
-    process_map: DiscoveryResponse
-
-
-# --- Case Explorer ---
-
-
-class CaseInfo(BaseModel):
-    case_id: str
-    event_count: int
-    duration_seconds: float | None
-    start_activity: str
-    end_activity: str
-    start_time: str
-    end_time: str
-    variant: str  # activities joined by " → "
-
-
-class CaseListResponse(BaseModel):
-    cases: list[CaseInfo]
-    total_cases: int
-
-
-# --- Case Detail ---
-
-
-class CaseEvent(BaseModel):
-    activity: str
-    timestamp: str
-    resource: str | None = None
-    duration_to_next: float | None = None  # seconds until next event
-
-
-class CaseDetailResponse(BaseModel):
-    case_id: str
-    events: list[CaseEvent]
-    total_duration: float | None
-
-
-# --- BPMN Export ---
-
-
-class BPMNExportResponse(BaseModel):
-    event_log_id: UUID
-    bpmn_xml: str
-    algorithm: str = "inductive"
-
-
-# --- Events Timeline ---
-
-
-class TimelineEvent(BaseModel):
-    timestamp: str
-    case_id: str
-    activity: str
-    source: str | None = None  # previous activity (for edge animation)
-
-
-class TimelineResponse(BaseModel):
-    events: list[TimelineEvent]
-    start_time: str
-    end_time: str
-    total_events: int
-
-
-# --- Dotted Chart ---
-
-
-class DottedChartEvent(BaseModel):
-    timestamp: str
-    case_id: str
-    activity: str
-    resource: str | None = None
-    case_index: int  # numeric index for Y-axis positioning
-
-
-class DottedChartResponse(BaseModel):
-    events: list[DottedChartEvent]
-    activities: list[str]
-    resources: list[str]
-    case_count: int
-    time_range: dict  # {start: str, end: str}
-
-
-# --- Social Network ---
-
-
-class SocialNetworkNode(BaseModel):
-    id: str
-    label: str
-    frequency: int  # total events handled
-
-
-class SocialNetworkEdge(BaseModel):
-    source: str
-    target: str
-    frequency: int  # handover count
-
-
-class SocialNetworkResponse(BaseModel):
-    nodes: list[SocialNetworkNode]
-    edges: list[SocialNetworkEdge]
-    total_resources: int
-    total_handovers: int
-
-
-# --- Process Comparison ---
-
-
-class ComparisonRequest(BaseModel):
-    event_log_id: UUID
-    split_attribute: str  # column name to split by
-    split_value_a: str    # value for group A
-    split_value_b: str    # value for group B
-
-
-class ComparisonEdge(BaseModel):
-    source: str
-    target: str
-    frequency_a: int
-    frequency_b: int
-    diff: int  # frequency_b - frequency_a
-    status: str  # "added", "removed", "increased", "decreased", "unchanged"
-
-
-class ComparisonNode(BaseModel):
-    id: str
-    label: str
-    frequency_a: int
-    frequency_b: int
-
-
-class ComparisonResponse(BaseModel):
-    nodes: list[ComparisonNode]
-    edges: list[ComparisonEdge]
-    stats_a: dict  # {total_cases, total_events, avg_duration}
-    stats_b: dict
-
-
-# --- Rework Detection ---
-
-
-class ActivityRework(BaseModel):
-    activity: str
-    total_occurrences: int
-    cases_with_rework: int
-    total_cases: int
-    rework_rate: float  # percentage of cases that have this activity more than once
-    avg_repetitions: float
-
-
-class ReworkResponse(BaseModel):
-    activities: list[ActivityRework]
-    overall_rework_rate: float  # % of cases with ANY rework
-    cases_with_rework: int
-    total_cases: int
-    self_loops: list[dict]  # [{activity, count}] — immediate self-loops (A→A)
-
-
-# --- Activity Detail ---
-
-
-class ActivityDetailResponse(BaseModel):
-    activity: str
-    frequency: int
-    case_count: int  # how many unique cases contain this activity
-    avg_duration: float | None
-    median_duration: float | None
-    min_duration: float | None
-    max_duration: float | None
-    duration_histogram: list[dict]  # [{bin_start, bin_end, count}]
-    resources: list[dict]  # [{name, count}] — resources that perform this activity
-    predecessors: list[dict]  # [{activity, frequency}]
-    successors: list[dict]  # [{activity, frequency}]
-    is_start: bool
-    is_end: bool
-
-
-# --- Process Simulation / What-If Analysis ---
-
-
-class SimulationModification(BaseModel):
-    type: str = Field(
-        ...,
-        description="Modification type: duration_scale, remove_activity, adjust_frequency",
-    )
-    activity: str = Field(..., description="Target activity name")
-    value: float = Field(
-        ...,
-        description=(
-            "Modification value: scale factor for duration_scale, "
-            "percentage (0-100) for adjust_frequency, ignored for remove_activity"
-        ),
-    )
-
-
-class SimulationRequest(BaseModel):
-    event_log_id: UUID = Field(..., description="Event log to simulate from")
-    num_traces: int = Field(
-        default=500,
-        ge=1,
-        le=5000,
-        description="Number of synthetic traces to generate via Petri net playout",
-    )
-    modifications: list[SimulationModification] = Field(
-        default=[],
-        description="List of what-if modifications to apply to the simulated log",
-    )
-
-
-class SimulationStats(BaseModel):
-    total_cases: int = Field(..., description="Number of cases")
-    total_events: int = Field(..., description="Total number of events")
-    avg_case_duration: float = Field(
-        ..., description="Average case duration in seconds"
-    )
-    median_case_duration: float = Field(
-        ..., description="Median case duration in seconds"
-    )
-    avg_events_per_case: float = Field(..., description="Average events per case")
-    activities: list[dict] = Field(
-        default=[],
-        description="Per-activity stats: [{name, frequency, avg_duration}]",
-    )
-
-
-class SimulationResponse(BaseModel):
-    original: SimulationStats
-    simulated: SimulationStats
-    improvement: dict = Field(
-        ...,
-        description=(
-            "Comparison metrics: {avg_duration_change_pct, "
-            "case_count_change, activities_removed}"
-        ),
-    )
-
-
-# --- Data Quality Report ---
-
-
-class DataQualityIssue(BaseModel):
-    severity: str = Field(
-        ..., description="Issue severity: 'error', 'warning', 'info'"
-    )
-    category: str = Field(
-        ...,
-        description=(
-            "Issue category: 'missing_values', 'duplicates', 'timestamps', "
-            "'outliers'"
-        ),
-    )
-    message: str = Field(..., description="Human-readable description of the issue")
-    affected_count: int = Field(..., description="Number of affected events or cases")
-    affected_percentage: float = Field(
-        ..., description="Percentage of total events / cases affected"
-    )
-
-
-class DataQualityResponse(BaseModel):
-    overall_score: float = Field(
-        ..., description="Overall data quality score (0-100)"
-    )
-    total_events: int = Field(..., description="Total number of events in the log")
-    issues: list[DataQualityIssue] = Field(
-        default=[], description="List of identified data quality issues"
-    )
-
-
-# --- PDF / HTML Report ---
-
-
-class ReportResponse(BaseModel):
-    html: str = Field(..., description="HTML string of the generated report")
-    event_log_name: str = Field(..., description="Name of the event log")
-
-
-# --- Performance DFG ---
-
-
-class PerformanceDFGEdge(BaseModel):
-    source: str
-    target: str
-    avg_duration: float  # seconds
-
-
-class PerformanceDFGResponse(BaseModel):
-    edges: list[PerformanceDFGEdge]
-    activities: list[str]
-
-
-# --- Eventually-Follows Graph ---
-
-
-class EFGPair(BaseModel):
-    source: str
-    target: str
-    frequency: int
-
-
-class EFGResponse(BaseModel):
-    pairs: list[EFGPair]
-    activities: list[str]
-
-
-# --- Temporal Profile ---
-
-
-class TemporalProfileEntry(BaseModel):
-    source: str
-    target: str
-    mean: float   # seconds
-    stdev: float  # seconds
-
-
-class TemporalDeviation(BaseModel):
-    case_id: str
-    activity_pair: list[str]  # [source, target]
-    expected: float           # mean ± zeta*stdev
-    actual: float
-    is_deviation: bool
-
-
-class TemporalProfileResponse(BaseModel):
-    profiles: list[TemporalProfileEntry]
-    deviations: list[TemporalDeviation]
-
-
-# --- Batch Detection ---
-
-
-class BatchInfo(BaseModel):
-    activity: str
-    resource: str
-    batch_type: str
-    num_cases: int
-    start_time: str | None = None
-    end_time: str | None = None
-
-
-class BatchResponse(BaseModel):
-    batches: list[BatchInfo]
-
-
-# --- Case Overlap ---
-
-
-class CaseOverlapResponse(BaseModel):
-    overlaps: list[int]
-    max_overlap: int
-    avg_overlap: float
-
-
-# --- Organizational Roles ---
-
-
-class OrgRole(BaseModel):
-    activities: list[str]
-    resources: list[str]
-
-
-class OrgRolesResponse(BaseModel):
-    roles: list[OrgRole]
-
-
-# --- SNA Networks ---
-
-
-class SNAResponse(BaseModel):
-    resources: list[str]
-    matrix: list[list[float]]
-    network_type: str
-
-
-# --- Case Clustering ---
-
-
-class ClusterInfo(BaseModel):
-    cluster_id: int
-    case_count: int
-    avg_duration: float | None
-    top_variant: list[str]
-
-
-class ClusterRequest(BaseModel):
-    n_clusters: int = Field(default=3, ge=2, le=20)
-
-
-class ClusterResponse(BaseModel):
-    clusters: list[ClusterInfo]
-
-
-# --- Log Skeleton ---
-
-
-class LogSkeletonResponse(BaseModel):
-    constraints: dict
-
-
-# --- DECLARE ---
-
-
-class DeclareRule(BaseModel):
-    template: str
-    activity_a: str
-    activity_b: str | None = None
-    support: float
-    confidence: float | None = None
-    narrative: str | None = None
-
-
-class DeclareResponse(BaseModel):
-    rules: list[DeclareRule]
-
-
-# --- Four-Eyes Principle ---
-
-
-class FourEyesRequest(BaseModel):
-    activity1: str
-    activity2: str
-
-
-class FourEyesViolation(BaseModel):
-    case_id: str
-    resource: str
-
-
-class FourEyesResponse(BaseModel):
-    violations: list[FourEyesViolation]
-    total_cases: int
-    violating_cases: int
-
-
-# --- Performance Spectrum ---
-
-
-class PerformanceSpectrumEvent(BaseModel):
-    activity: str
-    timestamp: str
-
-
-class PerformanceSpectrumCase(BaseModel):
-    case_id: str
-    events: list[PerformanceSpectrumEvent]
-
-
-class PerformanceSpectrumResponse(BaseModel):
-    cases: list[PerformanceSpectrumCase]
-
-
-# --- Feature Export ---
-
-
-class FeatureExportResponse(BaseModel):
-    columns: list[str]
-    rows: list[dict]
-    total_cases: int
-
-
-# --- Automated Insights ---
-
-
-class Insight(BaseModel):
-    category: str      # bottleneck, rework, conformance, variant, resource, performance, duration, waiting_time, automation, batch, workload, root_cause, timing_anomaly, cost
-    severity: str      # critical, warning, info
-    title: str
-    description: str
-    metric_value: float | None = None
-    recommendation: str | None = None
-    related_activities: list[str] | None = None
-    impact_estimate: str | None = None
-
-
-class InsightsResponse(BaseModel):
-    insights: list[Insight]
-    summary: str
-
-
-# --- Stochastic Conformance (EMD-based) ---
-# Ref: Polyvyanyy et al., "Earth Movers' Stochastic Conformance"
-#      Information Systems 2021.
-
-
-class DeviatingVariant(BaseModel):
-    """Per-variant deviation entry from stochastic conformance analysis."""
-
-    variant: list[str] = Field(
-        ...,
-        description="Ordered list of activity labels constituting the trace variant",
-    )
-    log_frequency: float = Field(
-        ...,
-        description="Relative frequency of this variant in the event log (sums to 1.0 across all variants)",
-    )
-    model_probability: float = Field(
-        ...,
-        description="Estimated probability of this variant under the stochastic process model",
-    )
-    contribution: float = Field(
-        ...,
-        description="Absolute difference |log_frequency - model_probability| — higher means more deviation",
-    )
-
-
-class SeverityBreakdown(BaseModel):
-    """Counts of variants bucketed by deviation severity."""
-
-    minor: int = Field(..., description="Variants with |Δ| < 0.05 (negligible frequency mismatch)")
-    moderate: int = Field(..., description="Variants with 0.05 ≤ |Δ| < 0.15")
-    severe: int = Field(..., description="Variants with |Δ| ≥ 0.15 (material frequency deviation)")
-
-
-class StochasticConformanceResponse(BaseModel):
-    """Response model for GET /conformance/{event_log_id}/stochastic.
-
-    Captures the Earth Mover's Distance (EMD) between the log's empirical
-    variant distribution and the model's sampled stochastic language.
-    Lower EMD = log behaviour more closely matches the model.
-    """
-
-    emd_distance: float = Field(
-        ...,
-        description="Earth Mover's Distance in [0, 1]; 0 = perfect distributional fit",
-    )
-    stochastic_fitness: float = Field(
-        ...,
-        description="1 - emd_distance; in [0, 1], higher = better distributional fit",
-    )
-    top_deviating_variants: list[DeviatingVariant] = Field(
-        ...,
-        description="Up to 20 variants sorted by |log_frequency - model_probability| descending",
-    )
-    severity_breakdown: SeverityBreakdown = Field(
-        ...,
-        description="Counts of all variants bucketed by deviation severity",
-    )
-    log_variants_count: int = Field(
-        ..., description="Total number of distinct trace variants observed in the event log"
-    )
-    model_traces_sampled: int = Field(
-        ...,
-        description="Number of traces sampled from the model during stochastic playout",
-    )
-
-
-# --- Concept Drift Detection ---
-
-
-class DriftWindowVariant(BaseModel):
-    variant: str
-    count: int
-
-
-class DriftWindow(BaseModel):
-    start: str
-    end: str
-    case_count: int
-    variant_count: int
-    top_variants: list[DriftWindowVariant]
-
-
-class DriftMagnitudeChange(BaseModel):
-    edge: list[str] = Field(..., description="[source, target] activity pair")
-    before: float
-    after: float
-    delta: float
-
-
-class DriftPoint(BaseModel):
-    window_index: int
-    timestamp: str
-    jsd: float = Field(..., description="Jensen-Shannon divergence in [0, 1]")
-    added_edges: list[list[str]] = Field(default_factory=list)
-    removed_edges: list[list[str]] = Field(default_factory=list)
-    magnitude_changes: list[DriftMagnitudeChange] = Field(default_factory=list)
-
-
-class DriftSummary(BaseModel):
-    total_windows: int
-    total_drifts: int
-    avg_jsd: float
-    max_jsd: float
-
-
-class DriftResponse(BaseModel):
-    windows: list[DriftWindow]
-    drifts: list[DriftPoint]
-    summary: DriftSummary
-
-
-# --- Queue Mining (M/M/c) ---
-
-
-class WaitDecomposition(BaseModel):
-    resource_contention_s: float = Field(..., description="Estimated wait due to resource contention (M/M/c Erlang-C model)")
-    inter_batch_wait_s: float = Field(..., description="Estimated wait due to inter-batch arrival clustering")
-    external_dependency_s: float = Field(..., description="Residual wait (external dependencies / other)")
-    processing_s: float = Field(..., description="Mean activity service/processing time")
-
-
-class QueueActivity(BaseModel):
-    activity: str = Field(..., description="Activity name")
-    arrival_rate_per_hour: float = Field(..., description="Arrival rate lambda (arrivals/hour)")
-    service_rate_per_hour: float = Field(..., description="Service rate mu (completions/hour per server)")
-    estimated_servers: int = Field(..., description="Estimated server count c (distinct resources)")
-    utilization: float = Field(..., description="Traffic intensity rho = lambda / (c * mu), clamped to 0.999")
-    expected_wait_time_s: float | None = Field(default=None, description="E[Wq] from M/M/c Erlang-C formula (seconds); null if unstable")
-    actual_avg_wait_time_s: float = Field(..., description="Observed average waiting time before this activity (seconds)")
-    wait_decomposition: WaitDecomposition
-    queue_health: str = Field(..., description="healthy (rho<0.7) | strained (0.7-0.9) | saturated (>0.9)")
-    stability: bool = Field(..., description="True if rho < 1 (system is stable)")
-
-
-class QueueSummary(BaseModel):
-    max_utilization_activity: str | None = Field(default=None, description="Activity with highest utilization")
-    system_throughput_cases_per_hour: float = Field(..., description="Overall case throughput (cases/hour)")
-
-
-class QueueMiningResponse(BaseModel):
-    per_activity: list[QueueActivity]
-    summary: QueueSummary
-
-
-# --- Discrete-Event Simulation (DES) ---
-
-
-class DESScenario(BaseModel):
-    """What-if scenario for the DES engine."""
-    arrival_rate_multiplier: float = Field(
-        default=1.0,
-        description="Multiply arrival rate (>1 = more cases per day)",
-    )
-    activity_duration_overrides: dict[str, float] = Field(
-        default={},
-        description="Per-activity duration multiplier (0.5 = 2x faster)",
-    )
-    activity_automation: dict[str, bool] = Field(
-        default={},
-        description="Mark activity as automated (duration → 0)",
-    )
-    resource_pool_overrides: dict[str, int] = Field(
-        default={},
-        description="Override capacity for named resource pools",
-    )
-    new_resources: list[dict] = Field(
-        default=[],
-        description="Add new resource pools [{name: str, capacity: int}]",
-    )
-
-
-class DESSummary(BaseModel):
-    avg_case_duration_s: float
-    p50: float
-    p90: float
-    p95: float
-    throughput_cases_per_day: float
-    max_concurrent_cases: int
-    resource_utilization: dict[str, float]
-
-
-class DESSimulationResponse(BaseModel):
-    summary: DESSummary
-    baseline: DESSummary
-    delta: dict[str, float]
-    runs: int
+"""
+Re-export barrel for process-mining Pydantic schemas.
+
+The original 943-line monolith was split by domain into:
+    - app.schemas.discovery     (process maps, variants, cases, comparison, org, clustering, insights, reporting)
+    - app.schemas.conformance   (conformance checking, root cause, four-eyes, stochastic conformance)
+    - app.schemas.performance   (bottlenecks, performance DFG/EFG, temporal, batches, queue mining)
+    - app.schemas.simulation    (what-if simulation, discrete-event simulation)
+    - app.schemas.formal_methods (log skeleton, DECLARE)
+    - app.schemas.predictive    (concept drift detection)
+
+This module re-exports every name so that existing
+`from app.schemas.mining import X` imports keep working unchanged.
+"""
+
+from app.schemas.conformance import (
+    ConformanceRequest,
+    ConformanceResponse,
+    Correlation,
+    Deviation,
+    DeviatingVariant,
+    FourEyesRequest,
+    FourEyesResponse,
+    FourEyesViolation,
+    RootCauseFactor,
+    RootCauseResponse,
+    SeverityBreakdown,
+    StochasticConformanceResponse,
+)
+from app.schemas.discovery import (
+    ActivityDetailResponse,
+    ActivityRework,
+    AttributeFilter,
+    BPMNExportResponse,
+    CaseDetailResponse,
+    CaseEvent,
+    CaseInfo,
+    CaseListResponse,
+    ClusterInfo,
+    ClusterRequest,
+    ClusterResponse,
+    ComparisonEdge,
+    ComparisonNode,
+    ComparisonRequest,
+    ComparisonResponse,
+    DataQualityIssue,
+    DataQualityResponse,
+    DiscoveryRequest,
+    DiscoveryResponse,
+    DottedChartEvent,
+    DottedChartResponse,
+    FeatureExportResponse,
+    Insight,
+    InsightsResponse,
+    OrgRole,
+    OrgRolesResponse,
+    ProcessEdge,
+    ProcessFilter,
+    ProcessNode,
+    ProcessStatistics,
+    ProcessSummary,
+    ReportResponse,
+    ReworkResponse,
+    SNAResponse,
+    SocialNetworkEdge,
+    SocialNetworkNode,
+    SocialNetworkResponse,
+    TimelineEvent,
+    TimelineResponse,
+    Variant,
+    VariantResponse,
+)
+from app.schemas.formal_methods import (
+    DeclareResponse,
+    DeclareRule,
+    LogSkeletonResponse,
+)
+from app.schemas.performance import (
+    BatchInfo,
+    BatchResponse,
+    Bottleneck,
+    BottleneckResponse,
+    CaseOverlapResponse,
+    DBSMScore,
+    EFGPair,
+    EFGResponse,
+    PerformanceDFGEdge,
+    PerformanceDFGResponse,
+    PerformanceSpectrumCase,
+    PerformanceSpectrumEvent,
+    PerformanceSpectrumResponse,
+    QueueActivity,
+    QueueMiningResponse,
+    QueueSummary,
+    TemporalDeviation,
+    TemporalProfileEntry,
+    TemporalProfileResponse,
+    WaitDecomposition,
+    WaitingTime,
+)
+from app.schemas.predictive import (
+    DriftMagnitudeChange,
+    DriftPoint,
+    DriftResponse,
+    DriftSummary,
+    DriftWindow,
+    DriftWindowVariant,
+)
+from app.schemas.simulation import (
+    DESScenario,
+    DESSimulationResponse,
+    DESSummary,
+    SimulationModification,
+    SimulationRequest,
+    SimulationResponse,
+    SimulationStats,
+)
+
+__all__ = [
+    # Discovery / maps / variants / exploration / comparison / org / clustering / insights / reporting
+    "ActivityDetailResponse",
+    "ActivityRework",
+    "AttributeFilter",
+    "BPMNExportResponse",
+    "CaseDetailResponse",
+    "CaseEvent",
+    "CaseInfo",
+    "CaseListResponse",
+    "ClusterInfo",
+    "ClusterRequest",
+    "ClusterResponse",
+    "ComparisonEdge",
+    "ComparisonNode",
+    "ComparisonRequest",
+    "ComparisonResponse",
+    "DataQualityIssue",
+    "DataQualityResponse",
+    "DiscoveryRequest",
+    "DiscoveryResponse",
+    "DottedChartEvent",
+    "DottedChartResponse",
+    "FeatureExportResponse",
+    "Insight",
+    "InsightsResponse",
+    "OrgRole",
+    "OrgRolesResponse",
+    "ProcessEdge",
+    "ProcessFilter",
+    "ProcessNode",
+    "ProcessStatistics",
+    "ProcessSummary",
+    "ReportResponse",
+    "ReworkResponse",
+    "SNAResponse",
+    "SocialNetworkEdge",
+    "SocialNetworkNode",
+    "SocialNetworkResponse",
+    "TimelineEvent",
+    "TimelineResponse",
+    "Variant",
+    "VariantResponse",
+    # Conformance / root cause / four-eyes / stochastic conformance
+    "ConformanceRequest",
+    "ConformanceResponse",
+    "Correlation",
+    "Deviation",
+    "DeviatingVariant",
+    "FourEyesRequest",
+    "FourEyesResponse",
+    "FourEyesViolation",
+    "RootCauseFactor",
+    "RootCauseResponse",
+    "SeverityBreakdown",
+    "StochasticConformanceResponse",
+    # Performance / bottlenecks / DFG / EFG / temporal / batch / queue mining
+    "BatchInfo",
+    "BatchResponse",
+    "Bottleneck",
+    "BottleneckResponse",
+    "CaseOverlapResponse",
+    "DBSMScore",
+    "EFGPair",
+    "EFGResponse",
+    "PerformanceDFGEdge",
+    "PerformanceDFGResponse",
+    "PerformanceSpectrumCase",
+    "PerformanceSpectrumEvent",
+    "PerformanceSpectrumResponse",
+    "QueueActivity",
+    "QueueMiningResponse",
+    "QueueSummary",
+    "TemporalDeviation",
+    "TemporalProfileEntry",
+    "TemporalProfileResponse",
+    "WaitDecomposition",
+    "WaitingTime",
+    # Simulation / DES
+    "DESScenario",
+    "DESSimulationResponse",
+    "DESSummary",
+    "SimulationModification",
+    "SimulationRequest",
+    "SimulationResponse",
+    "SimulationStats",
+    # Formal methods (log skeleton, DECLARE)
+    "DeclareResponse",
+    "DeclareRule",
+    "LogSkeletonResponse",
+    # Predictive / concept drift
+    "DriftMagnitudeChange",
+    "DriftPoint",
+    "DriftResponse",
+    "DriftSummary",
+    "DriftWindow",
+    "DriftWindowVariant",
+]

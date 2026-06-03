@@ -7,7 +7,7 @@ If any of these start passing silently we have regressed — a subsequent
 import pandas as pd
 import pytest
 
-from app.services.safe_expression import UnsafeExpressionError, safe_eval
+from app.services.infra.safe_expression import UnsafeExpressionError, safe_eval
 
 
 @pytest.fixture

@@ -15,7 +15,7 @@ from app.models import EventLog, User
 from app.models.action_rule import ActionRule, ActionRuleExecution
 from app.services.action_engine import dispatch_action, evaluate_rule
 from app.services.mining_engine import mining_engine
-from app.services.notifier import Notifier
+from app.services.infra.notifier import Notifier
 
 _notifier = Notifier()
 

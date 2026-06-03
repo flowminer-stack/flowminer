@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models import User, UserRole
-from app.services.password_policy import assert_strong_password
+from app.services.infra.password_policy import assert_strong_password
 
 
 app = typer.Typer(help="FlowMiner ops CLI.", no_args_is_help=True)

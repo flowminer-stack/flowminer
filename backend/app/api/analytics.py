@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import _user_can_access_project, get_current_active_user
 from app.database import get_db
 from app.models import EventLog, Project, User
-from app.services.agent_mining import analyze_agents
+from app.services.ai.agent_mining import analyze_agents
 from app.services.ingestion import ACTIVITY_COL, CASE_COL, RESOURCE_COL, TIMESTAMP_COL
 from app.services.mining_engine import mining_engine
 from app.services.sustainability import compute_sustainability

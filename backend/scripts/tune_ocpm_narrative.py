@@ -29,7 +29,7 @@ Notes
 * The script shares ``_summarise_findings_for_prompt`` and the
   ``ImprovementReportResponse`` schema with ``app.api.ocel``, so
   whatever you see here matches what the UI would render verbatim.
-* The LLM itself is called via ``app.services.llm.complete`` which
+* The LLM itself is called via ``app.services.ai.llm.complete`` which
   honours ``FLOWMINER_LLM_PROVIDER``, ``OPENROUTER_MODEL``, etc. —
   set them in ``.env`` and force-recreate the backend before running.
 * If no improvement-report cache entry exists we bail out with a
@@ -57,8 +57,8 @@ from app.api.ocel import (  # noqa: E402
     _NARRATE_SYSTEM_PROMPT,
     _summarise_findings_for_prompt,
 )
-from app.services import llm  # noqa: E402
-from app.services.result_cache import cache_get  # noqa: E402
+from app.services.ai import llm  # noqa: E402
+from app.services.infra.result_cache import cache_get  # noqa: E402
 
 
 def load_report(ocel_id: str) -> ImprovementReportResponse:

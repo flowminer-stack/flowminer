@@ -29,7 +29,8 @@ from app.api.deps import require_admin
 from app.config import settings
 from app.database import get_db
 from app.models import User
-from app.services import llm, system_settings as settings_service
+from app.services.ai import llm
+from app.services import system_settings as settings_service
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +265,7 @@ def _check_encryption() -> ComponentStatus:
     """
     try:
         # Re-import in case the secret_box module has been reloaded.
-        from app.services import secret_box as _secret_box  # noqa: F401
+        from app.services.infra import secret_box as _secret_box  # noqa: F401
 
         dedicated = os.getenv("FLOWMINER_ENCRYPTION_KEY", "").strip()
         if dedicated:

@@ -26,7 +26,7 @@ class SystemSetting(Base):
     # enum or id mapping.
     key = Column(String(128), primary_key=True)
 
-    # Fernet-encrypted JSON payload. Use ``app.services.secret_box``
+    # Fernet-encrypted JSON payload. Use ``app.services.infra.secret_box``
     # to read/write this column — never store plaintext credentials
     # here, even in development.
     value_encrypted = Column(Text, nullable=True)

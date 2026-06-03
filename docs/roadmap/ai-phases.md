@@ -207,7 +207,7 @@ trigger config, no upfront investment, just "here's what changed."
    diff and writes a markdown digest using a v6-style prompt adapted
    for diffs. Cache it as `digest_{week}`.
 3. Email template + Slack webhook delivery. Reuse the existing
-   `app.services.notifier` module — we already have SMTP wiring.
+   `app.services.infra.notifier` module — we already have SMTP wiring.
 4. Per-user subscription: add `digest_subscriptions` table with
    `user_id`, `event_log_id`, `channel` (email/slack), `active`.
    Simple CRUD in Settings.

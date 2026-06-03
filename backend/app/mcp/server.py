@@ -393,7 +393,7 @@ async def _tool_ask_natural_language(args: dict) -> list[TextContent]:
     today — that's the web UI's job)."""
     from app.api.ai import _SYSTEM_PROMPT, _build_log_context
     from app.database import async_session
-    from app.services import llm
+    from app.services.ai import llm
 
     event_log_id = _parse_uuid(args["event_log_id"])
     question = str(args.get("question") or "").strip()

@@ -240,7 +240,7 @@ def evaluate_alerts(project_id: str):
     """
     from app.models import Alert, EventLog
     from app.services.alert_evaluator import AlertEvaluator
-    from app.services.notifier import Notifier
+    from app.services.infra.notifier import Notifier
     from app.services.mining_engine import mining_engine
 
     session = _get_sync_session()
@@ -416,7 +416,7 @@ def sync_connector(self, connector_id: str):
         # the connector service so it can query only new/changed rows.
         # Credentials are encrypted at rest — decrypt in-memory right before
         # handing them to the service (never write the plaintext back).
-        from app.services.secret_box import decrypt_connector_config
+        from app.services.infra.secret_box import decrypt_connector_config
 
         decrypted_config = decrypt_connector_config(connector.config)
         since = connector.last_sync

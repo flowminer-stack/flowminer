@@ -81,7 +81,7 @@ router = APIRouter()
 # Shared mining result cache (Redis-backed, with in-process fallback).
 # Using a shared cache means multi-worker deployments don't recompute the
 # same discovery/conformance/etc. per worker.
-from app.services.result_cache import (  # noqa: E402
+from app.services.infra.result_cache import (  # noqa: E402
     cache_clear_event_log,
     cache_get,
     cache_set,

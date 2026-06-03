@@ -16,9 +16,9 @@ from app.database import get_db
 from app.models import User, UserRole
 from app.schemas.user import Token, UserCreate, UserLogin, UserResponse
 from app.api.deps import create_access_token, get_current_active_user, oauth2_scheme
-from app.services.password_policy import assert_strong_password
-from app.services.rate_limit import limiter
-from app.services.token_revocation import revoke_jti
+from app.services.infra.password_policy import assert_strong_password
+from app.services.infra.rate_limit import limiter
+from app.services.infra.token_revocation import revoke_jti
 
 router = APIRouter()
 

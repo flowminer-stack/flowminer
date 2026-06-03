@@ -10,10 +10,10 @@ from starlette.requests import Request as StarletteRequest
 
 from app.config import settings
 from app.database import init_db
-from app.services.audit import AuditLogMiddleware
-from app.services.logging_setup import configure_logging, init_sentry, request_id_ctx
-from app.services.rate_limit import limiter, rate_limit_handler
-from app.services.request_id import RequestIDMiddleware
+from app.services.infra.audit import AuditLogMiddleware
+from app.services.infra.logging_setup import configure_logging, init_sentry, request_id_ctx
+from app.services.infra.rate_limit import limiter, rate_limit_handler
+from app.services.infra.request_id import RequestIDMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 

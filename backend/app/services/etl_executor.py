@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.services.safe_expression import UnsafeExpressionError, safe_eval
+from app.services.infra.safe_expression import UnsafeExpressionError, safe_eval
 
 logger = logging.getLogger(__name__)
 

@@ -28,8 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import User
-from app.services.password_policy import assert_strong_password
-from app.services.rate_limit import limiter
+from app.services.infra.password_policy import assert_strong_password
+from app.services.infra.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 

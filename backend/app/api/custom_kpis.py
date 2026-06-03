@@ -263,7 +263,7 @@ async def compute_kpi(
             # ── Path 2: arithmetic formula over base metrics ───────────────
             # Build a one-row DataFrame whose columns are the nine base
             # metric names, then let safe_eval resolve them as Series/scalar.
-            from app.services.safe_expression import safe_eval, UnsafeExpressionError
+            from app.services.infra.safe_expression import safe_eval, UnsafeExpressionError
 
             base = _compute_base_metrics(df, mining_engine)
             metrics_df = pd.DataFrame([base])

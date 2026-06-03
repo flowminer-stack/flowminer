@@ -35,7 +35,7 @@ from app.schemas.ocel import (
 )
 from app.api.deps import get_current_active_user
 from app.services.mining_engine import mining_engine
-from app.services.result_cache import cache_get as _raw_cache_get, cache_set as _raw_cache_set
+from app.services.infra.result_cache import cache_get as _raw_cache_get, cache_set as _raw_cache_set
 
 logger = logging.getLogger(__name__)
 
@@ -2761,7 +2761,7 @@ async def narrate_improvement_report(
     already drops both the report and its narrative together.
     """
     from app.api.mining import _get_cached, _set_cached
-    from app.services import llm as llm_service
+    from app.services.ai import llm as llm_service
 
     await _assert_ocel_access(ocel_id, db, current_user)
 
@@ -2854,7 +2854,7 @@ async def explain_improvement_finding(
     finding itself, so there's nothing stable to key on.
     """
     from app.api.mining import _get_cached
-    from app.services import llm as llm_service
+    from app.services.ai import llm as llm_service
 
     await _assert_ocel_access(ocel_id, db, current_user)
 

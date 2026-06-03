@@ -13,7 +13,7 @@ import httpx
 import pandas as pd
 
 from app.services.connectors.base import BaseConnector
-from app.services.url_guard import validate_public_url
+from app.services.infra.url_guard import validate_public_url
 
 logger = logging.getLogger(__name__)
 
