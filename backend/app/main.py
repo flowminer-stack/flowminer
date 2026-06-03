@@ -345,6 +345,7 @@ _routers: list[tuple[str, str, list[str]]] = [
     ("app.api.templates", "/api/v1/templates", ["templates"]),
     ("app.api.annotations", "/api/v1/annotations", ["annotations"]),
     ("app.api.ocel", "/api/v1/ocel", ["ocel"]),
+    ("app.api.ocel_improvements", "/api/v1/ocel", ["ocel"]),
     ("app.api.scheduled_reports", "/api/v1/scheduled-reports", ["scheduled-reports"]),
     ("app.api.case_tags", "/api/v1/case-tags", ["case-tags"]),
     ("app.api.custom_kpis", "/api/v1/kpis", ["kpis"]),
