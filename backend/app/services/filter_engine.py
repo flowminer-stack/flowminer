@@ -3,7 +3,8 @@ Filter-expression engine for the case-filter DSL.
 
 Tokeniser + recursive-descent evaluator for expressions like
 ``case.duration > 5m and activity = "Approve"``. Previously private helpers
-inside ``app.api.competitive``; relocated to the services layer so other
+inside ``app.api.process_analytics`` (formerly ``competitive``); relocated to
+the services layer so other
 routers (e.g. custom_kpis) can use them without importing from a sibling
 router. Kept byte-for-byte equivalent to the originals; only their home moved.
 """

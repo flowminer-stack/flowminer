@@ -374,7 +374,7 @@ _routers: list[tuple[str, str, list[str]]] = [
     ("app.api.scorecards", "/api/v1/scorecards", ["scorecards"]),
     ("app.api.saml", "/api/v1/auth", ["saml"]),
     ("app.api.bi", "/api/v1/bi", ["bi"]),
-    ("app.api.competitive", "/api/v1/competitive", ["competitive"]),
+    ("app.api.process_analytics", "/api/v1/competitive", ["competitive"]),
     ("app.api.governance", "/api/v1/governance", ["governance"]),
     ("app.api.overview", "/api/v1", ["overview"]),
     ("app.api.tasks", "/api/v1/tasks", ["tasks"]),
