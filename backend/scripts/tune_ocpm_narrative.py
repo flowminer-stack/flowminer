@@ -18,9 +18,9 @@ Typical workflow
        docker exec processmining-backend-1 python3 \
          scripts/tune_ocpm_narrative.py \
          --ocel-id <uuid> \
-         --prompt scripts/prompts/default.md
+         --prompt scripts/prompts/v6_cot_full.md
 
-3. Edit ``scripts/prompts/default.md`` (or copy it to ``v2.md`` and
+3. Edit ``scripts/prompts/v6_cot_full.md`` (or copy it to ``v7.md`` and
    edit) and re-run. Use ``--prompts a.md b.md c.md`` to compare
    variants side-by-side in a single run.
 

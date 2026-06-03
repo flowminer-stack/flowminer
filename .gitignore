@@ -90,6 +90,16 @@ secrets/
 uploads/
 backend/uploads/
 
+# ─── Root-level test fixtures ──────────────────────────────────────────
+# Sample/event-log data belongs in docs/examples/ — those files are
+# intentionally tracked (baked into the backend image via the `examples`
+# build context in docker-compose.yml). These patterns are ROOT-ANCHORED
+# (leading slash) so they never match docs/examples/*; they just stop
+# loose fixtures from re-landing at the repo root.
+/HR_Onboarding*.csv
+/container_logistics.json
+/*.csv
+
 # ─── Generic cache ─────────────────────────────────────────────────────
 .cache/
 
