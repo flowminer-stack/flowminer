@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
@@ -5,6 +6,7 @@ import { useUIStore } from '@/store';
 import { X, CheckCircle, AlertTriangle, AlertCircle, Info } from 'lucide-react';
 import clsx from 'clsx';
 import ErrorBoundary from '@/components/common/ErrorBoundary';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ShortcutsModal from '@/components/common/ShortcutsModal';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { ProductTour } from '@/components/Onboarding/ProductTour';
@@ -51,7 +53,20 @@ export default function Layout() {
         <Header />
         <main className="p-6">
           <ErrorBoundary>
-            <Outlet />
+            {/* Suspense lives here — inside the layout — so first-time
+                lazy page chunks only swap the <main> content for the
+                spinner. The sidebar + header above stay mounted, which
+                is what kept the whole page from flashing on a tab's
+                first visit. */}
+            <Suspense
+              fallback={
+                <div className="flex min-h-[60vh] items-center justify-center">
+                  <LoadingSpinner size="md" />
+                </div>
+              }
+            >
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </main>
       </div>
