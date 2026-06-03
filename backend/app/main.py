@@ -338,6 +338,7 @@ _routers: list[tuple[str, str, list[str]]] = [
     ("app.api.projects", "/api/v1/projects", ["projects"]),
     ("app.api.event_logs", "/api/v1/event-logs", ["event-logs"]),
     ("app.api.mining", "/api/v1/mining", ["mining"]),
+    ("app.api.mining_reports", "/api/v1/mining", ["mining"]),
     ("app.api.search", "/api/v1/search", ["search"]),
     ("app.api.dashboards", "/api/v1/dashboards", ["dashboards"]),
     ("app.api.alerts", "/api/v1/alerts", ["alerts"]),
