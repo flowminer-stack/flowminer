@@ -41,7 +41,12 @@ from uuid import UUID
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import assert_event_log_access, get_current_active_user, get_current_user
+from app.api.deps import (
+    assert_event_log_access,
+    assert_project_access,
+    get_current_active_user,
+    get_current_user,
+)
 from app.database import async_session, get_db
 from app.models import User
 
@@ -312,6 +317,34 @@ async def _ws_can_access_event_log(user: User, event_log_id: UUID) -> bool:
         return True
 
 
+async def _ws_can_access_dashboard(user: User, dashboard_id: str) -> bool:
+    """True if ``user`` may access the given dashboard's parent project.
+
+    Mirrors the REST dashboard routes, which gate every operation on
+    ``assert_project_access(dashboard.project_id, ...)``. Any failure — a
+    malformed id, a missing dashboard, or no project access — denies the
+    connection, so a caller who merely knows (or guesses) a dashboard UUID
+    can't join another tenant's collaboration channel on a shared instance.
+    """
+    from sqlalchemy import select
+    from app.models import Dashboard
+
+    try:
+        dash_uuid = UUID(dashboard_id)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    async with async_session() as db:
+        try:
+            result = await db.execute(select(Dashboard).where(Dashboard.id == dash_uuid))
+            dashboard = result.scalar_one_or_none()
+            if dashboard is None:
+                return False
+            await assert_project_access(dashboard.project_id, db, user)
+        except Exception:
+            return False
+        return True
+
+
 # ─── Dashboard collaboration channel ──────────────────────────────────────
 #
 # Separate in-memory presence + broadcast registry for dashboard editing.
@@ -370,12 +403,22 @@ async def dashboard_collab_ws(
     client-supplied ``?user=`` string, so a peer can't spoof another viewer's
     identity. An invalid token closes the socket with code 1008.
 
+    Authorization: the authenticated user must be able to access the
+    dashboard's parent project (same check as the REST dashboard routes).
+    Without this, any authenticated user on a shared instance who knew a
+    dashboard UUID could eavesdrop on / inject into another tenant's edit
+    stream. An unauthorized caller closes the socket with code 1008 before
+    the connection is accepted or any presence is broadcast.
+
     Every message a client sends is rebroadcast to all other clients on the
     same dashboard. The server also announces presence changes (who joined,
     who left) as ``{"type": "presence", "viewers": [...]}``.
     """
     user = await _authenticate_ws(token)
     if user is None:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    if not await _ws_can_access_dashboard(user, dashboard_id):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
