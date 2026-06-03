@@ -241,11 +241,15 @@ MIT:
   care pathways, order lifecycles) on logs that were never instrumented
   for it. The output stays backward-compatible with any OCEL 2.0 reader.
 
-Being honest about the gap: **OPerA-style performance overlays** —
-projecting timing and frequency metrics onto the object-centric model
-the way Celonis does — are on the near-term roadmap, not shipped today.
-The discovery, the lifecycle analysis, and the state enrichment are
-here; the performance overlay is the next thing.
+**OPerA performance overlays** — projecting timing and frequency
+metrics (synchronization time, pooling time, lagging time, flow time)
+onto the object-centric Petri net the way Celonis does — are **shipped**
+via the optional `ocpa` package. The endpoint
+`GET /api/v1/ocel/{id}/opera-performance` returns per-arc and
+per-activity statistics using token-based replay with variable-arc
+semantics; install `ocpa` alongside the backend to enable it. The
+discovery, the lifecycle analysis, the state enrichment, and the
+performance overlay are all here.
 
 ---
 
@@ -261,7 +265,8 @@ To keep this credible, the cases where you should *not* pick FlowMiner:
   and it is a real one — it is just not what an MIT, self-hosted tool
   provides.
 - You need OPerA-grade performance overlays on object-centric models
-  *today*. See section 6 — that one is roadmap.
+  but cannot add the optional `ocpa` dependency — the overlay requires
+  it and will not run without it.
 
 For everyone else — teams who want real depth, want to keep their data,
 and do not want a six-figure contract or a copyleft obligation — that is

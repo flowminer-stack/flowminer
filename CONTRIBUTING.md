@@ -75,8 +75,8 @@ flowminer/
 │   └── nginx.conf      # Serves the built SPA + proxies /api to backend
 ├── docs/               # User + contributor documentation
 │   ├── examples/       # Sample event logs (OCEL, XES, CSV)
-│   ├── roadmap/        # Feature planning notes
-│   └── mcp-claude-desktop.md
+│   ├── guides/         # How-to guides (e.g. mcp-claude-desktop.md)
+│   └── roadmap/        # Feature planning notes
 ├── deploy/             # Kubernetes / helm / BI integration stubs
 ├── docker-compose.yml       # Production-safe default
 ├── docker-compose.dev.yml   # Dev override (hot-reload, bind mounts)

@@ -11,64 +11,17 @@ runs on a 4GB VPS you control. Upload an event log, get an interactive
 process map, drill into bottlenecks and variants, and ask an AI
 assistant about your process in plain English.
 
-<p align="center">
-  <img src="docs/media/screenshot-process-map.png" alt="Process map screenshot" width="720" />
-</p>
-
 > **Status:** actively developed, pre-1.0. API is mostly stable, UI
 > is still evolving. Issues and PRs welcome.
 
 ## Why FlowMiner
 
-Process mining usually asks you to trade depth for freedom. The
-commercial platforms (Celonis, Signavio) are deep but cloud-only,
-priced in six figures, and sold on multi-year contracts that put your
-data on someone else's infrastructure. The open-source tools are free
-but either copyleft (pm4py is AGPL-3.0), open-core (Apromore walls
-conformance, simulation, and connectors behind its enterprise edition
-and archived its OSS repos), or a research toolkit with no product
-around it. FlowMiner refuses the trade.
-
-| | **FlowMiner** | Celonis | Apromore CE | Disco | pm4py |
-|---|---|---|---|---|---|
-| **License** | MIT (permissive) | Proprietary | Open-core | Proprietary | AGPL-3.0 (copyleft) |
-| **Self-host** | Yes — full stack | No (cloud-only) | CE only; rest enterprise | Desktop only | Yes (library) |
-| **Conformance** | Yes | Yes | Enterprise tier | No | Yes (library) |
-| **Simulation** | Yes (discrete-event) | Yes | Enterprise tier | No | Partial (library) |
-| **OCEL / object-centric** | Yes — OCEL 2.0 + state-aware OCPM | Yes (flagship) | Limited | No | Yes (library) |
-| **AI assistant** | Yes — grounded chat + MCP | Yes (cloud) | No | No | No |
-| **Connectors** | CSV, XES, OCEL 2.0, REST, SQL, Jira, GitHub, Zendesk, Odoo | 150+ (enterprise) | Enterprise tier | File import | File import (library) |
-| **Pricing** | Free (MIT) | Six-figure, multi-year | Free CE / paid enterprise | Per-seat licence | Free (AGPL) |
-
-The headline reasons to switch:
-
-- **Permissive MIT.** No AGPL trap, no open-core paywall — conformance,
-  simulation, object-centric mining, every connector, and the AI
-  assistant are all in this one repository under the one licence.
-- **Your data, your exit.** Full project export to JSON
-  (`GET /projects/{id}/export`), analysis export to CSV / Excel /
-  BPMN, OCEL 2.0 in and out, and any-source ingestion mean no lock-in
-  — no three-year non-cancelable contract and no per-query data-access
-  tax. (The Celonis-vs-SAP data-access dispute and the S/4HANA
-  migration deadline are exactly the kind of toll booth this avoids.)
-- **No Center of Excellence, no SI engagement, no proprietary query
-  language.** Auto column-mapping on upload, a data-anchored AI chat
-  instead of Celonis's PQL, and an Extraction Copilot that writes the
-  SQL for you.
-- **Disco-fast to start.** `git clone` → first process map in minutes
-  on a 4GB VPS — no Apromore CE Java 8 / MySQL 5.6 / Kafka install
-  dance, no ProM Gatekeeper friction.
-- **On-prem and sovereign by default.** Regulated buyers that cloud-only
-  Celonis/Signavio structurally cannot serve. Privacy is, precisely,
-  **pseudonymisation + RBAC + audit** — the built-in anonymiser is a
-  deterministic, *reversible* hash, so RBAC is the real boundary, not
-  the hash.
-- **Object-centric process mining open and MIT.** OCEL 2.0 plus
-  state-aware OCPM — the capability Celonis is proudest of. (OPerA-style
-  performance overlays are on the near-term roadmap, not shipped yet.)
-
-Read the full argument, including the honest caveats, in
-[`docs/why-flowminer.md`](./docs/why-flowminer.md).
+FlowMiner gives you the depth of Celonis — process discovery,
+conformance, simulation, OCEL 2.0 object-centric mining, OPerA
+performance overlays, and a data-grounded AI assistant — under a
+permissive MIT licence, self-hosted on infrastructure you control, with
+no six-figure contract and no open-core paywall. See the full comparison
+(including honest caveats) in [`docs/why-flowminer.md`](./docs/why-flowminer.md).
 
 ---
 
@@ -254,7 +207,7 @@ the cache → React SPA renders results.
 - [`SECURITY.md`](./SECURITY.md) — security model, secret handling,
   how to report vulnerabilities
 - [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md)
-- [`docs/mcp-claude-desktop.md`](./docs/mcp-claude-desktop.md) —
+- [`docs/guides/mcp-claude-desktop.md`](./docs/guides/mcp-claude-desktop.md) —
   connect Claude Desktop to FlowMiner via MCP
 - [`docs/examples/`](./docs/examples/) — sample event logs
 - [`docs/roadmap/`](./docs/roadmap/) — open planning notes

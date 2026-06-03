@@ -47,6 +47,7 @@ import { useUIStore } from '@/store';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import PageHeader from '@/components/common/PageHeader';
 import { getCached, setCached } from '@/store/analysisCache';
+import { formatDuration } from '@/utils/format';
 import ImprovementReport from '@/components/OCPM/ImprovementReport';
 import type {
   OCELSummary,
@@ -86,14 +87,6 @@ function formatNumber(n: number): string {
 function getTypeColor(types: string[], type: string): string {
   const idx = types.indexOf(type);
   return TYPE_COLORS[idx % TYPE_COLORS.length] ?? '#64748b';
-}
-
-function formatDuration(seconds: number | null): string {
-  if (seconds === null || seconds === undefined) return '—';
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-  return `${(seconds / 86400).toFixed(1)}d`;
 }
 
 // Compute a relative intensity 0–1 for heat mapping
@@ -607,7 +600,7 @@ function ObjectLifecyclePanel({
               </div>
               <div>
                 <p className="text-[18px] font-bold tabular-nums text-fg leading-none">
-                  {formatDuration(lc.avg_lifecycle_duration)}
+                  {lc.avg_lifecycle_duration == null ? '—' : formatDuration(lc.avg_lifecycle_duration)}
                 </p>
                 <p className="mt-0.5 text-[9px] uppercase tracking-wider text-fg-faint">avg life</p>
               </div>
@@ -1560,13 +1553,16 @@ function OPeraPerformancePanel({ ocelId }: { ocelId: string }) {
             {data.activities.map((row) => (
               <tr key={row.activity} className="hover:bg-tint/50 transition-colors">
                 <td className="border-b border-line/40 py-1.5 pr-4 font-medium text-fg-secondary whitespace-nowrap">{row.activity}</td>
-                {OPERA_METRICS.map((m) => (
-                  <td key={m.key} className="border-b border-line/40 py-1.5 px-2 text-right tabular-nums text-fg">
-                    {row[m.key] === null || row[m.key] === undefined
-                      ? <span className="text-[10px] text-fg-ghost">—</span>
-                      : formatDuration(row[m.key])}
-                  </td>
-                ))}
+                {OPERA_METRICS.map((m) => {
+                  const v = row[m.key];
+                  return (
+                    <td key={m.key} className="border-b border-line/40 py-1.5 px-2 text-right tabular-nums text-fg">
+                      {v == null
+                        ? <span className="text-[10px] text-fg-ghost">—</span>
+                        : formatDuration(v)}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>

@@ -10,17 +10,10 @@ import ErrorState from '@/components/common/ErrorState';
 import ExportButtons from '@/components/common/ExportButtons';
 import PageHeader from '@/components/common/PageHeader';
 import EmptyState from '@/components/common/EmptyState';
-import VariantExplainDrawer from '@/components/VariantExplorer/VariantExplainDrawer';
+import VariantExplainDrawer from '@/components/Variants/VariantExplainDrawer';
 import VariantEvolution from '@/components/Variants/VariantEvolution';
 import { useFilterStore } from '@/store/filterStore';
-
-function formatDuration(seconds: number | null): string {
-  if (seconds === null || seconds === undefined) return '--';
-  if (seconds < 60) return `${seconds.toFixed(0)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-  return `${(seconds / 86400).toFixed(1)}d`;
-}
+import { formatDuration } from '@/utils/format';
 
 export default function VariantsPage() {
   const { eventLogId } = useParams<{ eventLogId: string }>();
@@ -233,7 +226,7 @@ export default function VariantsPage() {
                   <div>
                     <span className="text-fg-muted">Avg Duration: </span>
                     <span className="font-medium text-fg">
-                      {formatDuration(variant.avg_duration)}
+                      {variant.avg_duration == null ? '—' : formatDuration(variant.avg_duration)}
                     </span>
                   </div>
                   {variant.min_duration !== null && (
@@ -241,7 +234,7 @@ export default function VariantsPage() {
                       <span className="text-fg-muted">Range: </span>
                       <span className="font-medium text-fg">
                         {formatDuration(variant.min_duration)} -{' '}
-                        {formatDuration(variant.max_duration)}
+                        {variant.max_duration == null ? '—' : formatDuration(variant.max_duration)}
                       </span>
                     </div>
                   )}
@@ -265,7 +258,7 @@ export default function VariantsPage() {
                     onClick={() =>
                       setExplainTarget({
                         activities: variant.activities,
-                        label: `Variant #${index + 1} · ${variant.percentage.toFixed(1)}% · ${formatDuration(variant.avg_duration)}`,
+                        label: `Variant #${index + 1} · ${variant.percentage.toFixed(1)}% · ${variant.avg_duration == null ? '—' : formatDuration(variant.avg_duration)}`,
                       })
                     }
                     className="inline-flex items-center gap-1 rounded-md border border-line bg-surface-0 px-2 py-1 text-[11px] font-medium text-fg-muted transition-colors hover:border-accent hover:bg-accent/5 hover:text-accent"

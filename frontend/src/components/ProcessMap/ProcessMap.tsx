@@ -7,7 +7,7 @@ import {
   Maximize2,
   MessageSquare,
 } from 'lucide-react';
-import { formatNumber } from '../../utils/format';
+import { formatNumber, formatDuration } from '../../utils/format';
 import type { ProcessNode, ProcessEdge, Annotation } from '../../types';
 import { useUIStore } from '../../store';
 import ExportMenu from './ExportMenu';
@@ -753,7 +753,7 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
               <>
                 <span>Avg dwell</span>
                 <span className="tabular-nums text-fg-secondary">
-                  {formatDurationShort(hover.node.avg_duration)}
+                  {formatDuration(hover.node.avg_duration)}
                 </span>
               </>
             )}
@@ -761,7 +761,7 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
               <>
                 <span>Median</span>
                 <span className="tabular-nums text-fg-secondary">
-                  {formatDurationShort(hover.node.median_duration)}
+                  {formatDuration(hover.node.median_duration)}
                 </span>
               </>
             )}
@@ -783,13 +783,5 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
     </div>
   );
 };
-
-function formatDurationShort(s: number): string {
-  if (!s && s !== 0) return '—';
-  if (s < 60) return `${s.toFixed(0)}s`;
-  if (s < 3600) return `${(s / 60).toFixed(1)}m`;
-  if (s < 86400) return `${(s / 3600).toFixed(1)}h`;
-  return `${(s / 86400).toFixed(1)}d`;
-}
 
 export default ProcessMap;

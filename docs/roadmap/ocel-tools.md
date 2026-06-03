@@ -48,10 +48,14 @@ can surface as chat tools or as UI filters.
 
 ## Highest-value additions (ordered by effort → impact)
 
-### 1. OPerA performance overlay on the OCPN
+### 1. OPerA performance overlay on the OCPN — DONE (shipped)
 
 **Paper**: Park, Adams, van der Aalst (2022) — *OPerA: Object-Centric
 Performance Analysis*, ICPM 2022, [arXiv 2204.10662](https://arxiv.org/abs/2204.10662).
+
+**Status**: Shipped. Endpoint: `GET /api/v1/ocel/{id}/opera-performance`.
+Requires the optional `ocpa` package to be installed alongside the
+backend. See also the corrected writeup in `docs/why-flowminer.md`.
 
 **What it computes**: Given the OCPN we already discover, replays the
 OCEL using token-based replay with variable-arc semantics and computes
@@ -71,14 +75,6 @@ differentiator between "real OCPM" and "flattened-per-type-with-a-logo".
 Celonis's performance story doesn't expose these because their
 analytics are flattening-based. Shipping this gives us a feature
 Celonis genuinely does not have.
-
-**Where it surfaces**: a new "OCPN performance overlay" panel on the
-OCPM page, colour-coding arcs by synchronization/pooling/lagging time.
-Also a new chat tool `show_sync_times` / `show_pooling_times` that
-renders the per-arc breakdown as a bar chart.
-
-**Effort**: `ocpa` implements the replayer — we pass it our existing
-OCPN and call `.apply()`. Frontend: one new panel. **1-2 weeks.**
 
 ### 2. Object-centric variant explorer (graph-based, not sequences)
 
@@ -341,9 +337,9 @@ If we treat this as a Phase 7 in `phases.md`:
 - Item 6 (interleavings) — 2 days, cheapest win
 - Item 5 (TOTeM) — 3-4 days
 
-**Sprint 2 (2 weeks):**
-- Item 1 (OPerA metrics) — flagship feature
-- Add `ocpa` to the backend Dockerfile
+**Sprint 2 (2 weeks):** — DONE
+- Item 1 (OPerA metrics) — shipped; endpoint `GET /api/v1/ocel/{id}/opera-performance`
+- Add `ocpa` to the backend Dockerfile — done
 
 **Sprint 3 (2-3 weeks):**
 - Item 3 (OC-DFG conformance overlay) — 1 week

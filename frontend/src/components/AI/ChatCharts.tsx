@@ -16,6 +16,7 @@ import type {
   ChatToolResultEvent,
 } from '@/api/client';
 import { useFilterStore } from '@/store/filterStore';
+import { formatDuration } from '@/utils/format';
 import {
   BarChart as RBarChart,
   Bar,
@@ -29,13 +30,6 @@ import {
 } from 'recharts';
 
 // ── Helpers ───────────────────────────────────────────────────────────
-
-function formatDurationSeconds(seconds: number): string {
-  if (seconds < 60) return `${seconds.toFixed(0)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-  return `${(seconds / 86400).toFixed(1)}d`;
-}
 
 /** Map a chat-tool name to the route the user should visit for
  *  the full-page version of that analysis. */
@@ -66,7 +60,7 @@ export function BarChartRender({
   const format = render.y_formatter;
   const tickFormatter = (v: number) =>
     format === 'duration_seconds'
-      ? formatDurationSeconds(v)
+      ? formatDuration(v)
       : format === 'percent'
         ? `${v}%`
         : String(v);

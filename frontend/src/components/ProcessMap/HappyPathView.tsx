@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowDown, GitBranch } from 'lucide-react';
 import { mining } from '@/api/client';
+import { formatDuration } from '@/utils/format';
 import type { VariantResponse, Variant } from '@/types';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
@@ -8,14 +9,6 @@ import EmptyState from '@/components/common/EmptyState';
 
 interface HappyPathViewProps {
   eventLogId: string;
-}
-
-function formatDuration(seconds: number | null | undefined): string {
-  if (seconds == null) return '—';
-  if (seconds < 60) return `${seconds.toFixed(0)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-  return `${(seconds / 86400).toFixed(1)}d`;
 }
 
 /**

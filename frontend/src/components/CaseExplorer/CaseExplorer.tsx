@@ -15,17 +15,10 @@ import clsx from 'clsx';
 import { format, parseISO } from 'date-fns';
 import DataTable from '@/components/common/DataTable';
 import { mining } from '@/api/client';
+import { formatDuration } from '@/utils/format';
 import type { CaseInfo, CaseDetailResponse } from '@/types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatDurationSeconds(seconds: number | null): string {
-  if (seconds === null || seconds === undefined) return '—';
-  if (seconds < 60) return `${seconds.toFixed(0)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-  return `${(seconds / 86400).toFixed(1)}d`;
-}
 
 function formatTimestamp(ts: string): string {
   try {
@@ -115,7 +108,7 @@ const CaseDetailPanel: React.FC<CaseDetailPanelProps> = ({
               <div className="rounded-lg border border-line bg-surface-2 px-3 py-2">
                 <p className="text-[10px] text-fg-faint uppercase tracking-wider">Duration</p>
                 <p className="mt-0.5 text-sm font-semibold text-fg">
-                  {formatDurationSeconds(detail.total_duration)}
+                  {detail.total_duration == null ? '—' : formatDuration(detail.total_duration)}
                 </p>
               </div>
             </div>
@@ -169,7 +162,7 @@ const CaseDetailPanel: React.FC<CaseDetailPanelProps> = ({
                       {!isLast && evt.duration_to_next !== null && (
                         <div className="flex items-center gap-1 px-3 py-1 text-[10px] text-fg-faint">
                           <ArrowRight size={9} />
-                          <span>{formatDurationSeconds(evt.duration_to_next)}</span>
+                          <span>{formatDuration(evt.duration_to_next)}</span>
                         </div>
                       )}
                     </div>
@@ -269,7 +262,10 @@ const CaseExplorer: React.FC<CaseExplorerProps> = ({
         cell: ({ getValue }) => (
           <span className="flex items-center gap-1 text-[12px] text-fg-secondary">
             <Clock size={10} className="text-fg-faint" />
-            {formatDurationSeconds(getValue() as number | null)}
+            {(() => {
+              const v = getValue() as number | null;
+              return v == null ? '—' : formatDuration(v);
+            })()}
           </span>
         ),
         size: 90,

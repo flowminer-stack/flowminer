@@ -20,13 +20,7 @@ import { useMiningStore } from '@/store';
 import { useEventLogData } from '@/hooks/useProcessMining';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds.toFixed(0)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-  return `${(seconds / 86400).toFixed(1)}d`;
-}
+import { formatDuration } from '@/utils/format';
 
 export default function RootCausePage() {
   const { eventLogId } = useParams<{ eventLogId: string }>();

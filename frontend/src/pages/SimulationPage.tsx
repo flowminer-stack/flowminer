@@ -22,6 +22,7 @@ import { useUIStore } from '@/store';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import DataTable from '@/components/common/DataTable';
 import ActivityCostTable from '@/components/Simulation/ActivityCostTable';
+import { formatDuration } from '@/utils/format';
 import type {
   SimulationModification,
   SimulationResponse,
@@ -31,13 +32,6 @@ import type {
 } from '@/types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-  return `${(seconds / 86400).toFixed(1)}d`;
-}
 
 function formatPct(pct: number): string {
   return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;

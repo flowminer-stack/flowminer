@@ -24,14 +24,7 @@ import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
 import { WhatIfSlider, AutomationCandidates } from '@/components/Bottlenecks/WhatIfAndAutomation';
 import CaseGantt from '@/components/CaseExplorer/CaseGantt';
-
-function formatDuration(seconds: number | null | undefined): string {
-  if (seconds === null || seconds === undefined) return '--';
-  if (seconds < 60) return `${seconds.toFixed(0)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-  return `${(seconds / 86400).toFixed(1)}d`;
-}
+import { formatDuration } from '@/utils/format';
 
 const severityColors = {
   low: { bg: 'bg-tint', text: 'text-fg-secondary', badge: 'badge-slate', bar: '#94a3b8' },

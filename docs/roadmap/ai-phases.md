@@ -114,7 +114,7 @@ polish + docs + example walkthroughs.
 4. Publish a minimal Python wheel: `pip install flowminer-mcp`.
    Ship a `Dockerfile.mcp` too so the standard way to run it is
    `docker run flowminer-mcp --backend http://host:8000 --token $X`.
-5. Docs: `docs/mcp-claude-desktop.md` with a literal
+5. Docs: `docs/guides/mcp-claude-desktop.md` with a literal
    `claude_desktop_config.json` snippet people can copy-paste.
    Include a worked example: "Claude, summarise the bottlenecks in
    the HR onboarding log."

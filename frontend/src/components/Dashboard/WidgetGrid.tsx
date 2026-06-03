@@ -18,6 +18,7 @@ import {
 import KPICard from './KPICard';
 import ProcessChart from './ProcessChart';
 import { mining } from '@/api/client';
+import { formatDuration } from '@/utils/format';
 import type {
   BottleneckResponse,
   VariantResponse,
@@ -462,14 +463,6 @@ const KPIWidget: React.FC<{ eventLogId: string; config: Record<string, any>; tit
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + '…' : s;
-}
-
-function formatDuration(seconds: number | null | undefined): string {
-  if (seconds == null) return '—';
-  if (seconds < 60) return `${seconds.toFixed(0)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-  return `${(seconds / 86400).toFixed(1)}d`;
 }
 
 /* ── Dispatcher ──────────────────────────────────────────────────────────── */

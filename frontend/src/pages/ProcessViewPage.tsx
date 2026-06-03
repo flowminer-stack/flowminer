@@ -56,6 +56,7 @@ import FilterPanel from '@/components/ProcessMap/FilterPanel';
 import ComplexityScoreBadge from '@/components/ProcessMap/ComplexityScoreBadge';
 import { mining as miningApi, ai as aiApi } from '@/api/client';
 import { useUIStore } from '@/store';
+import { formatDuration } from '@/utils/format';
 import type { ProcessFilter } from '@/types';
 
 type Tab = 'map' | 'happy_path' | 'bpmn' | 'cases' | 'analysis';
@@ -154,14 +155,6 @@ const analysisGroups: AnalysisGroup[] = [
     ],
   },
 ];
-
-function formatDuration(seconds: number | null): string {
-  if (seconds === null || seconds === undefined) return '--';
-  if (seconds < 60) return `${seconds.toFixed(0)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-  return `${(seconds / 86400).toFixed(1)}d`;
-}
 
 // Merge two ProcessFilters into one (sidebar state + chip-derived
 // filter). Lists are unioned, scalar bounds take the *tighter* value,
@@ -1069,8 +1062,8 @@ export default function ProcessViewPage() {
                   <div className="mt-3 space-y-2">
                     {[
                       { icon: BarChart3, label: 'Frequency', value: selectedNodeData.frequency.toLocaleString() },
-                      { icon: Clock, label: 'Avg Duration', value: formatDuration(selectedNodeData.avg_duration) },
-                      { icon: Clock, label: 'Med Duration', value: formatDuration(selectedNodeData.median_duration) },
+                      { icon: Clock, label: 'Avg Duration', value: selectedNodeData.avg_duration == null ? '—' : formatDuration(selectedNodeData.avg_duration) },
+                      { icon: Clock, label: 'Med Duration', value: selectedNodeData.median_duration == null ? '—' : formatDuration(selectedNodeData.median_duration) },
                     ].map((row) => (
                       <div key={row.label} className="flex items-center justify-between">
                         <span className="flex items-center gap-1.5 text-[11px] text-fg-muted">

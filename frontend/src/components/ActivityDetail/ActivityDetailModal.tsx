@@ -22,6 +22,7 @@ import {
 import Modal from '@/components/common/Modal';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import { mining } from '@/api/client';
+import { formatDuration } from '@/utils/format';
 import type { ActivityDetailResponse } from '@/types';
 
 interface ActivityDetailModalProps {
@@ -29,14 +30,6 @@ interface ActivityDetailModalProps {
   activityName: string;
   isOpen: boolean;
   onClose: () => void;
-}
-
-function formatDuration(seconds: number | null | undefined): string {
-  if (seconds === null || seconds === undefined) return '--';
-  if (seconds < 60) return `${seconds.toFixed(0)}s`;
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-  return `${(seconds / 86400).toFixed(1)}d`;
 }
 
 function StatPill({
@@ -162,10 +155,10 @@ export default function ActivityDetailModal({
               Duration
             </h3>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <StatPill label="Avg" value={formatDuration(data.avg_duration)} icon={Clock} />
-              <StatPill label="Median" value={formatDuration(data.median_duration)} icon={Clock} />
-              <StatPill label="Min" value={formatDuration(data.min_duration)} icon={Clock} />
-              <StatPill label="Max" value={formatDuration(data.max_duration)} icon={Clock} />
+              <StatPill label="Avg" value={data.avg_duration == null ? '—' : formatDuration(data.avg_duration)} icon={Clock} />
+              <StatPill label="Median" value={data.median_duration == null ? '—' : formatDuration(data.median_duration)} icon={Clock} />
+              <StatPill label="Min" value={data.min_duration == null ? '—' : formatDuration(data.min_duration)} icon={Clock} />
+              <StatPill label="Max" value={data.max_duration == null ? '—' : formatDuration(data.max_duration)} icon={Clock} />
             </div>
           </div>
 
