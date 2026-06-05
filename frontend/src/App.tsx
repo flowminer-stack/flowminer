@@ -46,6 +46,11 @@ const TaskMiningPage = lazy(() => import('@/pages/TaskMiningPage'));
 const MissionControlPage = lazy(() => import('@/pages/MissionControlPage'));
 const ProcessGovernancePage = lazy(() => import('@/pages/ProcessGovernancePage'));
 const EACapabilityMapPage = lazy(() => import('@/pages/EACapabilityMapPage'));
+const AutomationRoiPage = lazy(() => import('@/pages/AutomationRoiPage'));
+const ProcessHealthPage = lazy(() => import('@/pages/ProcessHealthPage'));
+const CausalMapPage = lazy(() => import('@/pages/CausalMapPage'));
+const ProcessPulsePage = lazy(() => import('@/pages/ProcessPulsePage'));
+const ProcessCityPage = lazy(() => import('@/pages/ProcessCityPage'));
 
 // ─── Protected Route ─────────────────────────────────────────────────────────
 
@@ -204,6 +209,11 @@ export default function App() {
           />
           <Route path="/initiatives/:projectId" element={<InitiativesPage />} />
           <Route path="/sustainability/:eventLogId" element={<SustainabilityPage />} />
+          <Route path="/automation-roi/:eventLogId" element={<AutomationRoiPage />} />
+          <Route path="/health/:eventLogId" element={<ProcessHealthPage />} />
+          <Route path="/causal-map/:eventLogId" element={<CausalMapPage />} />
+          <Route path="/pulse/:eventLogId" element={<ProcessPulsePage />} />
+          <Route path="/process-city/:eventLogId" element={<ProcessCityPage />} />
           <Route
             path="/benchmark"
             element={

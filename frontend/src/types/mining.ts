@@ -275,3 +275,19 @@ export interface ProcessSummary {
   bottlenecks: Bottleneck[];
   process_map: DiscoveryResponse;
 }
+
+// Causal DAG of activity dwell-time dependencies (DirectLiNGAM). A positive
+// edge weight means the source activity SLOWS the target; negative means it
+// SPEEDS it up. `method` is 'direct_lingam' | 'correlation_fallback' |
+// 'empty' | 'insufficient_variance'.
+export interface CausalDagEdge {
+  source: string;
+  target: string;
+  weight: number;
+}
+export interface CausalDagResponse {
+  nodes: string[];
+  edges: CausalDagEdge[];
+  method: string;
+  sample_size?: number;
+}

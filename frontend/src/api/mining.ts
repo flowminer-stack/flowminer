@@ -1,5 +1,6 @@
 import api from './http';
 import type {
+  CausalDagResponse,
   DiscoveryRequest,
   DiscoveryResponse,
   VariantResponse,
@@ -269,6 +270,12 @@ export const mining = {
   checkFourEyes: async (id: string, act1: string, act2: string) => (await api.post(`/mining/four-eyes/${id}`, { activity1: act1, activity2: act2 })).data,
   getPerformanceSpectrum: async (id: string) => (await api.get(`/mining/performance-spectrum/${id}`)).data,
   getFeatures: async (id: string) => (await api.get(`/mining/features/${id}`)).data,
+  getCausalDag: async (
+    id: string,
+    topK = 20,
+    threshold = 0.1,
+  ): Promise<CausalDagResponse> =>
+    (await api.get(`/mining/causal-dag/${id}`, { params: { top_k: topK, threshold } })).data,
 
   getDrift: async (
     eventLogId: string,

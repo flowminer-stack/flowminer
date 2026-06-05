@@ -15,6 +15,11 @@ import {
   Leaf,
   Film,
   TrendingUp,
+  Bot,
+  Workflow,
+  Radio,
+  Building2,
+  HeartPulse,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
@@ -63,6 +68,16 @@ const analysisGroups: AnalysisGroup[] = [
       { label: 'Animation', description: 'Replay cases on the map', icon: Film, path: 'animation' },
       { label: 'Compare', description: 'Diff two time periods', icon: GitCompareArrows, path: 'comparison' },
       { label: 'Sustainability', description: 'CO₂ & ESG footprint', icon: Leaf, path: 'sustainability' },
+    ],
+  },
+  {
+    label: 'Value & frontier',
+    items: [
+      { label: 'Process Health', description: 'One composite health score', icon: HeartPulse, path: 'health' },
+      { label: 'Automation ROI', description: 'Where automation pays off, in $', icon: Bot, path: 'automation-roi' },
+      { label: 'Causal Map', description: 'What actually causes slowdowns', icon: Workflow, path: 'causal-map' },
+      { label: 'Live Pulse', description: 'Watch cases flow through the map', icon: Radio, path: 'pulse' },
+      { label: 'Process City', description: 'Your process as a 3D city', icon: Building2, path: 'process-city' },
     ],
   },
 ];
