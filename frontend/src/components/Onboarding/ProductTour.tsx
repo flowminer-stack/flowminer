@@ -11,6 +11,24 @@ import { TOURS, type TourStep } from './tours.config';
 // experience never repeats but users who navigate to a new area of
 // the app still get its dedicated intro.
 
+// Master kill-switch for tours — used by automated tests, screenshots,
+// and live demos. Pass ``?tours=off`` once (it persists to localStorage so
+// SPA navigation stays tour-free) or set the flag directly. Checked
+// synchronously on mount, before any tour is scheduled, so even the first
+// page never flashes a tour.
+function toursDisabled(): boolean {
+  try {
+    if (localStorage.getItem('flowminer-tours-off') === '1') return true;
+    if (new URLSearchParams(window.location.search).get('tours') === 'off') {
+      localStorage.setItem('flowminer-tours-off', '1');
+      return true;
+    }
+  } catch {
+    /* localStorage unavailable — fall through */
+  }
+  return false;
+}
+
 export function ProductTour() {
   const location = useLocation();
   const [tourId, setTourId] = useState<string | null>(null);
@@ -23,6 +41,7 @@ export function ProductTour() {
   // wins, so '/process/:id' gets the process-view tour instead of
   // the generic welcome one.
   useEffect(() => {
+    if (toursDisabled()) return;
     const candidates = TOURS.filter((t) =>
       location.pathname.startsWith(t.routePrefix),
     ).sort((a, b) => b.routePrefix.length - a.routePrefix.length);

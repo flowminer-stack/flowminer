@@ -27,6 +27,11 @@ export default function OCDFGGraph({
     if (!cyContainerRef.current) return;
     if (data.nodes.length === 0) return;
 
+    // Preserve the user's zoom/pan across a rebuild (e.g. a theme toggle)
+    // so the camera doesn't snap back to the whole graph.
+    const prevView = cyRef.current
+      ? { zoom: cyRef.current.zoom(), pan: { ...cyRef.current.pan() } }
+      : null;
     if (cyRef.current) {
       cyRef.current.destroy();
       cyRef.current = null;
@@ -126,7 +131,7 @@ export default function OCDFGGraph({
         rankSep: 120,
         edgeSep: 30,
         animate: false,
-        fit: true,
+        fit: !prevView,
         padding: 50,
       } as any,
       userZoomingEnabled: true,
@@ -141,6 +146,7 @@ export default function OCDFGGraph({
       textureOnViewport: true,
     });
 
+    if (prevView) cy.viewport({ zoom: prevView.zoom, pan: prevView.pan });
     cyRef.current = cy;
   }, [data, summary, isDark]);
 

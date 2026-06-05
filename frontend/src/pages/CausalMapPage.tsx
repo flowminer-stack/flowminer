@@ -166,6 +166,11 @@ export default function CausalMapPage() {
       }),
     ];
 
+    // Preserve zoom/pan across a rebuild (slider nudge / theme toggle) so
+    // the camera doesn't snap back to the whole graph every time.
+    const prevView = cyRef.current
+      ? { zoom: cyRef.current.zoom(), pan: { ...cyRef.current.pan() } }
+      : null;
     if (cyRef.current) {
       cyRef.current.destroy();
       cyRef.current = null;
@@ -174,7 +179,7 @@ export default function CausalMapPage() {
       container: containerRef.current,
       elements: elements as any,
       style: styles(isDark),
-      layout: { name: 'dagre', rankDir: 'LR', nodeSep: 50, rankSep: 90, edgeSep: 20, fit: true, padding: 40, animate: false } as any,
+      layout: { name: 'dagre', rankDir: 'LR', nodeSep: 50, rankSep: 90, edgeSep: 20, fit: !prevView, padding: 40, animate: false } as any,
       minZoom: 0.15,
       maxZoom: 5,
       wheelSensitivity: 1.0,
@@ -182,6 +187,7 @@ export default function CausalMapPage() {
       textureOnViewport: true,
       boxSelectionEnabled: false,
     });
+    if (prevView) cy.viewport({ zoom: prevView.zoom, pan: prevView.pan });
     cyRef.current = cy;
 
     // Click an activity → highlight what causes it + what it causes; dim rest.

@@ -26,6 +26,8 @@ export default function OCPetriNetPanel({ ocelId }: { ocelId: string }) {
   }, [ocelId]);
 
   const cyContainerRef = useRef<HTMLDivElement>(null);
+  // Remembered zoom/pan so a theme rebuild doesn't snap back to the whole graph.
+  const viewRef = useRef<{ zoom: number; pan: { x: number; y: number } } | null>(null);
   const theme = useUIStore((s) => s.theme);
   const isDark = theme === 'dark';
 
@@ -62,11 +64,16 @@ export default function OCPetriNetPanel({ ocelId }: { ocelId: string }) {
         { selector: 'node.objtype', style: { 'label': 'data(label)', 'background-color': isDark ? '#083344' : '#ecfeff', 'border-width': 2, 'border-color': '#06b6d4', 'shape': 'roundrectangle', 'width': 'label', 'height': 'label', 'padding': '12px', 'font-size': '11px', 'font-weight': 700, 'font-family': 'Manrope, sans-serif', 'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap', 'text-max-width': '120px', 'color': '#06b6d4', 'min-zoomed-font-size': 9 } as any },
         { selector: 'edge', style: { 'width': 1, 'line-color': edgeColor, 'target-arrow-shape': 'none', 'opacity': 0.4, 'curve-style': 'bezier' } as any },
       ],
-      layout: { name: 'cose', animate: false, fit: true, nodeRepulsion: () => 30000, idealEdgeLength: () => 80, gravity: 0.5, padding: 30 } as any,
+      layout: { name: 'cose', animate: false, fit: !viewRef.current, nodeRepulsion: () => 30000, idealEdgeLength: () => 80, gravity: 0.5, padding: 30 } as any,
       userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.15, maxZoom: 5, wheelSensitivity: 1.0, pixelRatio: 1, textureOnViewport: true,
     });
 
-    return () => { cy.destroy(); };
+    if (viewRef.current) cy.viewport({ zoom: viewRef.current.zoom, pan: viewRef.current.pan });
+
+    return () => {
+      viewRef.current = { zoom: cy.zoom(), pan: { ...cy.pan() } };
+      cy.destroy();
+    };
   }, [data, isDark]);
 
   if (loading) return <div className="flex justify-center py-8"><LoadingSpinner size="md" text="Computing activity coverage…" /></div>;

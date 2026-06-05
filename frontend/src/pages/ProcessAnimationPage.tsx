@@ -10,6 +10,7 @@ import type { DiscoveryResponse, TimelineResponse } from '@/types';
 import { useEventLogData } from '@/hooks/useProcessMining';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import { getCyStyles } from '@/components/ProcessMap/ProcessMap';
+import { FLUID_CY_OPTS } from '@/utils/cyFluid';
 import { useUIStore } from '@/store';
 
 cytoscape.use(dagre);
@@ -105,7 +106,7 @@ export default function ProcessAnimationPage() {
         nodeSep: 40,
         rankSep: 70,
       } as any,
-      wheelSensitivity: 0.3,
+      ...FLUID_CY_OPTS,
     });
 
     cyRef.current = cy;

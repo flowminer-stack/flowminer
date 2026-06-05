@@ -5,6 +5,7 @@ import PageHeader from '@/components/common/PageHeader';
 import cytoscape from 'cytoscape';
 import type { Core } from 'cytoscape';
 import { useEventLogData } from '@/hooks/useProcessMining';
+import { FLUID_CY_OPTS } from '@/utils/cyFluid';
 import { mining } from '@/api/client';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
@@ -181,6 +182,7 @@ export default function SocialNetworkPage() {
             'text-valign': 'center',
             'text-halign': 'center',
             'color': nodeText,
+            'min-zoomed-font-size': 9,
             'transition-property': 'border-color border-width opacity background-color',
             'transition-duration': '0.15s',
           } as any,
@@ -211,6 +213,7 @@ export default function SocialNetworkPage() {
             'width': 'data(width)',
             'opacity': 0.5,
             'label': 'data(label)',
+            'min-zoomed-font-size': 9,
             'font-size': '9px',
             'font-family': 'JetBrains Mono, monospace',
             'text-rotation': 'autorotate',
@@ -252,11 +255,7 @@ export default function SocialNetworkPage() {
       } as any,
       userZoomingEnabled: true,
       userPanningEnabled: true,
-      minZoom: 0.2,
-      maxZoom: 3,
-      wheelSensitivity: 0.3,
-      pixelRatio: 2,
-      textureOnViewport: false,
+      ...FLUID_CY_OPTS,
     });
 
     cyRef.current = cy;
