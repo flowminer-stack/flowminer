@@ -156,6 +156,44 @@ async def create_connector(
     return connector
 
 
+@router.get("/registry")
+async def list_connector_registry(
+    current_user: User = Depends(get_current_active_user),
+):
+    """Declarative metadata + JSON-Schema config for every connector type.
+
+    The frontend builds the connector picker and (for simple connectors) the
+    setup form from this, so the type list and config fields come from one
+    backend source of truth instead of being hand-maintained in the UI.
+
+    Defined BEFORE the ``/{connector_id}`` route so "registry" is not parsed
+    as a connector UUID.
+    """
+    from app.services.connectors import connector_registry
+    from app.services.connectors.config_schemas import get_config_model
+
+    entries: list[dict] = []
+    for meta in connector_registry():
+        model = get_config_model(meta.id)
+        schema = model.model_json_schema() if model is not None else {}
+        # A multi-dialect connector (database) expands into one pickable entry
+        # per variant id, all sharing the same config schema.
+        variants = meta.variants or {meta.id: meta.label}
+        for vid, vlabel in variants.items():
+            entries.append(
+                {
+                    "id": vid,
+                    "label": vlabel,
+                    "category": meta.category,
+                    "mapping_mode": meta.mapping_mode,
+                    "supports_incremental": meta.supports_incremental,
+                    "config_schema": schema,
+                }
+            )
+    entries.sort(key=lambda e: (e["category"], e["label"]))
+    return entries
+
+
 @router.get("/{connector_id}", response_model=ConnectorResponse)
 async def get_connector(
     connector_id: UUID,
