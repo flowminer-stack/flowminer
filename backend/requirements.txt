@@ -51,6 +51,11 @@ faker
 # connector tests against free dev orgs (GitHub/Salesforce/ServiceNow/Jira).
 # Default record mode is "none" so normal runs never hit the network.
 pytest-recording
+# Generates TPC-H relational data locally at any scale factor (CALL dbgen) to
+# stress the multi-table log-join (orders<->lineitem on orderkey). Used by the
+# integration-tier tests/connectors/test_log_join_tpch.py (importorskip'd) AND
+# by demo_seeder to build the bundled TPC-H demo project at boot.
+duckdb
 structlog
 sentry-sdk[fastapi]
 slowapi

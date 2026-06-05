@@ -1,0 +1,5 @@
+# BPIC logs are large (728 MB uncompressed) — fetch locally, never commit.
+*.xes
+*.xes.gz
+*.gz
+*.csv

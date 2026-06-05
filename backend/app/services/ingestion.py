@@ -74,7 +74,17 @@ class IngestionService:
                 )
 
     def _detect_file_type(self, file_path: str) -> str:
-        """Detect file type from extension."""
+        """Detect file type from extension.
+
+        A gzipped CSV (``.csv.gz``) is treated as ``.csv`` — pandas.read_csv
+        transparently decompresses by extension, so the whole CSV path (encoding
+        fallback, chunking, mining) works unchanged. This lets us ship large
+        bundled logs (e.g. the 1.6M-event BPIC demo) compressed (~25 MB vs
+        129 MB) and lets users upload gzipped logs.
+        """
+        name = Path(file_path).name.lower()
+        if name.endswith(".csv.gz"):
+            return ".csv"
         ext = Path(file_path).suffix.lower()
         if ext not in self.SUPPORTED_EXTENSIONS:
             raise ValueError(

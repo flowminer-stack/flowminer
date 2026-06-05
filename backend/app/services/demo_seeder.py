@@ -121,6 +121,50 @@ DEMO_PROJECTS: tuple[DemoProjectSpec, ...] = (
         ),
     ),
     DemoProjectSpec(
+        name="Demo · TPC-H Order-to-Cash (multi-table join)",
+        description=(
+            "A TPC-H order-to-cash log built by FlowMiner's multi-table join: "
+            "the orders header and lineitem detail consolidated on orderkey, "
+            "unpivoted into an Order Placed → Committed → Shipped → Received "
+            "lifecycle. Shows the log-join (automatic consolidation) engine's "
+            "output on a benchmark relational schema — regenerate at any scale "
+            "with backend/scripts/build_demo_datasets.py --tpch."
+        ),
+        logs=(
+            DemoLogSpec(
+                source_filename="tpch_order_to_cash.csv",
+                display_name="tpch_order_to_cash.csv",
+                log_type=LogType.standard,
+                case_id_column="case_id",
+                activity_column="activity",
+                timestamp_column="timestamp",
+            ),
+        ),
+    ),
+    DemoProjectSpec(
+        name="Demo · SAP P2P (BPI Challenge 2019)",
+        description=(
+            "The full real-world SAP procure-to-pay log from BPI Challenge 2019 "
+            "— a Dutch coatings multinational's purchasing process: 1,595,923 "
+            "events across 251,734 purchase-order cases and 42 activities. A "
+            "serious test of discovery, variants, and conformance on large, "
+            "messy real data. Source: van Dongen, B.F. (2019), BPI Challenge "
+            "2019, 4TU.ResearchData, CC BY 4.0."
+        ),
+        logs=(
+            DemoLogSpec(
+                # Gzipped (~25 MB vs 129 MB); the ingestion loader reads .csv.gz
+                # transparently. Regenerate with build_demo_datasets.py --bpic.
+                source_filename="bpic2019_p2p.csv.gz",
+                display_name="bpic2019_p2p.csv.gz",
+                log_type=LogType.standard,
+                case_id_column="case_id",
+                activity_column="activity",
+                timestamp_column="timestamp",
+            ),
+        ),
+    ),
+    DemoProjectSpec(
         name="Demo · Container logistics (OCEL)",
         description=(
             "An object-centric log covering forklifts, trucks, containers, "
