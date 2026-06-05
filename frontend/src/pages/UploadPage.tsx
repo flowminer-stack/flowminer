@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Check, Upload, BarChart2 } from 'lucide-react';
 import clsx from 'clsx';
@@ -12,6 +12,9 @@ import DataQualityCard from '@/components/DataQuality/DataQualityCard';
 import ColumnMapper from '@/components/ColumnMapper/ColumnMapper';
 
 type Step = 'upload' | 'mapping' | 'done';
+
+// Loose ISO-date prefix for the at-a-glance date range in the summary card.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
 
 export default function UploadPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -191,21 +194,50 @@ export default function UploadPage() {
     setMappingSaving(true);
     try {
       await eventLogsApi.setColumnMapping(eventLogId, mapping);
+      // Celebrate with a sample-based estimate (full stats compute async) and
+      // take the user straight to the first-value view instead of a dead-end
+      // "done" screen with manual CTAs.
+      const rows = preview?.sample_rows ?? [];
+      const cases = new Set(rows.map((r) => r[mapperResult.case_id])).size;
+      const acts = new Set(rows.map((r) => r[mapperResult.activity])).size;
       addNotification({
         type: 'success',
-        title: 'Column mapping saved',
-        message: 'Your event log is being processed.',
+        title: 'Event log ready 🎉',
+        message: rows.length
+          ? `~${cases} cases · ${acts} activities (from sample) — opening your process map.`
+          : 'Opening your process map…',
       });
-      setStep('done');
+      navigate(`/mission-control/${eventLogId}`);
     } catch {
       addNotification({
         type: 'error',
         title: 'Failed to save mapping',
       });
-    } finally {
       setMappingSaving(false);
     }
   };
+
+  // At-a-glance summary shown above the mapper: row count, column count, and a
+  // best-effort date range read from the sample (labelled as a sample).
+  const fileSummary = useMemo(() => {
+    if (!preview) return null;
+    const rows = preview.sample_rows ?? [];
+    let best: { col: string; hits: number } | null = null;
+    for (const col of preview.columns) {
+      const hits = rows.filter((r) => ISO_DATE_RE.test(String(r[col] ?? ''))).length;
+      if (hits > 0 && (!best || hits > best.hits)) best = { col, hits };
+    }
+    let dateRange: [string, string] | null = null;
+    if (best) {
+      const vals = rows
+        .map((r) => String(r[best!.col] ?? ''))
+        .filter((v) => ISO_DATE_RE.test(v))
+        .map((v) => v.slice(0, 10))
+        .sort();
+      if (vals.length) dateRange = [vals[0], vals[vals.length - 1]];
+    }
+    return { rows: preview.total_rows, cols: preview.columns.length, dateRange };
+  }, [preview]);
 
   const steps = [
     { id: 'upload' as const, label: 'Upload File' },
@@ -347,6 +379,19 @@ export default function UploadPage() {
               </div>
             ) : (
               <>
+                {fileSummary && (
+                  <div className="mb-5 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-line bg-surface-1 px-4 py-3 text-[12px]">
+                    <span className="font-semibold text-fg">
+                      {fileSummary.rows.toLocaleString()} rows
+                    </span>
+                    <span className="text-fg-muted">{fileSummary.cols} columns</span>
+                    {fileSummary.dateRange && (
+                      <span className="text-fg-muted">
+                        {fileSummary.dateRange[0]} → {fileSummary.dateRange[1]}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <ColumnMapper
                   eventLogId={eventLogId ?? ''}
                   columns={preview?.columns ?? []}
