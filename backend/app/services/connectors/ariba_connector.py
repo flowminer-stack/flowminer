@@ -22,6 +22,13 @@ import httpx
 import pandas as pd
 
 from app.services.connectors.base import BaseConnector, ConnectorMeta
+from app.services.connectors.http_base import (
+    ApiKeyAuth,
+    CompositeAuth,
+    OAuthClientCredentials,
+    TokenPaginator,
+    paginate,
+)
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
@@ -33,20 +40,23 @@ class AribaConnector(BaseConnector):
         mapping_mode="auto", supports_incremental=True,
     )
 
-    async def _get_token(self, config: dict) -> str:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{config['base_url'].rstrip('/')}/v2/oauth/token",
-                data={"grant_type": "client_credentials"},
-                auth=(config["client_id"], config["client_secret"]),
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-            resp.raise_for_status()
-            return resp.json()["access_token"]
+    def _auth(self, config: dict) -> CompositeAuth:
+        base = config["base_url"].rstrip("/")
+        return CompositeAuth(
+            [
+                OAuthClientCredentials(
+                    token_url=f"{base}/v2/oauth/token",
+                    client_id=config["client_id"],
+                    client_secret=config["client_secret"],
+                ),
+                ApiKeyAuth("apiKey", config["api_key"]),
+            ]
+        )
 
     async def test_connection(self, config: dict) -> dict:
         try:
-            await self._get_token(config)
+            async with httpx.AsyncClient(timeout=30) as client:
+                await self._auth(config).headers(client)
             return {"success": True, "message": "Ariba OAuth exchange OK"}
         except Exception as e:
             return {"success": False, "message": str(e)}
@@ -64,42 +74,31 @@ class AribaConnector(BaseConnector):
         }
 
     async def fetch_data(self, config: dict, column_mapping: dict, since=None) -> str:
-        token = await self._get_token(config)
         base = config["base_url"].rstrip("/")
-        realm = config["realm"]
         view = config.get("view", "PurchaseOrderHeader")
         limit = int(config.get("limit", 10000))
 
-        rows: list[dict] = []
-        page_token: str | None = None
+        base_params: dict = {"realm": config["realm"]}
+        if since is not None:
+            try:
+                base_params["updatedDateFrom"] = since.isoformat()
+            except Exception:
+                pass
+
         async with httpx.AsyncClient(timeout=60) as client:
-            while len(rows) < limit:
-                params: dict[str, str] = {"realm": realm, "limit": str(min(limit - len(rows), 100))}
-                if page_token:
-                    params["pageToken"] = page_token
-                if since is not None:
-                    try:
-                        params["updatedDateFrom"] = since.isoformat()
-                    except Exception:
-                        pass
-                resp = await client.get(
-                    f"{base}/api/analytics-reporting-view/v1/views/{view}",
-                    params=params,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "apiKey": config["api_key"],
-                        "Accept": "application/json",
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                records = data.get("Records", data.get("items", []))
-                if not records:
-                    break
-                rows.extend(records)
-                page_token = data.get("PageToken")
-                if not page_token:
-                    break
+            headers = {**await self._auth(config).headers(client), "Accept": "application/json"}
+            rows = await paginate(
+                client,
+                f"{base}/api/analytics-reporting-view/v1/views/{view}",
+                paginator=TokenPaginator(
+                    token_param="pageToken", next_field="PageToken", limit_param="limit"
+                ),
+                extract=lambda body: body.get("Records", body.get("items", [])),
+                headers=headers,
+                base_params=base_params,
+                page_size=100,
+                max_records=limit,
+            )
 
         if not rows:
             raise ValueError("Ariba returned no rows")

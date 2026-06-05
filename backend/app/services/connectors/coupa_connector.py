@@ -17,6 +17,7 @@ import httpx
 import pandas as pd
 
 from app.services.connectors.base import BaseConnector, ConnectorMeta
+from app.services.connectors.http_base import ApiKeyAuth, OffsetPaginator, paginate
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
@@ -52,30 +53,29 @@ class CoupaConnector(BaseConnector):
         resource = config.get("resource", "purchase_orders")
         limit = int(config.get("limit", 10000))
 
-        rows: list[dict] = []
-        offset = 0
+        base_params: dict = {}
+        if since is not None:
+            try:
+                base_params["updated-at"] = since.isoformat()
+            except Exception:
+                pass
+
         async with httpx.AsyncClient(timeout=60) as client:
-            while len(rows) < limit:
-                params = {"limit": min(limit - len(rows), 100), "offset": offset}
-                if since is not None:
-                    try:
-                        params["updated-at"] = since.isoformat()
-                    except Exception:
-                        pass
-                resp = await client.get(
-                    f"{base}/api/{resource}",
-                    params=params,
-                    headers={
-                        "X-COUPA-API-KEY": config["api_key"],
-                        "Accept": "application/json",
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                if not isinstance(data, list) or not data:
-                    break
-                rows.extend(data)
-                offset += len(data)
+            headers = {
+                **await ApiKeyAuth("X-COUPA-API-KEY", config["api_key"]).headers(client),
+                "Accept": "application/json",
+            }
+            rows = await paginate(
+                client,
+                f"{base}/api/{resource}",
+                paginator=OffsetPaginator("limit", "offset"),
+                # Coupa returns a top-level JSON array.
+                extract=lambda body: body if isinstance(body, list) else [],
+                headers=headers,
+                base_params=base_params,
+                page_size=100,
+                max_records=limit,
+            )
 
         if not rows:
             raise ValueError("Coupa returned no rows")

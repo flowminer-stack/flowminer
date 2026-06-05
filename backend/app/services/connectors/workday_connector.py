@@ -23,6 +23,11 @@ import httpx
 import pandas as pd
 
 from app.services.connectors.base import BaseConnector, ConnectorMeta
+from app.services.connectors.http_base import (
+    OAuthClientCredentials,
+    OffsetPaginator,
+    paginate,
+)
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
@@ -34,20 +39,18 @@ class WorkdayConnector(BaseConnector):
         mapping_mode="auto", supports_incremental=True,
     )
 
-    async def _get_token(self, config: dict) -> str:
+    def _auth(self, config: dict) -> OAuthClientCredentials:
         base = config["base_url"].rstrip("/")
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{base}/ccx/oauth2/{config['tenant']}/token",
-                data={"grant_type": "client_credentials"},
-                auth=(config["client_id"], config["client_secret"]),
-            )
-            resp.raise_for_status()
-            return resp.json()["access_token"]
+        return OAuthClientCredentials(
+            token_url=f"{base}/ccx/oauth2/{config['tenant']}/token",
+            client_id=config["client_id"],
+            client_secret=config["client_secret"],
+        )
 
     async def test_connection(self, config: dict) -> dict:
         try:
-            await self._get_token(config)
+            async with httpx.AsyncClient(timeout=30) as client:
+                await self._auth(config).headers(client)
             return {"success": True, "message": "Workday OAuth exchange OK"}
         except Exception as e:
             return {"success": False, "message": str(e)}
@@ -63,26 +66,24 @@ class WorkdayConnector(BaseConnector):
         }
 
     async def fetch_data(self, config: dict, column_mapping: dict, since=None) -> str:
-        token = await self._get_token(config)
         base = config["base_url"].rstrip("/")
         endpoint = config.get("endpoint", "common/v1/workers")
         limit = int(config.get("limit", 10000))
 
-        rows: list[dict] = []
-        offset = 0
         async with httpx.AsyncClient(timeout=60) as client:
-            while len(rows) < limit:
-                resp = await client.get(
-                    f"{base}/ccx/api/{endpoint}",
-                    params={"limit": min(limit - len(rows), 100), "offset": offset},
-                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-                )
-                resp.raise_for_status()
-                data = resp.json().get("data", [])
-                if not data:
-                    break
-                rows.extend(data)
-                offset += len(data)
+            headers = {
+                **await self._auth(config).headers(client),
+                "Accept": "application/json",
+            }
+            rows = await paginate(
+                client,
+                f"{base}/ccx/api/{endpoint}",
+                paginator=OffsetPaginator("limit", "offset"),
+                extract=lambda body: body.get("data", []),
+                headers=headers,
+                page_size=100,
+                max_records=limit,
+            )
 
         if not rows:
             raise ValueError("Workday returned no rows")

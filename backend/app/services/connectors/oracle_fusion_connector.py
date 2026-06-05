@@ -28,6 +28,7 @@ import httpx
 import pandas as pd
 
 from app.services.connectors.base import BaseConnector, ConnectorMeta
+from app.services.connectors.http_base import BasicAuth, OffsetPaginator, paginate
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
@@ -75,7 +76,6 @@ class OracleFusionConnector(BaseConnector):
         resource = config.get("resource", "purchaseOrders")
         limit = int(config.get("limit", 10000))
 
-        params: dict[str, str] = {"limit": str(min(limit, 500))}
         query_parts: list[str] = []
         if config.get("query"):
             query_parts.append(str(config["query"]))
@@ -84,29 +84,26 @@ class OracleFusionConnector(BaseConnector):
                 query_parts.append(f"LastUpdateDate >= '{since.isoformat()}'")
             except Exception:
                 pass
+        base_params: dict = {}
         if query_parts:
-            params["q"] = " and ".join(query_parts)
+            base_params["q"] = " and ".join(query_parts)
 
-        rows: list[dict] = []
-        offset = 0
         async with httpx.AsyncClient(timeout=60) as client:
-            while len(rows) < limit:
-                params["offset"] = str(offset)
-                resp = await client.get(
-                    f"{base}/fscmRestApi/resources/11.13.18.05/{resource}",
-                    params=params,
-                    auth=(config["username"], config["password"]),
-                    headers={"Accept": "application/json"},
-                )
-                resp.raise_for_status()
-                payload = resp.json()
-                items = payload.get("items", [])
-                if not items:
-                    break
-                rows.extend(items)
-                offset += len(items)
-                if not payload.get("hasMore"):
-                    break
+            headers = {
+                **await BasicAuth(config["username"], config["password"]).headers(client),
+                "Accept": "application/json",
+            }
+            rows = await paginate(
+                client,
+                f"{base}/fscmRestApi/resources/11.13.18.05/{resource}",
+                # Oracle Fusion exposes a hasMore flag alongside offset/limit.
+                paginator=OffsetPaginator("limit", "offset", more_field="hasMore"),
+                extract=lambda body: body.get("items", []),
+                headers=headers,
+                base_params=base_params,
+                page_size=500,
+                max_records=limit,
+            )
 
         if not rows:
             raise ValueError("Oracle Fusion returned no rows for the configured resource/query")
