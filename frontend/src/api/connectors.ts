@@ -1,5 +1,9 @@
 import api from './http';
-import type { Connector, ConnectorSchemaResponse } from '@/types';
+import type {
+  Connector,
+  ConnectorRegistryEntry,
+  ConnectorSchemaResponse,
+} from '@/types';
 
 // ─── Connectors ──────────────────────────────────────────────────────────────
 
@@ -54,6 +58,16 @@ export const connectors = {
   getSchema: async (id: string): Promise<ConnectorSchemaResponse> => {
     const response = await api.get<ConnectorSchemaResponse>(
       `/connectors/${id}/schema`,
+    );
+    return response.data;
+  },
+
+  // Backend-driven catalogue of connector types + their config JSON Schema.
+  // Drives the type picker so adding a connector on the backend surfaces in the
+  // UI with no frontend edit. Best-effort: callers fall back to the static list.
+  getRegistry: async (): Promise<ConnectorRegistryEntry[]> => {
+    const response = await api.get<ConnectorRegistryEntry[]>(
+      '/connectors/registry',
     );
     return response.data;
   },

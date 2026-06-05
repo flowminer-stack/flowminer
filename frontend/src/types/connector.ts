@@ -1,15 +1,47 @@
 // ─── Connector ───────────────────────────────────────────────────────────────
 
+// Connector type ids. The authoritative, runtime source of truth is the
+// backend registry (GET /connectors/registry); this union mirrors the backend
+// ConnectorType enum so the API types stay honest. (It previously listed only
+// 5 of the ~19 types — silent drift.)
+export type ConnectorTypeId =
+  | 'postgresql'
+  | 'mysql'
+  | 'sqlserver'
+  | 'oracle'
+  | 'csv_watch'
+  | 'api_endpoint'
+  | 'jira'
+  | 'github'
+  | 'odoo'
+  | 'zendesk'
+  | 'sap'
+  | 'salesforce'
+  | 'servicenow'
+  | 'snowflake'
+  | 'bigquery'
+  | 'workday'
+  | 'oracle_fusion'
+  | 'coupa'
+  | 'ariba';
+
+// One entry per pickable connector type, served by GET /connectors/registry.
+// Drives the type picker so a backend-added connector appears in the UI with
+// no frontend edit.
+export interface ConnectorRegistryEntry {
+  id: ConnectorTypeId;
+  label: string;
+  category: string;
+  mapping_mode: 'auto' | 'manual' | 'none';
+  supports_incremental: boolean;
+  config_schema: Record<string, unknown>;
+}
+
 export interface Connector {
   id: string;
   project_id: string;
   name: string;
-  connector_type:
-    | 'postgresql'
-    | 'mysql'
-    | 'sqlserver'
-    | 'csv_watch'
-    | 'api_endpoint';
+  connector_type: ConnectorTypeId;
   config: Record<string, unknown>;
   column_mapping: Record<string, unknown>;
   schedule: string | null;

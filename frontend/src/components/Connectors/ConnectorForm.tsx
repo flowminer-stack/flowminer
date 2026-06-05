@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import clsx from 'clsx';
 import {
   Database,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { parseCronToHuman } from '../../utils/format';
 import { connectors as connectorsApi } from '@/api/client';
+import type { ConnectorRegistryEntry } from '@/types';
 import {
   Connector,
   ConnectorType,
@@ -52,6 +53,19 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
   const [type, setType] = useState<ConnectorType>(
     (connector?.type as ConnectorType) || 'postgresql'
   );
+
+  // Backend-driven connector catalogue. Drives the type picker so a connector
+  // registered on the backend appears here without a frontend edit. Best-effort
+  // — the picker falls back to the static type list if this never resolves.
+  const [registry, setRegistry] = useState<ConnectorRegistryEntry[]>([]);
+  useEffect(() => {
+    connectorsApi
+      .getRegistry()
+      .then(setRegistry)
+      .catch(() => {
+        /* fall back to the static type list */
+      });
+  }, []);
 
   // Database config
   const [host, setHost] = useState(connector?.config?.host || 'localhost');
@@ -295,7 +309,7 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
         </div>
 
         {/* Type selector */}
-        <ConnectorTypeSelector value={type} onChange={handleTypeChange} />
+        <ConnectorTypeSelector value={type} onChange={handleTypeChange} registry={registry} />
 
         {/* Database config */}
         {isDatabase && (
