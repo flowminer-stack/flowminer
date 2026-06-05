@@ -1,0 +1,20 @@
+{
+  "id": "servicenow_incident",
+  "process_name": "ServiceNow Incident Management",
+  "description": "Incident lifecycle built from the incident table's lifecycle timestamps. State IDs and SLA names are per-instance — tune the activity labels and override layer to your instance.",
+  "connector_type": "servicenow",
+  "category": "itsm",
+  "required_tables": [
+    { "name": "incident", "role": "primary", "description": "Incident records", "source_hint": "ServiceNow incident table" }
+  ],
+  "joins": [],
+  "case_id_column": "number",
+  "events": [
+    { "activity_name": "Opened", "source_table": "incident", "timestamp_column": "opened_at", "resource_column": "opened_by" },
+    { "activity_name": "Resolved", "source_table": "incident", "timestamp_column": "resolved_at", "resource_column": "resolved_by" },
+    { "activity_name": "Closed", "source_table": "incident", "timestamp_column": "closed_at" }
+  ],
+  "additional_columns": { "priority": "incident.priority", "assignment_group": "incident.assignment_group", "category": "incident.category" },
+  "sample_kpis": ["Mean time to resolve", "Reassignment count", "SLA breach rate"],
+  "notes": "Per-state-change events (the full audit trail) come from sys_audit / sys_journal_field joined on the incident sys_id — use the connector or the Extraction Copilot for those."
+}

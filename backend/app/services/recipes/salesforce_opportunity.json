@@ -1,0 +1,19 @@
+{
+  "id": "salesforce_opportunity",
+  "process_name": "Salesforce Opportunity (Lead-to-Close)",
+  "description": "Opportunity lifecycle. Salesforce orgs are heavily customized, so this is a deliberately thin starter — the real value (stage transitions) comes from OpportunityFieldHistory; see notes.",
+  "connector_type": "salesforce",
+  "category": "o2c",
+  "required_tables": [
+    { "name": "Opportunity", "role": "primary", "description": "Opportunity records", "source_hint": "Salesforce Opportunity object" }
+  ],
+  "joins": [],
+  "case_id_column": "Id",
+  "events": [
+    { "activity_name": "Created", "source_table": "Opportunity", "timestamp_column": "CreatedDate", "resource_column": "OwnerId" },
+    { "activity_name": "Closed", "source_table": "Opportunity", "timestamp_column": "CloseDate" }
+  ],
+  "additional_columns": { "stage": "Opportunity.StageName", "amount": "Opportunity.Amount", "account": "Opportunity.AccountId" },
+  "sample_kpis": ["Sales cycle time", "Stage conversion rate", "Win rate"],
+  "notes": "Stage transitions live in OpportunityFieldHistory (Field='StageName', activity = NewValue). The builder's fixed-activity model can't take the activity from a value column — use the connector / MappingSpec activity_column melt or the Extraction Copilot for transition events."
+}

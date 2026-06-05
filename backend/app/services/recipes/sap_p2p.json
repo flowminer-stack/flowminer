@@ -1,0 +1,25 @@
+{
+  "id": "sap_p2p",
+  "process_name": "SAP Purchase-to-Pay",
+  "description": "Procure-to-pay across the PO header (EKKO), items (EKPO) and PO history (EKBE). A best-effort starter — confirm table/column names against your SAP export and add Z-table steps via the override layer before mining.",
+  "connector_type": "sap",
+  "category": "p2p",
+  "required_tables": [
+    { "name": "EKKO", "role": "primary", "description": "Purchasing document header (one row per PO)", "source_hint": "SAP table EKKO" },
+    { "name": "EKPO", "role": "additional", "description": "Purchasing document items", "source_hint": "SAP table EKPO" },
+    { "name": "EKBE", "role": "additional", "description": "PO history — goods/invoice receipts", "source_hint": "SAP table EKBE" }
+  ],
+  "joins": [
+    { "left_table": "EKKO", "right_table": "EKPO", "left_on": ["EBELN"], "right_on": ["EBELN"], "how": "left" },
+    { "left_table": "EKKO", "right_table": "EKBE", "left_on": ["EBELN"], "right_on": ["EBELN"], "how": "left" }
+  ],
+  "case_id_column": "EBELN",
+  "events": [
+    { "activity_name": "PO Created", "source_table": "EKKO", "timestamp_column": "AEDAT", "resource_column": "ERNAM" },
+    { "activity_name": "Item Delivery Date", "source_table": "EKPO", "timestamp_column": "EINDT" },
+    { "activity_name": "Goods/Invoice Receipt", "source_table": "EKBE", "timestamp_column": "BUDAT" }
+  ],
+  "additional_columns": { "vendor": "EKKO.LIFNR", "company_code": "EKKO.BUKRS", "net_value": "EKPO.NETWR" },
+  "sample_kpis": ["PO cycle time", "Maverick buying", "3-way match rate"],
+  "notes": "Field-level change events (status transitions, release steps) come from CDHDR/CDPOS — use the SAP connector's change-document mode for those. AEDAT/EINDT/BUDAT are SAP date fields (YYYYMMDD); ensure they parse to dates on export."
+}

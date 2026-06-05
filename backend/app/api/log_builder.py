@@ -218,3 +218,33 @@ async def build(
         "total_cases": result["total_cases"],
         "activities": result["activities"],
     }
+
+
+@router.get("/templates")
+async def list_templates(
+    connector_type: str | None = None,
+    category: str | None = None,
+    _current_user: User = Depends(get_current_active_user),
+):
+    """Prebuilt process content packs (recipes) — system-specific templates that
+    pre-fill the builder's tables/joins/events so a known process (SAP P2P,
+    ServiceNow incident, Salesforce opportunity) goes from "upload your tables"
+    to a mineable log without writing the extraction by hand."""
+    from app.services.log_builder_recipes import list_recipes
+
+    return [r.model_dump() for r in list_recipes(connector_type, category)]
+
+
+@router.get("/templates/{recipe_id}")
+async def get_template(
+    recipe_id: str,
+    _current_user: User = Depends(get_current_active_user),
+):
+    """A single recipe, including its builder events/joins and the
+    additional_columns override layer."""
+    from app.services.log_builder_recipes import get_recipe
+
+    recipe = get_recipe(recipe_id)
+    if recipe is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return recipe.model_dump()
