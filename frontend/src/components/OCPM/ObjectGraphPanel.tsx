@@ -74,6 +74,7 @@ function ObjectGraphVisual({ data }: { data: ObjectsGraphResponse }) {
             'background-color': nodeBg, 'border-width': 2, 'border-color': nodeBorder,
             'shape': 'ellipse', 'width': 'data(size)', 'height': 'data(size)',
             'text-valign': 'center', 'text-halign': 'center', 'color': nodeText,
+            'min-zoomed-font-size': 9,
           } as any,
         },
         {
@@ -81,7 +82,7 @@ function ObjectGraphVisual({ data }: { data: ObjectsGraphResponse }) {
           style: {
             'width': 'data(width)', 'line-color': '#06b6d4', 'target-arrow-color': '#06b6d4',
             'target-arrow-shape': 'none', 'curve-style': 'bezier', 'opacity': 0.5,
-            'label': 'data(label)', 'font-size': '9px', 'font-family': 'JetBrains Mono, monospace',
+            'label': 'data(label)', 'min-zoomed-font-size': 9, 'font-size': '9px', 'font-family': 'JetBrains Mono, monospace',
             'text-rotation': 'autorotate', 'color': isDark ? '#71717a' : '#6c7283',
             'text-background-color': isDark ? '#1e1e22' : '#f7f8fa',
             'text-background-opacity': 0.85, 'text-background-padding': '3px',
@@ -90,7 +91,7 @@ function ObjectGraphVisual({ data }: { data: ObjectsGraphResponse }) {
         },
       ],
       layout: { name: 'circle', padding: 60, animate: false } as any,
-      userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.3, maxZoom: 3, wheelSensitivity: 0.3, pixelRatio: 2, textureOnViewport: false,
+      userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.15, maxZoom: 5, wheelSensitivity: 1.0, pixelRatio: 1, textureOnViewport: true,
     });
 
     return () => { cy.destroy(); };

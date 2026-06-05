@@ -88,6 +88,9 @@ export default function OCDFGGraph({
             'text-valign': 'center',
             'text-halign': 'center',
             'color': nodeText,
+            // Skip rendering labels that would be unreadably small at
+            // overview zoom — cheaper and less cluttered (LOD).
+            'min-zoomed-font-size': 9,
           } as any,
         },
         {
@@ -99,8 +102,11 @@ export default function OCDFGGraph({
             'line-color': 'data(edgeColor)',
             'target-arrow-color': 'data(edgeColor)',
             'width': 2,
-            'opacity': 0.75,
+            // Opaque edges-with-arrows render >2x faster than
+            // semi-transparent ones; the colour already reads as light.
+            'opacity': 1,
             'label': 'data(label)',
+            'min-zoomed-font-size': 9,
             'font-size': '9px',
             'font-family': 'JetBrains Mono, monospace',
             'text-rotation': 'autorotate',
@@ -125,11 +131,14 @@ export default function OCDFGGraph({
       } as any,
       userZoomingEnabled: true,
       userPanningEnabled: true,
-      minZoom: 0.3,
-      maxZoom: 3,
-      wheelSensitivity: 0.3,
-      pixelRatio: 2,
-      textureOnViewport: false,
+      minZoom: 0.15,
+      maxZoom: 5,
+      // 1.0 is cytoscape's calibrated default; 0.3 made wheel zoom ~3x
+      // slower than every other app. pixelRatio:1 + textureOnViewport
+      // keep pan/zoom cheap on HiDPI.
+      wheelSensitivity: 1.0,
+      pixelRatio: 1,
+      textureOnViewport: true,
     });
 
     cyRef.current = cy;

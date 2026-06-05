@@ -1,18 +1,24 @@
 import React, { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import cytoscape, { Core, EventObject, NodeSingular, EdgeSingular } from 'cytoscape';
 import dagre from 'cytoscape-dagre';
+import navigator from 'cytoscape-navigator';
+import 'cytoscape-navigator/cytoscape.js-navigator.css';
 import {
   ZoomIn,
   ZoomOut,
   Maximize2,
   MessageSquare,
+  Map as MapIcon,
 } from 'lucide-react';
 import { formatNumber, formatDuration } from '../../utils/format';
 import type { ProcessNode, ProcessEdge, Annotation } from '../../types';
 import { useUIStore } from '../../store';
 import ExportMenu from './ExportMenu';
 
-cytoscape.use(dagre);
+// Register cytoscape extensions once. Guard against double-registration
+// (Vite HMR re-runs this module), which otherwise throws.
+try { cytoscape.use(dagre); } catch { /* already registered */ }
+try { cytoscape.use(navigator); } catch { /* already registered */ }
 
 export type LayoutName = 'dagre' | 'breadthfirst' | 'circle' | 'concentric' | 'grid';
 
@@ -98,6 +104,10 @@ export function getCyStyles(isDark: boolean): any[] {
         'color': nodeText,
         'text-background-color': nodeBg,
         'text-background-opacity': 0,
+        // Level-of-detail: don't render labels that would be smaller than
+        // 9px on screen (i.e. when zoomed out). Cheaper + far less clutter
+        // at the overview scale where the user spends time after a fit.
+        'min-zoomed-font-size': 9,
         'transition-property': 'border-color border-width opacity background-color',
         'transition-duration': '0.15s',
       } as any,
@@ -164,8 +174,12 @@ export function getCyStyles(isDark: boolean): any[] {
         'line-color': isDark ? '#3a3a40' : '#d4d7dc',
         'target-arrow-color': isDark ? '#3a3a40' : '#d4d7dc',
         'width': 1.5,
-        'opacity': 0.7,
+        // Opaque base edges render >2x faster than semi-transparent ones
+        // (the canvas must read back existing pixels to composite alpha).
+        // The .dimmed class still drives dimming via its own opacity.
+        'opacity': 1,
         'label': 'data(label)',
+        'min-zoomed-font-size': 9,
         'font-size': '9px',
         'font-family': 'JetBrains Mono, monospace',
         'font-weight': 500,
@@ -208,6 +222,16 @@ export function getCyStyles(isDark: boolean): any[] {
       selector: 'edge.dimmed',
       style: {
         'opacity': 0.05,
+      },
+    },
+    {
+      // Semantic zoom: at overview scale we toggle this class on every
+      // edge to drop the frequency labels entirely (beyond what
+      // min-zoomed-font-size does), cutting render cost and clutter where
+      // the most elements are on screen. Removed as the user zooms in.
+      selector: 'edge.lod-far',
+      style: {
+        'text-opacity': 0,
       },
     },
   ];
@@ -412,6 +436,50 @@ function getFilteredElements(
   return { cyNodes, cyEdges, visibleNodeCount: visibleNodes.length, visibleEdgeCount: connectedEdges.length };
 }
 
+/* ── Selection + focus helpers ────────────────────────────────────────── */
+
+// Apply the selection highlight + neighbourhood dimming for `selectedNode`.
+// Batched so N class mutations collapse into a single redraw. Called when
+// the selection changes AND after the element set is rebuilt — a
+// filter/slider/theme change wipes selection state off the new elements,
+// so without re-applying here the highlight would silently vanish.
+function applySelectionHighlight(cy: Core, selectedNode?: string) {
+  cy.batch(() => {
+    cy.nodes().unselect().removeClass('dimmed');
+    cy.edges().unselect().removeClass('dimmed');
+    if (selectedNode) {
+      const node = cy.getElementById(selectedNode);
+      if (node.length > 0) {
+        node.select();
+        const nb = node.neighborhood().add(node);
+        cy.elements().not(nb).addClass('dimmed');
+      }
+    }
+  });
+}
+
+// Zoom-to-selection: frame a node + its neighbours on an EXPLICIT user tap.
+// Skips the move when the node is already comfortably in view, and caps the
+// zoom to a readable ceiling so an isolated node doesn't blow up to fill the
+// canvas (cy.fit would otherwise clamp to the global maxZoom).
+function focusOnNode(cy: Core, node: NodeSingular) {
+  const nb = node.neighborhood().add(node);
+  const bb = nb.boundingBox();
+  const ext = cy.extent();
+  const inView =
+    bb.x1 >= ext.x1 && bb.x2 <= ext.x2 && bb.y1 >= ext.y1 && bb.y2 <= ext.y2;
+  if (inView) return;
+  const W = Math.max(cy.width() - 160, 50);
+  const H = Math.max(cy.height() - 160, 50);
+  const fitZoom = Math.min(W / Math.max(bb.w, 1), H / Math.max(bb.h, 1));
+  const zoom = Math.max(cy.minZoom(), Math.min(fitZoom, 1.5));
+  cy.stop();
+  cy.animate(
+    { zoom, center: { eles: nb } },
+    { duration: 300, easing: 'ease-in-out-cubic' },
+  );
+}
+
 /* ── Component ────────────────────────────────────────────────────────── */
 
 const ProcessMap: React.FC<ProcessMapProps> = ({
@@ -440,6 +508,30 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
   const theme = useUIStore((s) => s.theme);
   const isDark = theme === 'dark';
 
+  // Preserve-viewport: only auto-fit on the first real (non-empty) layout
+  // and when the layout TYPE changes — never on a filter/slider/theme
+  // change, so the camera stops teleporting to the whole graph.
+  const hasInitialFitRef = useRef(false);
+  const prevLayoutKeyRef = useRef('');
+  // Last cursor position over the canvas (rendered px) so the zoom buttons
+  // can anchor to where the user is looking instead of viewport center.
+  const lastMouseRef = useRef<{ x: number; y: number } | null>(null);
+  // Current level-of-detail state, to avoid redundant class toggles.
+  const lodFarRef = useRef(false);
+  // Minimap (cytoscape-navigator): a bird's-eye overlay so users jump
+  // across a large graph by clicking the thumbnail instead of the slow
+  // zoom-out / zoom-in loop. Off by default (clutter on small maps).
+  const minimapRef = useRef<HTMLDivElement>(null);
+  const navInstanceRef = useRef<{ destroy(): void } | null>(null);
+  const navInitedRef = useRef(false);
+  const [showMinimap, setShowMinimap] = useState(false);
+
+  // Latest selection, readable from the element-update effect (which must
+  // NOT depend on selectedNode, or it would re-run the layout on every
+  // selection). Lets us re-apply the highlight after an element rebuild.
+  const selectedNodeRef = useRef<string | undefined>(selectedNode);
+  selectedNodeRef.current = selectedNode;
+
   // Rich hover tooltip state (Disco): floating overlay positioned
   // relative to the cytoscape container with the node's full stats.
   const [hover, setHover] = useState<
@@ -447,12 +539,15 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
   >(null);
 
   const runLayout = useCallback(
-    (cy: Core) => {
+    (cy: Core, fit: boolean) => {
       const baseOpts = {
         animate: true,
         animationDuration: 250,
         animationEasing: 'ease-out',
-        fit: true,
+        // Caller decides whether to re-fit. Filter/slider changes pass
+        // false so the user's zoom/pan survives; only first load and a
+        // layout-type switch pass true.
+        fit,
         padding: 50,
       };
       let opts: any;
@@ -485,12 +580,20 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
     const cy = cytoscape({
       container: containerRef.current,
       style: getCyStyles(isDark),
-      minZoom: 0.3,
-      maxZoom: 3,
-      wheelSensitivity: 0.3,
+      // Wider range so dense graphs zoom out further and detail reads in
+      // closer; combined with wheelSensitivity:1 the trip from the fit
+      // floor to a legible close-up is short.
+      minZoom: 0.15,
+      maxZoom: 5,
+      // 1.0 is cytoscape's calibrated default. 0.3 delivered only 30% of
+      // the expected zoom per wheel tick — the "takes forever to zoom in".
+      wheelSensitivity: 1.0,
       boxSelectionEnabled: false,
-      pixelRatio: 2,
-      textureOnViewport: false,
+      // pixelRatio:1 paints ~4x fewer pixels than :2 on HiDPI per frame;
+      // textureOnViewport snapshots the canvas during a gesture so pan/
+      // zoom transforms a bitmap instead of re-rastering every vector.
+      pixelRatio: 1,
+      textureOnViewport: true,
       // Touch / mobile parity: allow pinch-to-zoom and one-finger pan
       // on touch devices so the map is usable on tablets and phones.
       // Cytoscape enables these by default, but we set them explicitly
@@ -503,14 +606,62 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
     if (externalCyRef) externalCyRef.current = cy;
     setIsReady(true);
 
+    // Resize: re-sync the canvas bounding box but DO NOT re-fit — a
+    // sidebar toggle / DevTools / window snap must not blow away the
+    // user's zoom and pan.
     const handleResize = () => {
       cy.resize();
-      cy.fit(undefined, 50);
     };
     window.addEventListener('resize', handleResize);
 
+    const container = containerRef.current;
+
+    // Camera-yields-to-user: if the user grabs the graph mid-animation
+    // (a programmatic fit/zoom-to-selection is running), stop it so their
+    // input takes precedence instead of the camera "fighting back".
+    const stopAnim = () => cy.stop();
+    // Track the cursor over the canvas so the zoom buttons can anchor to
+    // it rather than the geometric viewport center.
+    const trackMouse = (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      lastMouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    };
+    const clearMouse = () => { lastMouseRef.current = null; };
+    container.addEventListener('wheel', stopAnim, { passive: true });
+    container.addEventListener('mousedown', stopAnim);
+    container.addEventListener('touchstart', stopAnim, { passive: true });
+    container.addEventListener('mousemove', trackMouse);
+    container.addEventListener('mouseleave', clearMouse);
+
+    // Semantic zoom: hide edge frequency labels entirely at overview
+    // scale. rAF-throttled and gated on a state ref so we only touch the
+    // graph when crossing the threshold, not on every zoom frame.
+    let lodRaf = 0;
+    const onZoom = () => {
+      if (lodRaf) return;
+      lodRaf = requestAnimationFrame(() => {
+        lodRaf = 0;
+        const far = cy.zoom() < 0.55;
+        if (far === lodFarRef.current) return;
+        lodFarRef.current = far;
+        cy.batch(() => { cy.edges().toggleClass('lod-far', far); });
+      });
+    };
+    cy.on('zoom', onZoom);
+
     return () => {
       window.removeEventListener('resize', handleResize);
+      container.removeEventListener('wheel', stopAnim);
+      container.removeEventListener('mousedown', stopAnim);
+      container.removeEventListener('touchstart', stopAnim);
+      container.removeEventListener('mousemove', trackMouse);
+      container.removeEventListener('mouseleave', clearMouse);
+      cy.off('zoom', onZoom);
+      if (lodRaf) cancelAnimationFrame(lodRaf);
+      // Tear down the minimap before the core (its listeners go with cy).
+      try { navInstanceRef.current?.destroy(); } catch { /* noop */ }
+      navInstanceRef.current = null;
+      navInitedRef.current = false;
       cy.destroy();
       cyRef.current = null;
       if (externalCyRef) externalCyRef.current = null;
@@ -550,8 +701,28 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
 
     cy.elements().remove();
     cy.add([...cyNodes, ...cyEdges] as any);
-    runLayout(cy);
-  }, [cyNodes, cyEdges, isReady, runLayout]);
+
+    // Decide whether to re-fit. Fit ONLY on (a) the first non-empty
+    // layout, or (b) a change of layout type/direction (positions change
+    // wholesale). A filter/slider/theme change re-runs layout with
+    // fit:false so the viewport stays exactly where the user left it.
+    const layoutKey = `${layoutName}:${layoutDirection}`;
+    const layoutChanged =
+      prevLayoutKeyRef.current !== '' && prevLayoutKeyRef.current !== layoutKey;
+    const doFit = (!hasInitialFitRef.current || layoutChanged) && cyNodes.length > 0;
+
+    runLayout(cy, doFit);
+    if (doFit) hasInitialFitRef.current = true;
+    // Only record the layout key for passes that actually laid out a
+    // non-empty graph, so an empty/loading pass can't mis-gate the first
+    // real fit.
+    if (cyNodes.length > 0) prevLayoutKeyRef.current = layoutKey;
+    // Re-apply LOD state to freshly-added edges at the current zoom.
+    if (lodFarRef.current) cy.edges().addClass('lod-far');
+    // The re-added elements carry no selection state — re-apply the
+    // highlight/dimming so it survives a filter/slider/theme change.
+    applySelectionHighlight(cy, selectedNodeRef.current);
+  }, [cyNodes, cyEdges, isReady, runLayout, layoutName, layoutDirection]);
 
   // Click / hover / context-menu events
   useEffect(() => {
@@ -563,6 +734,11 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
       const nodeData = node.data('nodeData') as ProcessNode;
       if (nodeData && onNodeClick) onNodeClick(nodeData);
       if (nodeData && onAddActivityFilter) onAddActivityFilter(nodeData.label);
+      // Zoom-to-selection is driven from the explicit user tap — NOT the
+      // selectedNode prop — so programmatic/external selection (AI "show
+      // details", side-by-side sync) never yanks the camera, and it can't
+      // race the first-load fit.
+      focusOnNode(cy, node);
     };
 
     const handleEdgeTap = (evt: EventObject) => {
@@ -615,40 +791,91 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
     };
   }, [onNodeClick, onEdgeClick, onAddActivityFilter, onContextMenu, showHoverTooltip, isReady]);
 
-  // Selection highlight
+  // Selection highlight (dimming only). Zoom-to-selection is handled in
+  // the node-tap handler so only an explicit user click moves the camera,
+  // never a programmatic/external selection change.
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy || !isReady) return;
-
-    cy.nodes().unselect().removeClass('dimmed');
-    cy.edges().unselect().removeClass('dimmed');
-
-    if (selectedNode) {
-      const node = cy.getElementById(selectedNode);
-      if (node.length > 0) {
-        node.select();
-        const neighborhood = node.neighborhood().add(node);
-        cy.elements().not(neighborhood).addClass('dimmed');
-      }
-    }
+    applySelectionHighlight(cy, selectedNode);
   }, [selectedNode, isReady]);
+
+  // Minimap lifecycle — init the cytoscape-navigator into its container
+  // when toggled on (and the graph is ready); tear it down when toggled
+  // off or on unmount. Best-effort: never let it break the map.
+  // Create the navigator ONCE, the first time the user enables it (and the
+  // graph is ready); thereafter we just show/hide the container with CSS.
+  // cytoscape-navigator's destroy() does NOT unbind the zoom/pan/render
+  // listeners it puts on the core, so re-creating it on every toggle would
+  // leak a growing set of handlers. Creating it once sidesteps that; it's
+  // torn down with the cy instance on unmount (see the init effect cleanup).
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy || !isReady || !showMinimap || navInitedRef.current) return;
+    // Mark inited up-front so a throw can't trigger a retry storm that
+    // partially re-binds listeners; cy.destroy() on unmount cleans up.
+    navInitedRef.current = true;
+    try {
+      // cytoscape-navigator augments the core with .navigator() but ships
+      // no types; cast narrowly to the surface we use. NB: in 2.0.2 the
+      // `container` option ONLY accepts a string selector — passing the DOM
+      // node makes the lib append an unstyled 400x400 panel to <body>.
+      const withNav = cy as unknown as {
+        navigator(o: Record<string, unknown>): { destroy(): void };
+      };
+      navInstanceRef.current = withNav.navigator({
+        container: '#processmap-minimap',
+        viewLiveFramerate: 0,        // redraw the viewport box on demand, not every frame
+        thumbnailEventFramerate: 30, // cap thumbnail refreshes
+        dblClickDelay: 200,
+        removeCustomContainer: false, // keep our React-owned div on destroy
+      });
+    } catch (err) {
+      console.warn('ProcessMap minimap init failed', err);
+    }
+  }, [showMinimap, isReady]);
+
+  // Anchor button zoom to the cursor's last position over the canvas (so
+  // the region you're looking at stays put), falling back to the viewport
+  // center when the pointer isn't over the graph.
+  const zoomAnchor = useCallback((cy: Core) => {
+    const m = lastMouseRef.current;
+    if (m && m.x >= 0 && m.y >= 0 && m.x <= cy.width() && m.y <= cy.height()) {
+      return m;
+    }
+    return { x: cy.width() / 2, y: cy.height() / 2 };
+  }, []);
 
   const handleZoomIn = useCallback(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    cy.animate({ zoom: { level: cy.zoom() * 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }, duration: 150 } as any);
-  }, []);
+    cy.stop();
+    cy.animate(
+      { zoom: { level: Math.min(cy.zoom() * 1.3, cy.maxZoom()), renderedPosition: zoomAnchor(cy) } },
+      { duration: 150, easing: 'ease-out' },
+    );
+  }, [zoomAnchor]);
 
   const handleZoomOut = useCallback(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    cy.animate({ zoom: { level: cy.zoom() / 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }, duration: 150 } as any);
-  }, []);
+    cy.stop();
+    cy.animate(
+      { zoom: { level: Math.max(cy.zoom() / 1.3, cy.minZoom()), renderedPosition: zoomAnchor(cy) } },
+      { duration: 150, easing: 'ease-out' },
+    );
+  }, [zoomAnchor]);
 
   const handleFit = useCallback(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    cy.animate({ fit: { eles: cy.elements(), padding: 50 }, duration: 200 } as any);
+    cy.stop();
+    // Deliberate "show me everything" — read it as a smooth camera move,
+    // not a teleport.
+    cy.animate(
+      { fit: { eles: cy.elements(), padding: 50 } },
+      { duration: 400, easing: 'ease-in-out-cubic' },
+    );
   }, []);
 
   return (
@@ -677,6 +904,18 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
         >
           <Maximize2 size={14} />
         </button>
+        <button
+          onClick={() => setShowMinimap((v) => !v)}
+          className={`p-2 rounded-md transition-colors ${
+            showMinimap
+              ? 'bg-accent/10 text-accent'
+              : 'text-fg-muted hover:bg-tint hover:text-fg'
+          }`}
+          title={showMinimap ? 'Hide minimap' : 'Show minimap'}
+          aria-pressed={showMinimap}
+        >
+          <MapIcon size={14} />
+        </button>
         <ExportMenu
           cyRef={cyRef}
           nodes={nodes}
@@ -684,6 +923,31 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
           isDark={isDark}
         />
       </div>
+
+      {/* Minimap (cytoscape-navigator) — bird's-eye overview for jumping
+          around large graphs without the zoom-out/zoom-in loop. Always in
+          the DOM (the navigator resolves it by id) but hidden until toggled.
+          The `cytoscape-navigator` class is needed for the library's inner
+          canvas/thumbnail CSS; the inline styles override its default
+          position:fixed 400x400 so it sits as a 180x120 box top-right. */}
+      <div
+        id="processmap-minimap"
+        ref={minimapRef}
+        className="cytoscape-navigator overflow-hidden rounded-lg border border-line shadow-md"
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          top: 12,
+          right: 12,
+          bottom: 'auto',
+          left: 'auto',
+          width: 180,
+          height: 120,
+          zIndex: 10,
+          background: isDark ? '#1e1e22' : '#ffffff',
+          display: showMinimap ? 'block' : 'none',
+        }}
+      />
 
       {/* Annotation count */}
       {annotations && annotations.length > 0 && (

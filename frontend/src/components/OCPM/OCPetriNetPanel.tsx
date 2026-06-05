@@ -58,12 +58,12 @@ export default function OCPetriNetPanel({ ocelId }: { ocelId: string }) {
       container: cyContainerRef.current,
       elements,
       style: [
-        { selector: 'node.activity', style: { 'label': 'data(label)', 'background-color': nodeBg, 'border-width': 1, 'border-color': nodeBorder, 'shape': 'roundrectangle', 'width': 'label', 'height': 'label', 'padding': '8px', 'font-size': '10px', 'font-family': 'Manrope, sans-serif', 'text-valign': 'center', 'text-halign': 'center', 'color': nodeText } as any },
-        { selector: 'node.objtype', style: { 'label': 'data(label)', 'background-color': isDark ? '#083344' : '#ecfeff', 'border-width': 2, 'border-color': '#06b6d4', 'shape': 'roundrectangle', 'width': 'label', 'height': 'label', 'padding': '12px', 'font-size': '11px', 'font-weight': 700, 'font-family': 'Manrope, sans-serif', 'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap', 'text-max-width': '120px', 'color': '#06b6d4' } as any },
+        { selector: 'node.activity', style: { 'label': 'data(label)', 'background-color': nodeBg, 'border-width': 1, 'border-color': nodeBorder, 'shape': 'roundrectangle', 'width': 'label', 'height': 'label', 'padding': '8px', 'font-size': '10px', 'font-family': 'Manrope, sans-serif', 'text-valign': 'center', 'text-halign': 'center', 'color': nodeText, 'min-zoomed-font-size': 9 } as any },
+        { selector: 'node.objtype', style: { 'label': 'data(label)', 'background-color': isDark ? '#083344' : '#ecfeff', 'border-width': 2, 'border-color': '#06b6d4', 'shape': 'roundrectangle', 'width': 'label', 'height': 'label', 'padding': '12px', 'font-size': '11px', 'font-weight': 700, 'font-family': 'Manrope, sans-serif', 'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap', 'text-max-width': '120px', 'color': '#06b6d4', 'min-zoomed-font-size': 9 } as any },
         { selector: 'edge', style: { 'width': 1, 'line-color': edgeColor, 'target-arrow-shape': 'none', 'opacity': 0.4, 'curve-style': 'bezier' } as any },
       ],
       layout: { name: 'cose', animate: false, fit: true, nodeRepulsion: () => 30000, idealEdgeLength: () => 80, gravity: 0.5, padding: 30 } as any,
-      userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.4, maxZoom: 5, wheelSensitivity: 1.0, pixelRatio: 2, textureOnViewport: false,
+      userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.15, maxZoom: 5, wheelSensitivity: 1.0, pixelRatio: 1, textureOnViewport: true,
     });
 
     return () => { cy.destroy(); };
