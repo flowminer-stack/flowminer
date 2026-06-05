@@ -1,144 +1,183 @@
-import { useState } from 'react';
-import { Upload, Map, BarChart3, ChevronRight, X, Check, Sparkles } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import {
+  Upload,
+  Database,
+  Map,
+  BarChart3,
+  ChevronRight,
+  X,
+  Sparkles,
+  Layers,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
+import { logBuilder } from '@/api/client';
+import type { ProcessRecipe } from '@/api/client';
 
 interface OnboardingWizardProps {
   onDismiss: () => void;
   onNavigate: (path: string) => void;
 }
 
-const STEPS = [
-  {
-    id: 'sample',
-    title: 'Start with sample data',
-    description:
-      'Click below to spin up a sample project with the pm4py running-example (6 cases, 8 activities, 35 events). The column mapping is pre-configured so you can jump straight to analysis.',
-    icon: Sparkles,
-    action: 'Create sample project',
-    path: '/projects?seed=1',
-    tip: 'You can also upload your own CSV, XES, Parquet, or Excel from any project — or connect a database / Jira / GitHub.',
-  },
-  {
-    id: 'upload',
-    title: 'Or upload your own event log',
-    description:
-      'Create a project, then click Upload. Each row should represent one event with at least a case ID, activity name, and timestamp. FlowMiner auto-detects common column names.',
-    icon: Upload,
-    action: 'Create project',
-    path: '/projects?new=1',
-    tip: 'Wide tables work too — use the Event Log Builder to turn a table with multiple timestamp columns into a long event log.',
-  },
-  {
-    id: 'discover',
-    title: 'Explore the process map',
-    description:
-      'FlowMiner discovers your process automatically. Switch algorithms with the selector (DFG, Alpha, Heuristic, Inductive) and adjust the detail slider to simplify complex processes.',
-    icon: Map,
-    action: null,
-    path: null,
-    tip: 'Click any node on the map to see activity statistics. Use the Filter button to drill into specific variants or time windows.',
-  },
-  {
-    id: 'analyze',
-    title: 'Run deep analysis',
-    description:
-      'The Analysis tab has 17+ specialized cards: bottlenecks, variants, rework, conformance, social networks, sustainability, agent mining, SQL sandbox, plus an "Ask" card that turns plain-English questions into charts.',
-    icon: BarChart3,
-    action: null,
-    path: null,
-    tip: 'Open the Insights panel — it surfaces critical issues, automation opportunities, and root causes in plain language.',
-  },
+// The path, shown as a guidance checklist (not per-user completion tracking —
+// that's a follow-up). Replaces the old passive 4-slide carousel.
+const CHECKLIST = [
+  { icon: Sparkles, label: 'Explore sample data' },
+  { icon: Upload, label: 'Connect your data' },
+  { icon: Map, label: 'Discover the map' },
+  { icon: BarChart3, label: 'Run deep analysis' },
 ];
 
+interface IntentCardProps {
+  icon: LucideIcon;
+  title: string;
+  blurb: string;
+  cta: string;
+  primary?: boolean;
+  onClick: () => void;
+}
+
+function IntentCard({ icon: Icon, title, blurb, cta, primary, onClick }: IntentCardProps) {
+  return (
+    <button
+      onClick={onClick}
+      className={clsx(
+        'flex flex-col items-start gap-1.5 rounded-xl border p-3 text-left transition-all',
+        primary
+          ? 'border-accent/40 bg-accent/10 hover:bg-accent/15'
+          : 'border-line bg-surface-2 hover:border-line-strong',
+      )}
+    >
+      <div
+        className={clsx(
+          'flex h-8 w-8 items-center justify-center rounded-lg',
+          primary ? 'bg-accent/20 text-accent' : 'bg-tint text-fg-muted',
+        )}
+      >
+        <Icon size={16} />
+      </div>
+      <span className="text-[13px] font-semibold text-fg">{title}</span>
+      <span className="text-[11px] leading-relaxed text-fg-muted">{blurb}</span>
+      <span
+        className={clsx(
+          'mt-1 inline-flex items-center gap-1 text-[11px] font-medium',
+          primary ? 'text-accent' : 'text-fg-secondary',
+        )}
+      >
+        {cta}
+        <ChevronRight size={11} />
+      </span>
+    </button>
+  );
+}
+
 export default function OnboardingWizard({ onDismiss, onNavigate }: OnboardingWizardProps) {
-  const [currentStep, setCurrentStep] = useState(0);
-  const step = STEPS[currentStep];
+  const [recipes, setRecipes] = useState<ProcessRecipe[]>([]);
+
+  // Best-effort: surface the prebuilt process packs so users know they exist.
+  useEffect(() => {
+    logBuilder
+      .getTemplates()
+      .then(setRecipes)
+      .catch(() => {
+        /* packs are an enhancement; ignore failures */
+      });
+  }, []);
 
   return (
     <div className="rounded-lg border border-accent/20 bg-accent/5 p-4">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Sparkles size={14} className="text-accent" />
-          <span className="text-[12px] font-semibold text-fg">Getting Started with FlowMiner</span>
-          <span className="text-[10px] text-fg-faint">Step {currentStep + 1} of {STEPS.length}</span>
+          <span className="text-[12px] font-semibold text-fg">
+            Getting Started with FlowMiner
+          </span>
         </div>
-        <button onClick={onDismiss} className="rounded p-1 text-fg-faint hover:text-fg-muted transition-colors">
+        <button
+          onClick={onDismiss}
+          className="rounded p-1 text-fg-faint transition-colors hover:text-fg-muted"
+        >
           <X size={13} />
         </button>
       </div>
 
-      {/* Progress */}
-      <div className="flex gap-1 mb-4">
-        {STEPS.map((s, i) => (
-          <button
-            key={s.id}
-            onClick={() => setCurrentStep(i)}
-            className={clsx(
-              'h-1 flex-1 rounded-full transition-colors',
-              i <= currentStep ? 'bg-accent' : 'bg-line',
+      {/* Guidance checklist */}
+      <div className="mb-4 flex flex-wrap items-center gap-x-1.5 gap-y-1.5">
+        {CHECKLIST.map((s, i) => (
+          <div key={s.label} className="flex items-center gap-1.5">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-2 border border-line px-2.5 py-1 text-[11px] text-fg-muted">
+              <s.icon size={12} className="text-fg-faint" />
+              {s.label}
+            </span>
+            {i < CHECKLIST.length - 1 && (
+              <ChevronRight size={11} className="text-fg-faint" />
             )}
-          />
+          </div>
         ))}
       </div>
 
-      {/* Step content */}
-      <div className="flex gap-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent/10">
-          <step.icon size={20} className="text-accent" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <h3 className="text-[13px] font-semibold text-fg">{step.title}</h3>
-          <p className="mt-1 text-[11px] text-fg-muted leading-relaxed">{step.description}</p>
-          {step.tip && (
-            <p className="mt-2 text-[10px] text-accent/80 bg-accent/5 rounded px-2 py-1.5">
-              {step.tip}
-            </p>
-          )}
-        </div>
+      {/* Intent — what do you want to do? */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <IntentCard
+          icon={Sparkles}
+          title="Start with sample data"
+          blurb="A pre-mapped example process — see a mined map in one click, no setup."
+          cta="Create sample project"
+          primary
+          onClick={() => onNavigate('/projects?seed=1')}
+        />
+        <IntentCard
+          icon={Upload}
+          title="Upload your event log"
+          blurb="CSV, XES, Parquet or Excel. Columns are auto-detected; wide tables welcome."
+          cta="New project + upload"
+          onClick={() => onNavigate('/projects?new=1')}
+        />
+        <IntentCard
+          icon={Database}
+          title="Connect a system"
+          blurb="Databases, Jira/GitHub/Zendesk, SAP, Salesforce, ServiceNow and more."
+          cta="New project + connect"
+          onClick={() => onNavigate('/projects?new=1')}
+        />
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center justify-between mt-4">
-        <div className="flex gap-2">
-          {currentStep > 0 && (
-            <button
-              onClick={() => setCurrentStep(currentStep - 1)}
-              className="rounded px-3 py-1.5 text-[11px] font-medium text-fg-muted hover:bg-tint transition-colors"
-            >
-              Back
-            </button>
-          )}
+      {/* Prebuilt process packs (surfaces the recipe content packs) */}
+      {recipes.length > 0 && (
+        <div className="mt-4 rounded-xl border border-line bg-surface-1 p-3">
+          <div className="mb-2 flex items-center gap-1.5">
+            <Layers size={13} className="text-accent" />
+            <span className="text-[12px] font-semibold text-fg">
+              Or start from a prebuilt process pack
+            </span>
+          </div>
+          <p className="mb-2.5 text-[11px] text-fg-muted">
+            Skip the ETL — these map a known system's tables straight to a
+            mineable process. Create a project, then pick a pack in the Event
+            Log Builder.
+          </p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {recipes.map((r) => (
+              <button
+                key={r.id}
+                onClick={() => onNavigate('/projects?new=1')}
+                className="rounded-lg border border-line bg-surface-2 p-2.5 text-left transition-all hover:border-line-strong"
+              >
+                <span className="block text-[12px] font-semibold text-fg">
+                  {r.process_name}
+                </span>
+                <span className="mt-0.5 block text-[10px] uppercase tracking-wider text-fg-faint">
+                  {r.category}
+                </span>
+                <span className="mt-1 line-clamp-2 block text-[11px] leading-relaxed text-fg-muted">
+                  {r.description}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex gap-2">
-          {step.action && step.path && (
-            <button
-              onClick={() => onNavigate(step.path!)}
-              className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[11px] font-medium text-white hover:bg-accent/90 transition-colors"
-            >
-              {step.action}
-              <ChevronRight size={11} />
-            </button>
-          )}
-          {currentStep < STEPS.length - 1 ? (
-            <button
-              onClick={() => setCurrentStep(currentStep + 1)}
-              className="flex items-center gap-1 rounded px-3 py-1.5 text-[11px] font-medium text-fg-secondary hover:bg-tint transition-colors"
-            >
-              Next
-              <ChevronRight size={11} />
-            </button>
-          ) : (
-            <button
-              onClick={onDismiss}
-              className="flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-[11px] font-medium text-white hover:bg-accent/90 transition-colors"
-            >
-              <Check size={11} />
-              Got it
-            </button>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
