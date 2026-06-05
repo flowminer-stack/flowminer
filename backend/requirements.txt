@@ -43,6 +43,14 @@ aiosqlite
 # Test-only: mock httpx requests so connector tests can replay realistic API
 # responses (Jira/SAP OData/REST facades) without a live source. Pure-Python.
 respx
+# Test-only: synthetic relational data generator for the log-join tests
+# (tests/fixtures/generate_p2p_data.py emits EKKO/EKPO/EKBE-shaped header/line/
+# history tables). Deterministic; used for cosmetic vendor names only.
+faker
+# Test-only: record-once / replay-forever HTTP cassettes (vcrpy) for the live
+# connector tests against free dev orgs (GitHub/Salesforce/ServiceNow/Jira).
+# Default record mode is "none" so normal runs never hit the network.
+pytest-recording
 structlog
 sentry-sdk[fastapi]
 slowapi

@@ -202,6 +202,24 @@ def _join_table(df: pd.DataFrame, step: dict) -> pd.DataFrame:
             "on its key first."
         )
 
+    # Normalise join-key dtypes across the two sources. A numeric-looking key
+    # (e.g. an SAP EBELN / order id) is preserved as a string when it comes from
+    # parquet but re-inferred as int64 when the other side is a CSV; pandas then
+    # refuses the merge ("merge on object and int64 columns"). When a key pair's
+    # dtypes differ, coerce both columns to string so the join is robust to
+    # source-format dtype drift (the SAP change-doc path does the same for
+    # CHANGENR by hand). Operate on copies so caller frames are untouched.
+    mismatched = [
+        (lk, rk) for lk, rk in zip(left_on, right_on)
+        if df[lk].dtype != right_df[rk].dtype
+    ]
+    if mismatched:
+        df = df.copy()
+        right_df = right_df.copy()
+        for lk, rk in mismatched:
+            df[lk] = df[lk].astype(str)
+            right_df[rk] = right_df[rk].astype(str)
+
     return df.merge(
         right_df,
         how=how,

@@ -46,6 +46,68 @@ def upload_dir(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(scope="module")
+def vcr_config():
+    """Scrub every credential before a cassette is written to disk.
+
+    Used by the ``@pytest.mark.vcr`` live/replay tests (pytest-recording). The
+    default record mode is ``none`` so a normal run never reaches the network —
+    recording is opt-in via ``--record-mode=once``. We redact auth headers, the
+    SAP/Coupa API-key headers, and common token query params so a committed
+    cassette is safe to share.
+    """
+    return {
+        "record_mode": "none",
+        "filter_headers": [
+            ("authorization", "REDACTED"),
+            ("Authorization", "REDACTED"),
+            ("x-coupa-api-key", "REDACTED"),
+            ("apikey", "REDACTED"),
+            ("APIKey", "REDACTED"),
+            ("cookie", "REDACTED"),
+            ("set-cookie", "REDACTED"),
+        ],
+        "filter_query_parameters": [
+            ("access_token", "REDACTED"),
+            ("api_token", "REDACTED"),
+            ("token", "REDACTED"),
+        ],
+        "filter_post_data_parameters": [
+            ("client_secret", "REDACTED"),
+            ("password", "REDACTED"),
+            ("refresh_token", "REDACTED"),
+        ],
+    }
+
+
+@pytest.fixture
+def p2p_tables(tmp_path):
+    """Synthetic P2P relational tables (header + lines + history) on disk.
+
+    Exposes both the normalized multi-row tables (for the many-to-many reject
+    test and for DB seeding) and the join-ready one-row-per-order tables wired
+    for ``build_event_log``. Deterministic (seed=42) so counts are assertable.
+    """
+    from tests.fixtures.generate_p2p_data import (
+        generate_tables,
+        join_ready,
+        write_tables,
+    )
+
+    n_orders = 120
+    tables = generate_tables(n_orders=n_orders, seed=42)
+    normalized = write_tables(tables, tmp_path / "normalized")
+    jr = join_ready(tables)
+    join_ready_paths = write_tables(jr, tmp_path / "join_ready")
+    return {
+        "n_orders": n_orders,
+        "tables": tables,
+        "normalized": normalized,        # name -> path (orders/order_lines/order_history)
+        "join_ready": jr,                # name -> DataFrame
+        "join_ready_paths": join_ready_paths,  # name -> path (orders/lines_summary/receipts)
+    }
+
+
 @pytest.fixture
 def synthetic_event_log_df() -> pd.DataFrame:
     """A small, deterministic P2P-style event log for generic assertions.
