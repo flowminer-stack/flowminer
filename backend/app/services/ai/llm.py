@@ -81,6 +81,15 @@ def _provider() -> str:
     return _config("llm.provider", "FLOWMINER_LLM_PROVIDER", "null").lower()
 
 
+def current_provider() -> str:
+    """Public accessor for the configured provider (anthropic/openai/...).
+
+    Lets callers that want a specific cheap model (e.g. the column-mapping
+    suggester forcing gpt-4.1-nano) pick a provider-appropriate model id.
+    """
+    return _provider()
+
+
 def _api_key(provider: str | None = None) -> str:
     """Return the API key for the given provider, looking in
     system_settings first, then the provider-specific env var."""
@@ -145,8 +154,16 @@ def _openrouter_default_headers() -> dict[str, str]:
 # ─── Sync (single-shot) completion ────────────────────────────────────────
 
 
-def complete(system: str, user: str, *, temperature: float = 0.2) -> str:
-    """Synchronous single-shot completion. Returns the model's text."""
+def complete(
+    system: str, user: str, *, temperature: float = 0.2, model: str | None = None
+) -> str:
+    """Synchronous single-shot completion. Returns the model's text.
+
+    ``model`` optionally overrides the configured model for the openai /
+    openrouter providers (e.g. force a cheap ``gpt-4.1-nano`` for a small
+    structured-extraction call regardless of the app's main LLM model). It is
+    ignored for anthropic / ollama, whose configured model is used.
+    """
     p = _provider()
     if p == "null" or not is_llm_configured():
         return _null_complete(system, user)
@@ -154,9 +171,9 @@ def complete(system: str, user: str, *, temperature: float = 0.2) -> str:
         if p == "anthropic":
             return _anthropic_complete(system, user, temperature=temperature)
         if p == "openai":
-            return _openai_complete(system, user, temperature=temperature)
+            return _openai_complete(system, user, temperature=temperature, model=model)
         if p == "openrouter":
-            return _openrouter_complete(system, user, temperature=temperature)
+            return _openrouter_complete(system, user, temperature=temperature, model=model)
         if p == "ollama":
             return _ollama_complete(system, user, temperature=temperature)
     except Exception as e:
@@ -189,13 +206,15 @@ def _anthropic_complete(system: str, user: str, temperature: float) -> str:
     return "".join(parts)
 
 
-def _openai_complete(system: str, user: str, temperature: float) -> str:
+def _openai_complete(
+    system: str, user: str, temperature: float, model: str | None = None
+) -> str:
     try:
         from openai import OpenAI
     except ImportError as e:
         raise LLMError("openai SDK not installed") from e
 
-    model = _model("openai")
+    model = model or _model("openai")
     client = OpenAI(api_key=_api_key("openai"))
     resp = client.chat.completions.create(
         model=model,
@@ -208,7 +227,9 @@ def _openai_complete(system: str, user: str, temperature: float) -> str:
     return resp.choices[0].message.content or ""
 
 
-def _openrouter_complete(system: str, user: str, temperature: float) -> str:
+def _openrouter_complete(
+    system: str, user: str, temperature: float, model: str | None = None
+) -> str:
     """OpenRouter uses the OpenAI-compatible chat completions API, so we
     reuse the openai SDK with a custom ``base_url`` and auth header.
 
@@ -219,7 +240,7 @@ def _openrouter_complete(system: str, user: str, temperature: float) -> str:
     except ImportError as e:
         raise LLMError("openai SDK not installed (required for openrouter)") from e
 
-    model = _model("openrouter")
+    model = model or _model("openrouter")
     client = OpenAI(
         api_key=_api_key("openrouter"),
         base_url="https://openrouter.ai/api/v1",

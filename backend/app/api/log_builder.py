@@ -1,5 +1,6 @@
 """Event Log Builder API: preview raw tables, build long event logs."""
 
+import asyncio
 import logging
 import os
 import uuid as uuid_mod
@@ -218,6 +219,60 @@ async def build(
         "total_cases": result["total_cases"],
         "activities": result["activities"],
     }
+
+
+class SuggestMappingRequest(BaseModel):
+    """Ask the AI to suggest a column mapping for a source table.
+
+    Provide either ``staging_path`` (a file already uploaded via /upload-raw,
+    profiled server-side) or a ``columns`` profile + ``sample_rows`` directly
+    (e.g. from a connector preview the frontend already holds). ``connector_type``
+    is an optional hint (e.g. "sap", "servicenow").
+    """
+
+    staging_path: str | None = None
+    columns: list[dict] | None = None
+    sample_rows: list[dict] | None = None
+    connector_type: str | None = None
+
+
+@router.post("/suggest-mapping")
+async def suggest_mapping_endpoint(
+    body: SuggestMappingRequest,
+    _current_user: User = Depends(get_current_active_user),
+):
+    """Suggest case_id/activity/timestamp/resource columns for a source table.
+
+    Uses a cheap LLM (gpt-4.1-nano) to disambiguate the semantic mapping, with a
+    deterministic heuristic fallback when no LLM is configured — so the connector
+    onboarding step can pre-fill the mapping (accept/edit) instead of making the
+    user pick columns by hand.
+    """
+    from app.services.ai import llm
+    from app.services.ai.mapping_suggester import suggest_mapping
+
+    if body.staging_path:
+        path = _validate_staging_path(body.staging_path)
+        try:
+            preview = preview_table(path)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to preview file: {e}")
+        columns = preview["columns"]
+        sample_rows = preview["sample_rows"]
+    elif body.columns:
+        columns = body.columns
+        sample_rows = body.sample_rows or []
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'staging_path' or 'columns' to suggest a mapping",
+        )
+
+    # suggest_mapping is sync (uses a sync LLM client); run off the event loop.
+    result = await asyncio.to_thread(
+        suggest_mapping, columns, sample_rows, body.connector_type
+    )
+    return {**result, "llm_configured": llm.is_llm_configured()}
 
 
 @router.get("/templates")
