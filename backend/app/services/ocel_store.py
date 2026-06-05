@@ -40,6 +40,14 @@ class _BoundedOcelStore:
     def __contains__(self, key):
         return key in self._data
 
+    def clear(self):
+        """Drop all cached OCEL objects. Used by the demo reset so a purge
+        cycle doesn't leave stale (now-deleted) ocel_id entries behind."""
+        self._data.clear()
+
+    def __len__(self):
+        return len(self._data)
+
 
 _ocel_store = _BoundedOcelStore(maxsize=50)
 
@@ -67,7 +75,18 @@ _OCEL_EXTENSIONS = {".jsonocel", ".xmlocel", ".sqlite", ".json", ".xml"}
 def _read_ocel(file_path: str):
     """
     Read an OCEL file from disk using the appropriate pm4py reader based on
-    its extension.  Raises ValueError for unsupported extensions.
+    its extension.  Raises ValueError for unsupported extensions or files
+    that no available reader can parse.
+
+    Reader selection is deliberately defensive about the pm4py API surface,
+    which has drifted across releases (e.g. ``read_ocel2`` / ``read_ocel2_json``
+    only exist on 2.7+, while the legacy ``read_ocel_json`` is the OCEL 1.0
+    reader and *raises* on OCEL 2.0 input). We resolve each candidate via
+    ``getattr`` so a missing/renamed function is simply skipped instead of
+    raising ``AttributeError`` and bubbling up as a hard "OCEL not found" —
+    which is exactly how a pm4py downgrade silently broke OCEL reading before.
+    We try OCEL 2.0 readers first (the format the product ships), then fall
+    back to the format-specific OCEL 1.0 readers, then the generic reader.
     """
     import pm4py
 
@@ -78,22 +97,37 @@ def _read_ocel(file_path: str):
             f"Supported: {', '.join(sorted(_OCEL_EXTENSIONS))}"
         )
 
-    # Try the OCEL 2.0 reader first; fall back to format-specific OCEL 1.0
-    # readers for .json/.xml so legacy files work too.
-    try:
-        return pm4py.read_ocel2(file_path)
-    except Exception as ocel2_err:
-        logger.debug("read_ocel2 failed (%s), trying format-specific reader", ocel2_err)
+    # Ordered list of candidate reader names by extension. OCEL 2.0 first
+    # (what we ship), then OCEL 1.0 / generic fallbacks. Names that don't
+    # exist on the installed pm4py are skipped via getattr below.
+    if ext == ".sqlite":
+        candidates = ["read_ocel2_sqlite", "read_ocel2", "read_ocel_sqlite", "read_ocel"]
+    elif ext in (".xml", ".xmlocel"):
+        candidates = ["read_ocel2_xml", "read_ocel2", "read_ocel_xml", "read_ocel"]
+    else:  # .json / .jsonocel
+        candidates = ["read_ocel2_json", "read_ocel2", "read_ocel_json", "read_ocel"]
 
-    if ext in (".json", ".jsonocel"):
-        return pm4py.read_ocel_json(file_path)
-    if ext in (".xml", ".xmlocel"):
-        return pm4py.read_ocel_xml(file_path)
+    last_err: Exception | None = None
+    for name in candidates:
+        reader = getattr(pm4py, name, None)
+        if reader is None:
+            continue
+        try:
+            ocel_obj = reader(file_path)
+        except Exception as e:  # wrong-format reader for this file — try next
+            last_err = e
+            logger.debug("pm4py.%s failed for %s: %s", name, os.path.basename(file_path), e)
+            continue
+        # Some readers return None on a format mismatch instead of raising.
+        if ocel_obj is not None:
+            return ocel_obj
+        logger.debug("pm4py.%s returned None for %s", name, os.path.basename(file_path))
 
-    # SQLite only supported via read_ocel2; if that failed above, re-raise
     raise ValueError(
         f"Could not read OCEL file '{os.path.basename(file_path)}': "
-        "file may be corrupted or in an unsupported format."
+        "no available pm4py reader could parse it (the file may be corrupted, "
+        "in an unsupported format, or pm4py may be too old for OCEL 2.0). "
+        f"Last error: {last_err}"
     )
 
 

@@ -287,6 +287,76 @@ def _ingest_ocel_stats(file_path: str) -> dict:
     }
 
 
+async def _warm_existing_demo_project(db: AsyncSession, project: Project, spec: DemoProjectSpec) -> None:
+    """Repair + warm an already-seeded demo project on boot.
+
+    The seeder is idempotent by project name, so on a container restart it
+    SKIPS projects that already exist in the (persistent) DB. But two pieces
+    of state do NOT persist with the DB row:
+
+      1. the in-memory ``_ocel_store`` — empty after every restart, so the
+         first OCPM request has to lazily re-read the file from disk; and
+      2. the uploaded file itself, if the upload volume was ever recreated
+         independently of the Postgres volume — leaving a dangling
+         ``file_path`` and a hard "OCEL not found".
+
+    This best-effort pass re-copies any missing OCEL source file and warms
+    the parsed object into ``_ocel_store`` so OCPM works immediately. Any
+    failure is logged and swallowed — a cold lazy reload still covers it.
+    """
+    ocel_specs = [s for s in spec.logs if s.log_type is LogType.ocel]
+    if not ocel_specs:
+        return
+
+    try:
+        from app.services.ocel_store import _read_ocel, _ocel_store
+    except Exception as e:  # pragma: no cover - import guard
+        logger.debug("demo seeder: OCEL warm-load unavailable: %s", e)
+        return
+
+    rows = (
+        await db.execute(
+            select(EventLog).where(
+                EventLog.project_id == project.id,
+                EventLog.log_type == LogType.ocel,
+            )
+        )
+    ).scalars().all()
+
+    repaired = False
+    for event_log in rows:
+        key = str(event_log.id)
+        if key in _ocel_store:
+            continue
+
+        # Repair a missing file before trying to read it.
+        if not event_log.file_path or not os.path.exists(event_log.file_path):
+            match = next(
+                (s for s in ocel_specs if s.display_name == event_log.name),
+                ocel_specs[0],
+            )
+            source = _EXAMPLES_DIR / match.source_filename
+            new_path = _copy_example_to_upload_dir(source, project.id)
+            if new_path is None:
+                logger.warning(
+                    "demo seeder: cannot warm OCEL %s — source %s missing",
+                    key, source,
+                )
+                continue
+            event_log.file_path = new_path
+            repaired = True
+            logger.info("demo seeder: re-materialised missing OCEL file for %s", key)
+
+        try:
+            _ocel_store[key] = _read_ocel(event_log.file_path)
+            logger.info("demo seeder: warmed OCEL %s into in-memory store", key)
+        except Exception:
+            logger.exception("demo seeder: failed to warm OCEL %s", key)
+
+    if repaired:
+        await db.commit()
+
+
 # ─── public entry points ─────────────────────────────────────────────────
 
 
@@ -316,6 +386,18 @@ async def seed_demo_data(db: AsyncSession) -> None:
                 "demo seeder: project '%s' already exists, skipping",
                 project_spec.name,
             )
+            # Still repair a missing file and warm the in-memory OCEL store —
+            # neither survives a restart, and a vanished upload file would
+            # otherwise surface as a permanent "OCEL not found".
+            try:
+                await _warm_existing_demo_project(
+                    db, existing_by_name[project_spec.name], project_spec
+                )
+            except Exception:
+                logger.exception(
+                    "demo seeder: warm-load failed for '%s' — continuing",
+                    project_spec.name,
+                )
             continue
 
         # Verify every log file is present before creating the project —
