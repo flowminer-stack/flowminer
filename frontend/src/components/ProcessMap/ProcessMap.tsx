@@ -72,10 +72,16 @@ export function getCyStyles(isDark: boolean): any[] {
   const nodeText = isDark ? '#e0e0e4' : '#1a1d24';
   const edgeTextBg = isDark ? '#1a1a1e' : '#f7f8fa';
   const edgeTextColor = isDark ? '#71717a' : '#6c7283';
+  // Start/end markers are vibrant solid fills so they pop as the process'
+  // entry/exit. The fill is light enough that the label must be DARK to read
+  // (white-on-green / white-on-salmon was barely legible). Light theme uses
+  // darker fills, so white text reads there.
   const startColor = isDark ? '#34d399' : '#059669';
-  const startBg = isDark ? 'rgba(52, 211, 153, 0.06)' : 'rgba(5, 150, 105, 0.06)';
+  const startBg = isDark ? '#34d399' : '#059669';
+  const startText = isDark ? '#0a1f17' : '#ffffff';
   const endColor = isDark ? '#f87171' : '#dc2626';
-  const endBg = isDark ? 'rgba(248, 113, 113, 0.06)' : 'rgba(220, 38, 38, 0.06)';
+  const endBg = isDark ? '#f87171' : '#dc2626';
+  const endText = isDark ? '#2a0c0c' : '#ffffff';
   const selectColor = isDark ? '#06b6d4' : '#4f63b2';
   const selectBg = isDark ? 'rgba(6, 182, 212, 0.06)' : 'rgba(79, 99, 178, 0.06)';
 
@@ -119,6 +125,8 @@ export function getCyStyles(isDark: boolean): any[] {
         'border-style': 'solid',
         'shape': 'roundrectangle',
         'background-color': startBg,
+        'color': startText,
+        'font-weight': 700,
       },
     },
     {
@@ -129,6 +137,8 @@ export function getCyStyles(isDark: boolean): any[] {
         'border-style': 'solid',
         'shape': 'roundrectangle',
         'background-color': endBg,
+        'color': endText,
+        'font-weight': 700,
       },
     },
     {
@@ -143,6 +153,9 @@ export function getCyStyles(isDark: boolean): any[] {
         'border-color': selectColor,
         'border-width': 2,
         'background-color': selectBg,
+        // Reset to the standard contrasting text — the selected fill is a
+        // dark/light tint, so a start/end node's dark label would vanish.
+        'color': nodeText,
       },
     },
     {
@@ -162,6 +175,7 @@ export function getCyStyles(isDark: boolean): any[] {
         'background-color': isDark
           ? 'rgba(245, 158, 11, 0.12)'
           : 'rgba(217, 119, 6, 0.08)',
+        'color': nodeText,
       },
     },
     {
