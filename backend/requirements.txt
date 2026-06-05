@@ -24,6 +24,13 @@ redis
 pm4py==2.7.22.4
 pandas<3.0
 numpy
+# Parquet engine. Many connectors (SAP, database, snowflake, bigquery, and the
+# REST/ERP connectors) serialise their fetched data with ``df.to_parquet(...)``,
+# which pandas implements ONLY via pyarrow/fastparquet — neither is pulled in
+# transitively, so without this the parquet-writing connectors ImportError at
+# runtime ("Unable to find a usable engine"). Pinned explicitly; a parquet
+# round-trip test in tests/connectors guards it.
+pyarrow>=15
 openpyxl
 aiofiles
 httpx
@@ -33,6 +40,9 @@ scikit-learn
 pytest
 pytest-asyncio
 aiosqlite
+# Test-only: mock httpx requests so connector tests can replay realistic API
+# responses (Jira/SAP OData/REST facades) without a live source. Pure-Python.
+respx
 structlog
 sentry-sdk[fastapi]
 slowapi
