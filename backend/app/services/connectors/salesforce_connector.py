@@ -108,7 +108,9 @@ class SalesforceConnector(BaseConnector):
         return {"tables": [{"name": obj, "columns": fields}]}
 
     def get_default_column_mapping(self, config: dict) -> dict | None:
-        obj = config.get("object_type", "").lower()
+        # Default to the most common process-mining object so an unconfigured
+        # connector still declares a usable (tenant-tunable) mapping.
+        obj = config.get("object_type", "opportunity").lower()
         if obj == "case":
             return {
                 "case_id_column": "CaseNumber",

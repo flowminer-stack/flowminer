@@ -151,3 +151,38 @@ async def test_ariba_sends_bearer_and_apikey_headers(upload_dir):
     await AribaConnector().fetch_data(config, {})
     assert captured["auth"] == "Bearer T"
     assert captured["apiKey"] == "APPKEY"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_coupa_melt_extracts_event_log(upload_dir):
+    """With event_timestamps configured, Coupa's raw POs are unpivoted into a
+    case/activity/timestamp event log via the transform engine (Phase 6)."""
+    pos = [
+        {"id": "PO1", "created-at": "2026-01-01", "approved-at": "2026-01-02"},
+        {"id": "PO2", "created-at": "2026-01-03", "approved-at": None},
+    ]
+    respx.get("https://coupa.test/api/purchase_orders").mock(
+        side_effect=_offset_serve(pos, key=None, page_size=100)
+    )
+    config = {
+        "instance_url": "https://coupa.test",
+        "api_key": "k",
+        "resource": "purchase_orders",
+        "limit": 1000,
+        "case_id_field": "id",
+        "event_timestamps": [
+            {"column": "created-at", "activity": "Created"},
+            {"column": "approved-at", "activity": "Approved"},
+        ],
+    }
+    conn = CoupaConnector()
+    path = await conn.fetch_data(config, {})
+    df = pd.read_parquet(path)
+    # PO1 -> Created + Approved, PO2 -> Created (approved-at is null, dropped) = 3
+    assert len(df) == 3
+    assert set(df["case_id"]) == {"PO1", "PO2"}
+    assert set(df["activity"]) == {"Created", "Approved"}
+    # the default mapping now points at the canonical melted columns
+    m = conn.get_default_column_mapping(config)
+    assert m["case_id_column"] == "case_id" and m["timestamp_column"] == "timestamp"

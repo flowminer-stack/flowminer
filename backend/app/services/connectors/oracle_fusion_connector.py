@@ -29,6 +29,7 @@ import pandas as pd
 
 from app.services.connectors.base import BaseConnector, ConnectorMeta
 from app.services.connectors.http_base import BasicAuth, OffsetPaginator, paginate
+from app.services.connectors.transform import apply_mapping, spec_from_config
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
@@ -109,6 +110,9 @@ class OracleFusionConnector(BaseConnector):
             raise ValueError("Oracle Fusion returned no rows for the configured resource/query")
 
         df = pd.DataFrame(rows[:limit])
+        spec = spec_from_config(config)
+        if spec is not None:
+            df = apply_mapping(df, spec)
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         dest = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}_oracle_fusion_{resource}.parquet")
         df.to_parquet(dest, index=False)
@@ -116,11 +120,16 @@ class OracleFusionConnector(BaseConnector):
         return dest
 
     def get_default_column_mapping(self, config: dict) -> dict | None:
-        # Lightweight heuristic — most Fusion resources have
-        # `CreationDate` and `<Resource>Number` columns. Callers
-        # should override via the column_mapping API.
+        spec = spec_from_config(config)
+        if spec is not None:
+            return spec.default_column_mapping()
+        # Best-effort default for a Fusion business object (PO header by
+        # default). Tenant-tunable; declare `event_timestamps` for the document
+        # lifecycle. Most Fusion REST resources expose CreationDate + a *Number.
+        resource = config.get("resource") or "purchaseOrders"
+        case_col = "PurchaseOrderNumber" if "purchaseOrders" in resource else "Number"
         return {
-            "case_id_column": "PurchaseOrderNumber" if "purchaseOrders" in (config.get("resource") or "") else None,
-            "timestamp_column": "CreationDate",
+            "case_id_column": case_col,
             "activity_column": "Status",
+            "timestamp_column": "CreationDate",
         }

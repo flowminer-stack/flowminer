@@ -40,6 +40,10 @@ class ConnectorMeta(BaseModel):
     category: str = "other"  # db|warehouse|file|api|itsm|crm|erp|procurement|hcm|devops|other
     mapping_mode: str = "manual"  # auto | manual | none — drives the UI column-mapping step
     supports_incremental: bool = False
+    # False if the connector intentionally yields a raw table rather than an
+    # event log (none today). Auto-mapped connectors with this True must declare
+    # a default case/activity/timestamp mapping — enforced by a contract test.
+    produces_event_log: bool = True
     variants: dict[str, str] = Field(
         default_factory=dict,
         description="For multi-type connectors: {connector_type_id: label}. "

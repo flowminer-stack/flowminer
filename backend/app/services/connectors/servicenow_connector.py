@@ -92,7 +92,9 @@ class ServiceNowConnector(BaseConnector):
         return {"tables": [{"name": table, "columns": columns}]}
 
     def get_default_column_mapping(self, config: dict) -> dict | None:
-        table = config.get("table", "").lower()
+        # Default table mirrors fetch_data's default so an unconfigured
+        # connector still declares a usable (tenant-tunable) mapping.
+        table = config.get("table", "incident").lower()
         if table == "incident":
             return {
                 "case_id_column": "number",

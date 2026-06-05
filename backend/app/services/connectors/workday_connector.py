@@ -28,6 +28,7 @@ from app.services.connectors.http_base import (
     OffsetPaginator,
     paginate,
 )
+from app.services.connectors.transform import apply_mapping, spec_from_config
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
@@ -89,8 +90,24 @@ class WorkdayConnector(BaseConnector):
             raise ValueError("Workday returned no rows")
 
         df = pd.DataFrame(rows)
+        spec = spec_from_config(config)
+        if spec is not None:
+            df = apply_mapping(df, spec)
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         dest = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}_workday.parquet")
         df.to_parquet(dest, index=False)
         logger.info("Workday %s → %s (%d rows)", endpoint, dest, len(df))
         return dest
+
+    def get_default_column_mapping(self, config: dict) -> dict | None:
+        spec = spec_from_config(config)
+        if spec is not None:
+            return spec.default_column_mapping()
+        # Best-effort default. Workday's shape is endpoint-specific; most
+        # processes are better modelled by declaring `event_timestamps`
+        # (transaction/effective dates) for the chosen endpoint.
+        return {
+            "case_id_column": "id",
+            "activity_column": "descriptor",
+            "timestamp_column": "effectiveDate",
+        }

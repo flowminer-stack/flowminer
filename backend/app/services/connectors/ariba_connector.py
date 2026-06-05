@@ -29,6 +29,7 @@ from app.services.connectors.http_base import (
     TokenPaginator,
     paginate,
 )
+from app.services.connectors.transform import apply_mapping, spec_from_config
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
@@ -104,8 +105,23 @@ class AribaConnector(BaseConnector):
             raise ValueError("Ariba returned no rows")
 
         df = pd.DataFrame(rows)
+        spec = spec_from_config(config)
+        if spec is not None:
+            df = apply_mapping(df, spec)
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         dest = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}_ariba_{view}.parquet")
         df.to_parquet(dest, index=False)
         logger.info("Ariba %s → %s (%d rows)", view, dest, len(df))
         return dest
+
+    def get_default_column_mapping(self, config: dict) -> dict | None:
+        spec = spec_from_config(config)
+        if spec is not None:
+            return spec.default_column_mapping()
+        # Best-effort default for an Ariba reporting-view header (tenant-tunable);
+        # declare `event_timestamps` to unpivot the document lifecycle.
+        return {
+            "case_id_column": "DocumentNumber",
+            "activity_column": "DocumentStatus",
+            "timestamp_column": "CreatedDate",
+        }

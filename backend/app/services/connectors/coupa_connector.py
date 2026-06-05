@@ -18,6 +18,7 @@ import pandas as pd
 
 from app.services.connectors.base import BaseConnector, ConnectorMeta
 from app.services.connectors.http_base import ApiKeyAuth, OffsetPaginator, paginate
+from app.services.connectors.transform import apply_mapping, spec_from_config
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
@@ -81,8 +82,26 @@ class CoupaConnector(BaseConnector):
             raise ValueError("Coupa returned no rows")
 
         df = pd.DataFrame(rows)
+        # Opt-in event-log extraction: when the config declares event_timestamps,
+        # unpivot the PO lifecycle into a case/activity/timestamp log.
+        spec = spec_from_config(config)
+        if spec is not None:
+            df = apply_mapping(df, spec)
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         dest = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}_coupa_{resource}.parquet")
         df.to_parquet(dest, index=False)
         logger.info("Coupa %s → %s (%d rows)", resource, dest, len(df))
         return dest
+
+    def get_default_column_mapping(self, config: dict) -> dict | None:
+        spec = spec_from_config(config)
+        if spec is not None:
+            return spec.default_column_mapping()
+        # Best-effort default for a Coupa header object (id + status + a
+        # last-updated timestamp). Tenant-tunable; declare `event_timestamps`
+        # in the config to unpivot the full lifecycle into activities instead.
+        return {
+            "case_id_column": "id",
+            "activity_column": "status",
+            "timestamp_column": "updated-at",
+        }
