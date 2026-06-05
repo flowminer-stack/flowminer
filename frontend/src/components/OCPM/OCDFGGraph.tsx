@@ -93,9 +93,6 @@ export default function OCDFGGraph({
             'text-valign': 'center',
             'text-halign': 'center',
             'color': nodeText,
-            // Skip rendering labels that would be unreadably small at
-            // overview zoom — cheaper and less cluttered (LOD).
-            'min-zoomed-font-size': 9,
           } as any,
         },
         {
@@ -142,11 +139,12 @@ export default function OCDFGGraph({
       // slower than every other app. pixelRatio:1 + textureOnViewport
       // keep pan/zoom cheap on HiDPI.
       wheelSensitivity: 1.0,
-      pixelRatio: 1,
+      pixelRatio: 'auto',
       textureOnViewport: true,
     });
 
     if (prevView) cy.viewport({ zoom: prevView.zoom, pan: prevView.pan });
+    else if (cy.zoom() < 0.6) { cy.zoom(0.6); cy.center(); } // readable label floor
     cyRef.current = cy;
   }, [data, summary, isDark]);
 

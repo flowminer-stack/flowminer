@@ -58,7 +58,7 @@ function darkStyles(): any[] {
         label: 'data(label)',
         'text-wrap': 'wrap',
         'text-max-width': '110px',
-        'font-size': '10px',
+        'font-size': '12px',
         'font-family': 'Manrope, system-ui, sans-serif',
         'font-weight': 500,
         color: '#cbd5e1',
@@ -72,7 +72,6 @@ function darkStyles(): any[] {
         padding: '12px',
         'text-valign': 'center',
         'text-halign': 'center',
-        'min-zoomed-font-size': 8,
         'underlay-color': 'data(tierColor)',
         'underlay-opacity': 0.18,
         'underlay-padding': 8,
@@ -169,11 +168,18 @@ export default function ProcessPulsePage() {
       minZoom: 0.15,
       maxZoom: 5,
       wheelSensitivity: 1.0,
-      pixelRatio: 1,
+      pixelRatio: 'auto',
       textureOnViewport: true,
       boxSelectionEnabled: false,
     });
     cyRef.current = cy;
+
+    // Don't leave the graph at an unreadable zoom after the fit — raise to
+    // a floor so activity labels are legible without zooming in.
+    if (cy.zoom() < 0.6) {
+      cy.zoom(0.6);
+      cy.center();
+    }
 
     // Edge metadata for the particle system.
     edgeMetaRef.current = edges.map((e) => ({

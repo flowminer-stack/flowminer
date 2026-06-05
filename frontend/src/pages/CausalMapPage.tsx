@@ -53,7 +53,6 @@ function styles(isDark: boolean): any[] {
         'text-valign': 'center',
         'text-halign': 'center',
         color: nodeText,
-        'min-zoomed-font-size': 8,
       },
     },
     {
@@ -183,11 +182,12 @@ export default function CausalMapPage() {
       minZoom: 0.15,
       maxZoom: 5,
       wheelSensitivity: 1.0,
-      pixelRatio: 1,
+      pixelRatio: 'auto',
       textureOnViewport: true,
       boxSelectionEnabled: false,
     });
     if (prevView) cy.viewport({ zoom: prevView.zoom, pan: prevView.pan });
+    else if (cy.zoom() < 0.6) { cy.zoom(0.6); cy.center(); } // readable label floor
     cyRef.current = cy;
 
     // Click an activity → highlight what causes it + what it causes; dim rest.

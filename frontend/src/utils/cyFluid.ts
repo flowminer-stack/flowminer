@@ -16,7 +16,7 @@ export const FLUID_CY_OPTS = {
   minZoom: 0.15,
   maxZoom: 5,
   wheelSensitivity: 1.0,
-  pixelRatio: 1,
+  pixelRatio: 'auto',
   textureOnViewport: true,
 } as const;
 

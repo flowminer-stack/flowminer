@@ -109,6 +109,20 @@ export function Markdown({ text, variant = 'default' }: MarkdownProps) {
       continue;
     }
 
+    // # Heading (H1)
+    if (/^#\s+/.test(line)) {
+      blocks.push(
+        <h3
+          key={key++}
+          className={`${headingSpacing} ${compact ? 'text-[13px]' : 'text-[14px]'} font-bold text-fg first:mt-0`}
+        >
+          {renderInline(line.replace(/^#\s+/, ''))}
+        </h3>,
+      );
+      i += 1;
+      continue;
+    }
+
     // ## Heading
     if (/^##\s+/.test(line)) {
       blocks.push(

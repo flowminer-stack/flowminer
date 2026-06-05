@@ -21,6 +21,7 @@ import {
 import clsx from 'clsx';
 import { useEventLogData, useProcessMap } from '@/hooks/useProcessMining';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import Markdown from '@/components/common/Markdown';
 import ProcessMap from '@/components/ProcessMap/ProcessMap';
 import MapToolbar from '@/components/ProcessMap/MapToolbar';
 import NodeContextMenu from '@/components/ProcessMap/NodeContextMenu';
@@ -596,7 +597,7 @@ export default function ProcessViewPage() {
           </div>
 
           {/* Map + side panel */}
-          <div className="mt-2 flex flex-1 flex-col md:flex-row gap-3 overflow-hidden min-h-[400px]">
+          <div className="mt-2 flex flex-1 flex-col md:flex-row gap-3 overflow-hidden min-h-0">
             {/* Filter panel (left sidebar) */}
             {filterOpen && eventLogId && (
               <div className="w-full md:w-56 shrink-0 max-h-64 md:max-h-none overflow-hidden rounded-xl border border-line bg-surface-1" style={{ boxShadow: 'var(--shadow-sm)' }}>
@@ -827,9 +828,7 @@ export default function ProcessViewPage() {
                                   rule-based summary.
                                 </p>
                               )}
-                              <div className="whitespace-pre-wrap text-[11px] leading-relaxed text-fg-secondary">
-                                {narration}
-                              </div>
+                              <Markdown text={narration} variant="compact" />
                             </>
                           ) : null}
                         </div>

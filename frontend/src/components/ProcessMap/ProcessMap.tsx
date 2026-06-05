@@ -88,7 +88,7 @@ export function getCyStyles(isDark: boolean): any[] {
         'label': 'data(label)',
         'text-wrap': 'wrap',
         'text-max-width': '110px',
-        'font-size': '10px',
+        'font-size': '12px',
         'font-family': 'Manrope, system-ui, sans-serif',
         'font-weight': 500,
         'background-color': nodeBg,
@@ -104,10 +104,9 @@ export function getCyStyles(isDark: boolean): any[] {
         'color': nodeText,
         'text-background-color': nodeBg,
         'text-background-opacity': 0,
-        // Level-of-detail: don't render labels that would be smaller than
-        // 9px on screen (i.e. when zoomed out). Cheaper + far less clutter
-        // at the overview scale where the user spends time after a fit.
-        'min-zoomed-font-size': 9,
+        // Activity labels always render (no min-zoomed-font-size) — at a
+        // default fit the graph can sit at a low zoom and the names must
+        // still be visible without clicking. Edge freq-labels keep the LOD.
         'transition-property': 'border-color border-width opacity background-color',
         'transition-duration': '0.15s',
       } as any,
@@ -568,6 +567,20 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
           opts = { ...baseOpts, name: 'dagre', rankDir: layoutDirection, nodeSep: 60, rankSep: 70, edgeSep: 25 };
           break;
       }
+      if (fit) {
+        // After the auto-fit, don't leave the graph at an unreadable zoom —
+        // a wide/dense map fits at ~0.25-0.4 where labels are too small to
+        // read. Raise to a floor so activity names are legible by default;
+        // the graph may overflow the viewport (pan to see it all) but you
+        // no longer have to zoom in just to read.
+        cy.one('layoutstop', () => {
+          const FLOOR = 0.6;
+          if (cy.zoom() < FLOOR) {
+            cy.zoom(FLOOR);
+            cy.center();
+          }
+        });
+      }
       cy.layout(opts).run();
     },
     [layoutDirection, layoutName],
@@ -592,7 +605,7 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
       // pixelRatio:1 paints ~4x fewer pixels than :2 on HiDPI per frame;
       // textureOnViewport snapshots the canvas during a gesture so pan/
       // zoom transforms a bitmap instead of re-rastering every vector.
-      pixelRatio: 1,
+      pixelRatio: 'auto',
       textureOnViewport: true,
       // Touch / mobile parity: allow pinch-to-zoom and one-finger pan
       // on touch devices so the map is usable on tablets and phones.
@@ -879,7 +892,7 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
   }, []);
 
   return (
-    <div className="relative w-full h-full min-h-[400px] rounded-lg overflow-hidden bg-surface-2">
+    <div className="relative w-full h-full min-h-0 rounded-lg overflow-hidden bg-surface-2">
       {/* Floating controls — bottom-right for less visual clutter */}
       <div className="absolute bottom-3 right-3 z-10 flex items-center gap-px rounded-lg border border-line bg-surface-2/95 backdrop-blur-md p-0.5 shadow-sm">
         <button

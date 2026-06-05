@@ -182,7 +182,6 @@ export default function SocialNetworkPage() {
             'text-valign': 'center',
             'text-halign': 'center',
             'color': nodeText,
-            'min-zoomed-font-size': 9,
             'transition-property': 'border-color border-width opacity background-color',
             'transition-duration': '0.15s',
           } as any,

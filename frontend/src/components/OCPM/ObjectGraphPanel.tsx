@@ -74,7 +74,6 @@ function ObjectGraphVisual({ data }: { data: ObjectsGraphResponse }) {
             'background-color': nodeBg, 'border-width': 2, 'border-color': nodeBorder,
             'shape': 'ellipse', 'width': 'data(size)', 'height': 'data(size)',
             'text-valign': 'center', 'text-halign': 'center', 'color': nodeText,
-            'min-zoomed-font-size': 9,
           } as any,
         },
         {
@@ -91,7 +90,7 @@ function ObjectGraphVisual({ data }: { data: ObjectsGraphResponse }) {
         },
       ],
       layout: { name: 'circle', padding: 60, animate: false } as any,
-      userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.15, maxZoom: 5, wheelSensitivity: 1.0, pixelRatio: 1, textureOnViewport: true,
+      userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.15, maxZoom: 5, wheelSensitivity: 1.0, pixelRatio: 'auto', textureOnViewport: true,
     });
 
     return () => { cy.destroy(); };
