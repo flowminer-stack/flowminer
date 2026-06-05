@@ -27,13 +27,18 @@ import uuid
 import httpx
 import pandas as pd
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
 
 
 class OracleFusionConnector(BaseConnector):
+    meta = ConnectorMeta(
+        id="oracle_fusion", label="Oracle Fusion", category="erp",
+        mapping_mode="auto", supports_incremental=True,
+    )
+
     async def test_connection(self, config: dict) -> dict:
         base = config["base_url"].rstrip("/")
         try:

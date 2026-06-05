@@ -14,13 +14,15 @@ import uuid
 
 import pandas as pd
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
 
 
 class BigQueryConnector(BaseConnector):
+
+    meta = ConnectorMeta(id="bigquery", label="BigQuery", category="warehouse", mapping_mode="manual")
 
     async def test_connection(self, config: dict) -> dict:
         try:

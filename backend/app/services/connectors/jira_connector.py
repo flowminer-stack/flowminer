@@ -12,7 +12,7 @@ import uuid
 import httpx
 import pandas as pd
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 from app.services.infra.url_guard import validate_public_url
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,8 @@ def _basic_auth_header(email: str, api_token: str) -> str:
 
 class JiraConnector(BaseConnector):
     """Connector for Jira Cloud — extracts issue status-change events."""
+
+    meta = ConnectorMeta(id="jira", label="Jira", category="itsm", mapping_mode="auto")
 
     # ------------------------------------------------------------------
     # Internal helpers

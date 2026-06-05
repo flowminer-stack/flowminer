@@ -11,7 +11,7 @@ import uuid
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,8 @@ def _build_dsn(config: dict) -> str:
 
 class OdooConnector(BaseConnector):
     """Connector for Odoo — reads state changes from mail tracking tables."""
+
+    meta = ConnectorMeta(id="odoo", label="Odoo", category="erp", mapping_mode="auto")
 
     # ------------------------------------------------------------------
     # BaseConnector interface

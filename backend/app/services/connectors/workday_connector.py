@@ -22,13 +22,18 @@ import uuid
 import httpx
 import pandas as pd
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
 
 
 class WorkdayConnector(BaseConnector):
+    meta = ConnectorMeta(
+        id="workday", label="Workday", category="hcm",
+        mapping_mode="auto", supports_incremental=True,
+    )
+
     async def _get_token(self, config: dict) -> str:
         base = config["base_url"].rstrip("/")
         async with httpx.AsyncClient(timeout=30) as client:

@@ -11,7 +11,7 @@ import uuid
 import pandas as pd
 from sqlalchemy import create_engine, inspect, text
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 
 # Safe SQL identifier: letters, digits, underscores, optional single dot
 # between schema and table. Rejects ';', '--', spaces, quotes — i.e. the
@@ -95,6 +95,20 @@ def _build_connection_url(config: dict) -> str:
 
 class DatabaseConnector(BaseConnector):
     """Connector for SQL database data sources (PostgreSQL, MySQL, SQL Server)."""
+
+    meta = ConnectorMeta(
+        id="postgresql",
+        label="PostgreSQL",
+        category="db",
+        mapping_mode="manual",
+        supports_incremental=True,
+        variants={
+            "postgresql": "PostgreSQL",
+            "mysql": "MySQL",
+            "sqlserver": "SQL Server",
+            "oracle": "Oracle DB",
+        },
+    )
 
     async def test_connection(self, config: dict) -> dict:
         """

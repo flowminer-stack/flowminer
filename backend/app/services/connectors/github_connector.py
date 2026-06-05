@@ -11,7 +11,7 @@ import uuid
 import httpx
 import pandas as pd
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,8 @@ _ISSUE_TIMELINE_ACTIVITIES = {
 
 class GitHubConnector(BaseConnector):
     """Connector for GitHub — extracts PR and issue lifecycle events."""
+
+    meta = ConnectorMeta(id="github", label="GitHub", category="devops", mapping_mode="auto")
 
     # ------------------------------------------------------------------
     # Internal helpers

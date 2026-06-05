@@ -354,9 +354,8 @@ def sync_connector(self, connector_id: str):
     Args:
         connector_id: UUID string of the Connector record.
     """
-    from app.models import Connector, ConnectorStatus, ConnectorType, EventLog, EventLogStatus, SourceType
-    from app.services.connectors.database_connector import DatabaseConnector
-    from app.services.connectors.csv_connector import CsvConnector
+    from app.models import Connector, ConnectorStatus, EventLog, EventLogStatus, SourceType
+    from app.services.connectors import get_connector_class
 
     session = _get_sync_session()
 
@@ -366,51 +365,19 @@ def sync_connector(self, connector_id: str):
             logger.error(f"Connector {connector_id} not found")
             return {"status": "error", "message": "Connector not found"}
 
-        # Select the appropriate connector service
-        service = None
-        if connector.connector_type in (
-            ConnectorType.postgresql,
-            ConnectorType.mysql,
-            ConnectorType.sqlserver,
-        ):
-            service = DatabaseConnector()
-        elif connector.connector_type == ConnectorType.csv_watch:
-            service = CsvConnector()
-        elif connector.connector_type == ConnectorType.snowflake:
-            from app.services.connectors.snowflake_connector import SnowflakeConnector
-            service = SnowflakeConnector()
-        elif connector.connector_type == ConnectorType.bigquery:
-            from app.services.connectors.bigquery_connector import BigQueryConnector
-            service = BigQueryConnector()
-        elif connector.connector_type == ConnectorType.salesforce:
-            from app.services.connectors.salesforce_connector import SalesforceConnector
-            service = SalesforceConnector()
-        elif connector.connector_type == ConnectorType.servicenow:
-            from app.services.connectors.servicenow_connector import ServiceNowConnector
-            service = ServiceNowConnector()
-        elif connector.connector_type == ConnectorType.sap:
-            from app.services.connectors.sap_connector import SAPConnector
-            service = SAPConnector()
-        elif connector.connector_type == ConnectorType.workday:
-            from app.services.connectors.workday_connector import WorkdayConnector
-            service = WorkdayConnector()
-        elif connector.connector_type == ConnectorType.coupa:
-            from app.services.connectors.coupa_connector import CoupaConnector
-            service = CoupaConnector()
-        elif connector.connector_type == ConnectorType.ariba:
-            from app.services.connectors.ariba_connector import AribaConnector
-            service = AribaConnector()
-        elif connector.connector_type == ConnectorType.oracle_fusion:
-            from app.services.connectors.oracle_fusion_connector import OracleFusionConnector
-            service = OracleFusionConnector()
-        elif connector.connector_type == ConnectorType.oracle:
-            service = DatabaseConnector()  # Oracle uses SQLAlchemy like other DBs
-
-        if service is None:
+        # Dispatch via the connector registry — the SAME path the API uses, so
+        # the scheduled (cron) and manual sync can never diverge on which types
+        # are supported. (Previously this had its own if/elif that omitted
+        # jira/github/odoo/zendesk/api_endpoint, silently erroring those on
+        # their schedule.) Enterprise client libs stay lazily imported inside
+        # the connector methods, so constructing here never needs them.
+        cls = get_connector_class(connector.connector_type.value)
+        if cls is None:
             connector.status = ConnectorStatus.error
             connector.error_message = f"Unsupported connector type: {connector.connector_type}"
             session.commit()
             return {"status": "error", "message": connector.error_message}
+        service = cls()
 
         # Incremental sync: pass the last successful sync timestamp down to
         # the connector service so it can query only new/changed rows.

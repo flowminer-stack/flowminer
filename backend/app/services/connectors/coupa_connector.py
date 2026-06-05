@@ -16,13 +16,18 @@ import uuid
 import httpx
 import pandas as pd
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
 
 
 class CoupaConnector(BaseConnector):
+    meta = ConnectorMeta(
+        id="coupa", label="Coupa", category="procurement",
+        mapping_mode="auto", supports_incremental=True,
+    )
+
     async def test_connection(self, config: dict) -> dict:
         try:
             async with httpx.AsyncClient(timeout=15) as client:

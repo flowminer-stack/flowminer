@@ -18,13 +18,15 @@ import uuid
 import httpx
 import pandas as pd
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
 
 
 class SalesforceConnector(BaseConnector):
+
+    meta = ConnectorMeta(id="salesforce", label="Salesforce", category="crm", mapping_mode="auto")
 
     def _get_token(self, config: dict) -> tuple[str, str]:
         """Get access token, refreshing if needed."""

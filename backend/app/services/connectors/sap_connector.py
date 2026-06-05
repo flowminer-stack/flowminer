@@ -38,13 +38,15 @@ import uuid
 import httpx
 import pandas as pd
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
 
 
 class SAPConnector(BaseConnector):
+
+    meta = ConnectorMeta(id="sap", label="SAP", category="erp", mapping_mode="manual")
 
     async def test_connection(self, config: dict) -> dict:
         mode = config.get("mode", "odata")

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,8 @@ UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
 
 class CsvConnector(BaseConnector):
     """Connector for CSV file data sources."""
+
+    meta = ConnectorMeta(id="csv_watch", label="CSV Watch", category="file", mapping_mode="manual")
 
     async def test_connection(self, config: dict) -> dict:
         """

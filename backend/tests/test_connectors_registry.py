@@ -53,46 +53,51 @@ def test_enterprise_types_are_not_the_unsupported_branch():
             pass  # optional client lib not installed in this env — acceptable
 
 
-# ─── Dispatcher parity guard (Phase 0) ────────────────────────────────────────
-# The scheduled-sync path (workers/tasks.py::sync_connector) carries its OWN,
-# second connector dispatch that diverges from the API dispatcher above: it omits
-# jira/github/odoo/zendesk/api_endpoint, so those connectors error on their cron
-# schedule even though manual sync works. This guard makes that gap visible.
-#
-# It is xfail (non-strict) on purpose: the source-scan below cannot pass until
-# Phase 1 unifies both paths onto a single registry, at which point this test is
-# REPLACED by a registry-coverage assertion. Until then it keeps the gap on the
-# record without turning the suite red.
+# ─── Registry coverage (Phase 1) ──────────────────────────────────────────────
+# The if/elif dispatchers (one in the API, one diverging copy in the Celery
+# task) were replaced by a single self-registration registry. These guards pin
+# that the registry covers every ConnectorType and that BOTH dispatch paths
+# resolve through it — so "supported on manual sync but not on cron"
+# (jira/github/odoo/zendesk/api_endpoint) can never recur.
 import inspect
 
 
-def _api_supported_types():
-    """Connector types the API dispatcher can actually service."""
-    supported = set()
-    for ct in ConnectorType:
-        try:
-            _get_connector_service(ct)
-            supported.add(ct)
-        except HTTPException:
-            pass  # explicit "unsupported type" branch (e.g. dynamics365)
-        except ImportError:
-            supported.add(ct)  # branch exists; optional client lib just absent
-    return supported
-
-
-@pytest.mark.xfail(
-    reason="Phase 1: the Celery sync_connector dispatcher must cover the same "
-    "connector types as the API dispatcher. jira/github/odoo/zendesk/api_endpoint "
-    "are currently missing from the scheduled path. Replaced by a registry "
-    "coverage test in Phase 1.",
-    strict=False,
-)
-def test_celery_dispatcher_covers_api_connector_types():
-    from app.workers import tasks
-
-    src = inspect.getsource(tasks.sync_connector)
-    api_types = _api_supported_types()
-    missing = sorted(
-        ct.name for ct in api_types if f"ConnectorType.{ct.name}" not in src
+def test_registry_covers_all_enum_types_or_is_explicitly_unregistered():
+    from app.services.connectors import (
+        INTENTIONALLY_UNREGISTERED,
+        registered_ids,
+        validate_registry,
     )
-    assert not missing, f"scheduled sync_connector is missing dispatch for: {missing}"
+
+    enum_ids = {ct.value for ct in ConnectorType}
+    missing = enum_ids - registered_ids() - set(INTENTIONALLY_UNREGISTERED)
+    assert not missing, f"ConnectorType(s) with no registered connector: {sorted(missing)}"
+    # The boot-time guard must pass for the real connector set.
+    validate_registry()
+
+
+def test_dynamics365_is_the_only_intentionally_unregistered_type():
+    from app.services.connectors import INTENTIONALLY_UNREGISTERED, registered_ids
+
+    enum_ids = {ct.value for ct in ConnectorType}
+    assert (enum_ids - registered_ids()) == set(INTENTIONALLY_UNREGISTERED) == {"dynamics365"}
+
+
+def test_api_and_celery_dispatch_share_the_registry():
+    """Both the API (_get_connector_service) and the Celery sync_connector task
+    resolve connectors through get_connector_class — they cannot diverge."""
+    from pathlib import Path
+
+    from app.api import connectors as api_connectors
+
+    assert "get_connector_class" in inspect.getsource(api_connectors._get_connector_service)
+
+    # Read tasks.py from disk rather than importing it: app.workers.tasks builds
+    # a sync SQLAlchemy engine at import time with pool args the sqlite test DB
+    # rejects, so importing it here would fail for reasons unrelated to dispatch.
+    # get_connector_class appears only in sync_connector, so a file-level check
+    # is sufficient.
+    tasks_src = (
+        Path(__file__).resolve().parents[1] / "app" / "workers" / "tasks.py"
+    ).read_text()
+    assert "get_connector_class" in tasks_src

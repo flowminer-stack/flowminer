@@ -13,7 +13,7 @@ import httpx
 import pandas as pd
 import re
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 from app.services.infra.url_guard import validate_public_url
 
 # Zendesk subdomains are strict: letters, digits, hyphens only.
@@ -42,6 +42,8 @@ def _basic_auth_header(email: str, api_token: str) -> str:
 
 class ZendeskConnector(BaseConnector):
     """Connector for Zendesk Support — extracts ticket audit events."""
+
+    meta = ConnectorMeta(id="zendesk", label="Zendesk", category="itsm", mapping_mode="auto")
 
     # ------------------------------------------------------------------
     # Internal helpers

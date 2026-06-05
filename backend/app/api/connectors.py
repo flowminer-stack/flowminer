@@ -24,14 +24,8 @@ from app.models import (
     User,
 )
 from app.api.deps import get_current_active_user, assert_project_access
+from app.services.connectors import get_connector_class
 from app.services.connectors.base import BaseConnector
-from app.services.connectors.database_connector import DatabaseConnector
-from app.services.connectors.csv_connector import CsvConnector
-from app.services.connectors.api_connector import ApiConnector
-from app.services.connectors.jira_connector import JiraConnector
-from app.services.connectors.github_connector import GitHubConnector
-from app.services.connectors.odoo_connector import OdooConnector
-from app.services.connectors.zendesk_connector import ZendeskConnector
 
 logger = logging.getLogger(__name__)
 
@@ -39,63 +33,21 @@ router = APIRouter()
 
 
 def _get_connector_service(connector_type: ConnectorType) -> BaseConnector:
-    """Return the appropriate connector service instance for the given type.
+    """Return the connector service instance for the given type.
 
-    Enterprise connector services are imported lazily so the app still
-    boots if an optional client library (snowflake, google-cloud-bigquery,
-    pyrfc, …) is not installed in the running environment.
+    Dispatch is data-driven: connectors self-register in the connector registry
+    (``app.services.connectors``), so adding a connector no longer means editing
+    this function. Enterprise connectors import their optional client library
+    lazily inside their methods, so constructing the instance here never
+    requires that library to be installed.
     """
-    if connector_type in (
-        ConnectorType.postgresql,
-        ConnectorType.mysql,
-        ConnectorType.sqlserver,
-        ConnectorType.oracle,
-    ):
-        return DatabaseConnector()
-    elif connector_type == ConnectorType.csv_watch:
-        return CsvConnector()
-    elif connector_type == ConnectorType.api_endpoint:
-        return ApiConnector()
-    elif connector_type == ConnectorType.jira:
-        return JiraConnector()
-    elif connector_type == ConnectorType.github:
-        return GitHubConnector()
-    elif connector_type == ConnectorType.odoo:
-        return OdooConnector()
-    elif connector_type == ConnectorType.zendesk:
-        return ZendeskConnector()
-    elif connector_type == ConnectorType.sap:
-        from app.services.connectors.sap_connector import SAPConnector
-        return SAPConnector()
-    elif connector_type == ConnectorType.salesforce:
-        from app.services.connectors.salesforce_connector import SalesforceConnector
-        return SalesforceConnector()
-    elif connector_type == ConnectorType.servicenow:
-        from app.services.connectors.servicenow_connector import ServiceNowConnector
-        return ServiceNowConnector()
-    elif connector_type == ConnectorType.snowflake:
-        from app.services.connectors.snowflake_connector import SnowflakeConnector
-        return SnowflakeConnector()
-    elif connector_type == ConnectorType.bigquery:
-        from app.services.connectors.bigquery_connector import BigQueryConnector
-        return BigQueryConnector()
-    elif connector_type == ConnectorType.workday:
-        from app.services.connectors.workday_connector import WorkdayConnector
-        return WorkdayConnector()
-    elif connector_type == ConnectorType.coupa:
-        from app.services.connectors.coupa_connector import CoupaConnector
-        return CoupaConnector()
-    elif connector_type == ConnectorType.ariba:
-        from app.services.connectors.ariba_connector import AribaConnector
-        return AribaConnector()
-    elif connector_type == ConnectorType.oracle_fusion:
-        from app.services.connectors.oracle_fusion_connector import OracleFusionConnector
-        return OracleFusionConnector()
-    else:
+    cls = get_connector_class(connector_type.value)
+    if cls is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown connector type: {connector_type}",
         )
+    return cls()
 
 
 # -- Pydantic models for connector create/update (inline since no schema file) --

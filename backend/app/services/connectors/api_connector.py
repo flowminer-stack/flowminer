@@ -11,7 +11,7 @@ import uuid
 import httpx
 import pandas as pd
 
-from app.services.connectors.base import BaseConnector
+from app.services.connectors.base import BaseConnector, ConnectorMeta
 from app.services.infra.url_guard import UnsafeUrlError, validate_public_url
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,8 @@ def _extract_by_path(data: dict, path: str):
 
 class ApiConnector(BaseConnector):
     """Generic REST API connector with offset/page/cursor pagination support."""
+
+    meta = ConnectorMeta(id="api_endpoint", label="REST API", category="api", mapping_mode="manual")
 
     # ------------------------------------------------------------------
     # Internal helpers

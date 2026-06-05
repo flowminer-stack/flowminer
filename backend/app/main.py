@@ -32,6 +32,14 @@ async def lifespan(app: FastAPI):
     await init_db()
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 
+    # Fail loudly at boot if the connector registry, the ConnectorType enum and
+    # the intentional-gap allowlist have drifted (the dynamics365 class of bug)
+    # — far better than a 400 at sync time. validate_registry() is covered by a
+    # test, so this can't surprise us in prod.
+    from app.services.connectors import validate_registry
+
+    validate_registry()
+
     # Sample-data seeder. Runs whenever either:
     #   - DEMO_MODE=1 — full public-demo behaviour (seed + lock-down +
     #     anonymous /auth/demo + hourly Celery purge), or
