@@ -61,57 +61,95 @@ function looksLikeUUID(value: string): boolean {
   );
 }
 
-/** Content-based column inference.
+type Scored = { col: string; score: number };
+
+/** Content-based column inference WITH confidence scores.
  *
- * Scans up to `maxRows` sample rows and returns the best guess for each
- * unmapped XES role. Used as a fallback when name-based matching yields
- * nothing (anonymised exports like col_a, F1, etc.).
+ * Scans up to 20 sample rows and returns a best guess + score for each XES
+ * role from the DATA (not the column name) — so anonymised/renamed exports
+ * (col_a, F1, …) still get a real signal. Runs ALWAYS, in parallel with
+ * name-based detection; the two are reconciled by combineDetect().
  */
 function contentInfer(
   columns: string[],
   sampleRows: Record<string, unknown>[],
   exclude: Set<string>
-): Partial<Record<'case_id' | 'activity' | 'timestamp', string>> {
+): Partial<Record<'case_id' | 'activity' | 'timestamp', Scored>> {
   const candidates = columns.filter((c) => !exclude.has(c));
   const maxRows = Math.min(sampleRows.length, 20);
-  const result: Partial<Record<'case_id' | 'activity' | 'timestamp', string>> = {};
+  const out: Partial<Record<'case_id' | 'activity' | 'timestamp', Scored>> = {};
+  if (maxRows === 0) return out;
 
-  // Timestamp: column where >=60 % of sampled values parse as ISO-8601 / epoch
+  const sampleOf = (col: string) =>
+    sampleRows.slice(0, maxRows).map((r) => String(r[col] ?? ''));
+
+  // Timestamp: fraction of values parsing as ISO-8601 / epoch (>= 0.6).
   for (const col of candidates) {
-    if (result.timestamp) break;
-    const values = sampleRows.slice(0, maxRows).map((r) => String(r[col] ?? ''));
-    const hits = values.filter(looksLikeTimestamp).length;
-    if (values.length > 0 && hits / values.length >= 0.6) {
-      result.timestamp = col;
+    const values = sampleOf(col);
+    const ratio = values.filter(looksLikeTimestamp).length / values.length;
+    if (ratio >= 0.6 && (!out.timestamp || ratio > out.timestamp.score)) {
+      out.timestamp = { col, score: ratio };
     }
   }
 
-  // Case ID: column where >=50 % look like UUIDs, OR cardinality equals row
-  // count (each row is unique — classic case-id signature)
+  // Case ID: UUID fraction, or per-sample uniqueness (each row distinct —
+  // the classic case-id signature).
   for (const col of candidates) {
-    if (result.case_id) break;
-    if (col === result.timestamp) continue;
-    const values = sampleRows.slice(0, maxRows).map((r) => String(r[col] ?? ''));
-    const uuidHits = values.filter(looksLikeUUID).length;
-    const uniqueCount = new Set(values).size;
-    if (values.length > 0 && (uuidHits / values.length >= 0.5 || uniqueCount === values.length)) {
-      result.case_id = col;
+    if (col === out.timestamp?.col) continue;
+    const values = sampleOf(col);
+    const uuidRatio = values.filter(looksLikeUUID).length / values.length;
+    const uniqueRatio = new Set(values).size / values.length;
+    const score = Math.max(uuidRatio, uniqueRatio >= 1 ? uniqueRatio : 0);
+    if (score >= 0.5 && (!out.case_id || score > out.case_id.score)) {
+      out.case_id = { col, score };
     }
   }
 
-  // Activity: low-cardinality string column (not already used)
+  // Activity: low-cardinality string column. Weak signal -> capped at 0.7.
   for (const col of candidates) {
-    if (result.activity) break;
-    if (col === result.timestamp || col === result.case_id) continue;
-    const values = sampleRows.slice(0, maxRows).map((r) => String(r[col] ?? ''));
-    const uniqueCount = new Set(values).size;
-    // Low cardinality: <= 20 distinct values relative to sample size
-    if (values.length > 0 && uniqueCount <= Math.max(3, values.length * 0.4)) {
-      result.activity = col;
+    if (col === out.timestamp?.col || col === out.case_id?.col) continue;
+    const values = sampleOf(col);
+    const unique = new Set(values).size;
+    if (unique > 1 && unique <= Math.max(3, values.length * 0.4)) {
+      const score = Math.min(0.7, 0.4 + (1 - unique / values.length) * 0.5);
+      if (!out.activity || score > out.activity.score) {
+        out.activity = { col, score };
+      }
     }
   }
+  return out;
+}
 
-  return result;
+/** Name-based detection with a confidence score (exact match strongest). */
+function scoredNameDetect(
+  columns: string[],
+  hints: string[],
+  exclude: Set<string>
+): Scored | null {
+  const avail = columns.filter((c) => !exclude.has(c));
+  const lower = avail.map((c) => c.toLowerCase());
+  for (const hint of hints) {
+    const i = lower.indexOf(hint);
+    if (i !== -1) return { col: avail[i], score: 0.9 }; // exact
+  }
+  for (const hint of hints) {
+    const i = lower.findIndex((c) => c.includes(hint));
+    if (i !== -1) return { col: avail[i], score: 0.55 }; // partial
+  }
+  return null;
+}
+
+/** Reconcile a name guess and a content guess for one field. Agreement boosts
+ *  confidence; disagreement trusts the (intentional) column name; a
+ *  content-only guess is kept but stays low (and is flagged "review"). */
+function combineDetect(name: Scored | null, content: Scored | null): Scored | null {
+  if (name && content) {
+    if (name.col === content.col) {
+      return { col: name.col, score: Math.min(1, Math.max(name.score, content.score) + 0.15) };
+    }
+    return name;
+  }
+  return name ?? content ?? null;
 }
 
 function autoDetectColumn(columns: string[], hints: string[]): string | null {
@@ -184,7 +222,7 @@ const MappingDropdown: React.FC<MappingDropdownProps> = ({
           title="Auto-mapping confidence"
         >
           <Sparkles className="w-3 h-3" />
-          {pct > 0 ? `auto · ${pct}%` : 'Auto-detected'}
+          {pct > 0 ? `${pct < 40 ? 'review' : 'auto'} · ${pct}%` : 'Auto-detected'}
         </span>
       )}
     </div>
@@ -243,93 +281,63 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
   const [autoDetectedFields, setAutoDetectedFields] = useState<Set<string>>(
     new Set()
   );
+  // Combined (name + content) confidence per field, 0–1. Drives the pills and
+  // the "review" flag for low-confidence / content-only guesses.
+  const [fieldConfidence, setFieldConfidence] = useState<Record<string, number>>({});
 
-  // Auto-detect columns on mount — name-based first, content-based fallback
+  // Auto-detect columns on mount. Name-based and content-based detection run
+  // ALWAYS, in parallel, and are reconciled per field — so a renamed/anonymised
+  // column (name score 0) still gets a real content-derived confidence.
   useEffect(() => {
     const detected = new Set<string>();
+    const conf: Record<string, number> = {};
+    const used = new Set<string>();
 
-    let detectedCaseId = autoDetectColumn(columns, HINTS.case_id);
-    if (detectedCaseId) {
-      setCaseId(detectedCaseId);
-      detected.add('case_id');
-    }
-
-    let detectedActivity = autoDetectColumn(
-      columns.filter((c) => c !== detectedCaseId),
-      HINTS.activity
-    );
-    if (detectedActivity) {
-      setActivity(detectedActivity);
-      detected.add('activity');
-    }
-
-    let detectedTimestamp = autoDetectColumn(
-      columns.filter((c) => c !== detectedCaseId && c !== detectedActivity),
-      HINTS.timestamp
-    );
-    if (detectedTimestamp) {
-      setTimestamp(detectedTimestamp);
-      detected.add('timestamp');
-    }
-
-    // Content-based fallback: if any of the three required fields still have
-    // no match (e.g. anonymised exports: col_a, F1, …), scan sample values
-    const nameMissing =
-      !detectedCaseId || !detectedActivity || !detectedTimestamp;
-
-    if (nameMissing && sampleRows.length > 0) {
-      const alreadyUsed = new Set(
-        [detectedCaseId, detectedActivity, detectedTimestamp].filter(Boolean) as string[]
-      );
-      const inferred = contentInfer(columns, sampleRows, alreadyUsed);
-
-      if (!detectedCaseId && inferred.case_id) {
-        detectedCaseId = inferred.case_id;
-        setCaseId(inferred.case_id);
-        detected.add('case_id');
-      }
-      if (!detectedActivity && inferred.activity) {
-        detectedActivity = inferred.activity;
-        setActivity(inferred.activity);
-        detected.add('activity');
-      }
-      if (!detectedTimestamp && inferred.timestamp) {
-        detectedTimestamp = inferred.timestamp;
-        setTimestamp(inferred.timestamp);
-        detected.add('timestamp');
+    // Required fields, in priority order, each combining name + content.
+    const content = contentInfer(columns, sampleRows, new Set());
+    const required: Array<['case_id' | 'activity' | 'timestamp', (v: string) => void]> = [
+      ['case_id', setCaseId],
+      ['activity', setActivity],
+      ['timestamp', setTimestamp],
+    ];
+    for (const [field, setter] of required) {
+      const name = scoredNameDetect(columns, HINTS[field], used);
+      const cg = content[field];
+      const contentGuess = cg && !used.has(cg.col) ? cg : null;
+      const pick = combineDetect(name, contentGuess);
+      if (pick && !used.has(pick.col)) {
+        setter(pick.col);
+        used.add(pick.col);
+        detected.add(field);
+        conf[field] = pick.score;
       }
     }
 
+    // Optional fields stay name-based.
     const detectedResource = autoDetectColumn(
-      columns.filter(
-        (c) =>
-          c !== detectedCaseId &&
-          c !== detectedActivity &&
-          c !== detectedTimestamp
-      ),
+      columns.filter((c) => !used.has(c)),
       HINTS.resource
     );
     if (detectedResource) {
       setResource(detectedResource);
+      used.add(detectedResource);
       detected.add('resource');
+      conf.resource = 0.6;
     }
 
     const detectedCost = autoDetectColumn(
-      columns.filter(
-        (c) =>
-          c !== detectedCaseId &&
-          c !== detectedActivity &&
-          c !== detectedTimestamp &&
-          c !== detectedResource
-      ),
+      columns.filter((c) => !used.has(c)),
       HINTS.cost
     );
     if (detectedCost) {
       setCost(detectedCost);
+      used.add(detectedCost);
       detected.add('cost');
+      conf.cost = 0.6;
     }
 
     setAutoDetectedFields(detected);
+    setFieldConfidence(conf);
   }, [columns, sampleRows]);
 
   // Columns used by required/optional mappings
@@ -445,7 +453,7 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
                 columns={columns}
                 required
                 autoDetected={autoDetectedFields.has('case_id')}
-                confidenceScore={confidenceScores?.case_id}
+                confidenceScore={fieldConfidence.case_id ?? confidenceScores?.case_id}
                 error={errors.case_id}
                 description="Unique identifier for each process instance"
                 disabledColumns={disabledColumnsForRequired(caseId)}
@@ -458,7 +466,7 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
                 columns={columns}
                 required
                 autoDetected={autoDetectedFields.has('activity')}
-                confidenceScore={confidenceScores?.activity}
+                confidenceScore={fieldConfidence.activity ?? confidenceScores?.activity}
                 error={errors.activity}
                 description="The activity or step name in the process"
                 disabledColumns={disabledColumnsForRequired(activity)}
@@ -471,7 +479,7 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
                 columns={columns}
                 required
                 autoDetected={autoDetectedFields.has('timestamp')}
-                confidenceScore={confidenceScores?.timestamp}
+                confidenceScore={fieldConfidence.timestamp ?? confidenceScores?.timestamp}
                 error={errors.timestamp}
                 description="When the activity occurred"
                 disabledColumns={disabledColumnsForRequired(timestamp)}
@@ -492,7 +500,7 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
                 onChange={setResource}
                 columns={columns}
                 autoDetected={autoDetectedFields.has('resource')}
-                confidenceScore={confidenceScores?.resource}
+                confidenceScore={fieldConfidence.resource ?? confidenceScores?.resource}
                 description="Who performed the activity"
               />
               <MappingDropdown
@@ -502,7 +510,7 @@ const ColumnMapper: React.FC<ColumnMapperProps> = ({
                 onChange={setCost}
                 columns={columns}
                 autoDetected={autoDetectedFields.has('cost')}
-                confidenceScore={confidenceScores?.cost}
+                confidenceScore={fieldConfidence.cost ?? confidenceScores?.cost}
                 description="Cost associated with the activity"
               />
             </div>
