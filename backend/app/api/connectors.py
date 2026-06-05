@@ -428,11 +428,27 @@ async def sync_connector(
     # the connector service sees the real credentials — the DB stores
     # them encrypted when an encryption key is present.
     from app.services.infra.secret_box import decrypt_connector_config
+    from app.services.connectors.incremental import compute_since, next_sync_state
+
     decrypted_config = decrypt_connector_config(connector.config)
+    # Incremental connectors get a `since` from persisted sync_state (+ overlap);
+    # non-incremental ones are called without it. Both manual (this) and
+    # scheduled (Celery) sync now share this logic, so they don't diverge.
+    supports_incremental = bool(
+        getattr(service, "meta", None) and service.meta.supports_incremental
+    )
+    since = compute_since(
+        supports_incremental=supports_incremental,
+        sync_state=connector.sync_state,
+        last_sync=connector.last_sync,
+        config=decrypted_config,
+    )
+    fetch_kwargs = {"since": since} if supports_incremental else {}
     try:
         file_path = await service.fetch_data(
             config=decrypted_config,
             column_mapping=connector.column_mapping,
+            **fetch_kwargs,
         )
     except Exception as e:
         connector.status = ConnectorStatus.error
@@ -466,9 +482,11 @@ async def sync_connector(
 
     db.add(event_log)
 
-    # Update connector status
+    # Update connector status + incremental high-watermark
+    now = datetime.now(timezone.utc)
     connector.status = ConnectorStatus.active
-    connector.last_sync = datetime.now(timezone.utc)
+    connector.last_sync = now
+    connector.sync_state = next_sync_state(now)
     connector.error_message = None
 
     await db.commit()

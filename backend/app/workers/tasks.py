@@ -384,26 +384,30 @@ def sync_connector(self, connector_id: str):
         # Credentials are encrypted at rest — decrypt in-memory right before
         # handing them to the service (never write the plaintext back).
         from app.services.infra.secret_box import decrypt_connector_config
+        from app.services.connectors.incremental import compute_since, next_sync_state
 
         decrypted_config = decrypt_connector_config(connector.config)
-        since = connector.last_sync
-        try:
-            file_path = _run_async(
-                service.fetch_data(
-                    config=decrypted_config,
-                    column_mapping=connector.column_mapping,
-                    since=since,
-                )
+        # Incremental connectors (meta.supports_incremental) get a `since`
+        # computed from persisted sync_state with an optional overlap window;
+        # others are called without it. Replaces the old try/except TypeError
+        # shim — capability is declared, not probed by catching exceptions.
+        supports_incremental = bool(
+            getattr(service, "meta", None) and service.meta.supports_incremental
+        )
+        since = compute_since(
+            supports_incremental=supports_incremental,
+            sync_state=connector.sync_state,
+            last_sync=connector.last_sync,
+            config=decrypted_config,
+        )
+        fetch_kwargs = {"since": since} if supports_incremental else {}
+        file_path = _run_async(
+            service.fetch_data(
+                config=decrypted_config,
+                column_mapping=connector.column_mapping,
+                **fetch_kwargs,
             )
-        except TypeError:
-            # Connector service predates the ``since`` parameter — fall
-            # back to a full fetch.
-            file_path = _run_async(
-                service.fetch_data(
-                    config=decrypted_config,
-                    column_mapping=connector.column_mapping,
-                )
-            )
+        )
 
         # Create EventLog record
         event_log = EventLog(
@@ -425,9 +429,11 @@ def sync_connector(self, connector_id: str):
 
         session.add(event_log)
 
-        # Update connector status
+        # Update connector status + incremental high-watermark
+        now = datetime.now(timezone.utc)
         connector.status = ConnectorStatus.active
-        connector.last_sync = datetime.now(timezone.utc)
+        connector.last_sync = now
+        connector.sync_state = next_sync_state(now)
         connector.error_message = None
 
         session.commit()

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import ClassVar
 
 from pydantic import BaseModel, Field, model_validator
@@ -103,9 +104,16 @@ class BaseConnector(ABC):
         pass
 
     @abstractmethod
-    async def fetch_data(self, config: dict, column_mapping: dict) -> str:
+    async def fetch_data(
+        self, config: dict, column_mapping: dict, since: datetime | None = None
+    ) -> str:
         """
         Fetch data from the source and save it to a local file.
+
+        Connectors that declare ``meta.supports_incremental`` are called with
+        ``since`` (a datetime high-watermark, possibly rewound by an overlap
+        window) and should fetch only rows changed at/after it. Connectors that
+        do not are called without it, so they need not accept the parameter.
 
         Returns: file_path — path to the saved file on disk.
         """

@@ -55,5 +55,9 @@ class Connector(Base):
         SQLEnum(ConnectorStatus), default=ConnectorStatus.inactive, nullable=False
     )
     error_message = Column(Text, nullable=True)
+    # Incremental-sync state: {"cursor_field", "cursor_value", "synced_at"}.
+    # Written after each successful sync; used (with an optional overlap window)
+    # to compute the next `since`. See services/connectors/incremental.py.
+    sync_state = Column(JSON, nullable=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
