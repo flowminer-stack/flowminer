@@ -117,7 +117,8 @@ export default function ProcessHealthPage() {
       { key: 'conformance', label: 'Conformance', weight: 0.3, value: conf ? clamp01(conf.fitness) : null },
       { key: 'sla', label: 'SLA adherence', weight: 0.3, value: stats?.sla_compliance != null ? clamp01(stats.sla_compliance) : null },
       { key: 'flow', label: 'Flow consistency', weight: 0.2, value: flowConsistency },
-      { key: 'rework', label: 'Rework-free', weight: 0.2, value: rework ? clamp01(1 - rework.overall_rework_rate) : null },
+      // overall_rework_rate is a PERCENTAGE (0-100) from the backend.
+      { key: 'rework', label: 'Rework-free', weight: 0.2, value: rework ? clamp01(1 - rework.overall_rework_rate / 100) : null },
     ];
   }, [conf, rework, stats]);
 
@@ -146,7 +147,8 @@ export default function ProcessHealthPage() {
       t.push({ label: 'SLA', value: `${pct}%`, icon: Gauge, band: band(pct) });
     }
     if (rework) {
-      const pct = Math.round(rework.overall_rework_rate * 100);
+      // overall_rework_rate is already a percentage (0-100).
+      const pct = Math.round(rework.overall_rework_rate);
       t.push({ label: 'Rework', value: `${pct}%`, icon: Repeat, band: band(100 - pct) });
     }
     return t;
