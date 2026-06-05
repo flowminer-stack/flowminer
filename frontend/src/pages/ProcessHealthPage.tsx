@@ -136,7 +136,8 @@ export default function ProcessHealthPage() {
     if (stats) {
       t.push({ label: 'Cases', value: formatNumber(stats.total_cases), icon: Activity });
       t.push({ label: 'Avg cycle time', value: formatDuration(stats.avg_case_duration), icon: Clock });
-      t.push({ label: 'Throughput', value: `${formatNumber(throughput.at(-1) ?? 0)}/period`, icon: TrendingUp, spark: throughput });
+      const lastThroughput = throughput.length ? throughput[throughput.length - 1] : 0;
+      t.push({ label: 'Throughput', value: `${formatNumber(lastThroughput)}/period`, icon: TrendingUp, spark: throughput });
     }
     if (conf) {
       const pct = Math.round(conf.fitness * 100);
