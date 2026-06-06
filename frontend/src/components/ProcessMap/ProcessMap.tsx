@@ -549,20 +549,46 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
           opts = { ...baseOpts, name: 'dagre', rankDir: layoutDirection, nodeSep: 60, rankSep: 70, edgeSep: 25 };
           break;
       }
-      if (fit) {
-        // After the auto-fit, don't leave the graph at an unreadable zoom —
-        // a wide/dense map fits at ~0.25-0.4 where labels are too small to
-        // read. Raise to a floor so activity names are legible by default;
-        // the graph may overflow the viewport (pan to see it all) but you
-        // no longer have to zoom in just to read.
-        cy.one('layoutstop', () => {
+      cy.one('layoutstop', () => {
+        // Disconnected nodes pile up at a single point under the structure
+        // layouts (dagre/breadthfirst) — the Alpha Miner in particular yields
+        // a sparse model on noisy logs, leaving several activities with no
+        // edges, which made the map look like "one node". Spread those
+        // isolated nodes in a tidy grid beneath the connected graph so each is
+        // individually visible (and its label readable). The other layouts
+        // (grid/circle/concentric) already place every node, so we leave them.
+        if (layoutName === 'dagre' || layoutName === 'breadthfirst') {
+          const isolated = cy.nodes().filter((n: any) => n.degree(false) === 0);
+          if (isolated.length > 1) {
+            const connected = cy.nodes().filter((n: any) => n.degree(false) > 0);
+            const bb = (connected.length ? connected : cy.nodes()).boundingBox();
+            const cols = Math.max(1, Math.ceil(Math.sqrt(isolated.length)));
+            const colW = 170;
+            const rowH = 80;
+            const startX = bb.x1;
+            const startY = bb.y2 + 90;
+            isolated.forEach((n: any, i: number) => {
+              n.position({
+                x: startX + (i % cols) * colW,
+                y: startY + Math.floor(i / cols) * rowH,
+              });
+            });
+          }
+        }
+        if (fit) {
+          // After the auto-fit (now including any re-arranged isolated nodes),
+          // don't leave the graph at an unreadable zoom — a wide/dense map fits
+          // at ~0.25-0.4 where labels are too small. Raise to a floor so
+          // activity names are legible by default; the graph may overflow the
+          // viewport (pan to see it all) but you no longer have to zoom in.
+          cy.fit(undefined, 50);
           const FLOOR = 0.6;
           if (cy.zoom() < FLOOR) {
             cy.zoom(FLOOR);
             cy.center();
           }
-        });
-      }
+        }
+      });
       cy.layout(opts).run();
     },
     [layoutDirection, layoutName],
@@ -590,7 +616,7 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
       // live and only drops the expensive edges, snapping them back on stop.
       pixelRatio: 'auto',
       textureOnViewport: false,
-      hideEdgesOnViewport: true,
+      hideEdgesOnViewport: false,
       // Touch / mobile parity: allow pinch-to-zoom and one-finger pan
       // on touch devices so the map is usable on tablets and phones.
       // Cytoscape enables these by default, but we set them explicitly

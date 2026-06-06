@@ -65,7 +65,7 @@ export default function OCPetriNetPanel({ ocelId }: { ocelId: string }) {
         { selector: 'edge', style: { 'width': 1, 'line-color': edgeColor, 'target-arrow-shape': 'none', 'opacity': 0.4, 'curve-style': 'bezier' } as any },
       ],
       layout: { name: 'cose', animate: false, fit: !viewRef.current, nodeRepulsion: () => 30000, idealEdgeLength: () => 80, gravity: 0.5, padding: 30 } as any,
-      userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.15, maxZoom: 5, wheelSensitivity: 1.0, pixelRatio: 'auto', textureOnViewport: false, hideEdgesOnViewport: true,
+      userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.15, maxZoom: 5, wheelSensitivity: 1.0, pixelRatio: 'auto', textureOnViewport: false, hideEdgesOnViewport: false,
     });
 
     if (viewRef.current) cy.viewport({ zoom: viewRef.current.zoom, pan: viewRef.current.pan });

@@ -142,7 +142,7 @@ export default function OCDFGGraph({
       wheelSensitivity: 1.0,
       pixelRatio: 'auto',
       textureOnViewport: false,
-      hideEdgesOnViewport: true,
+      hideEdgesOnViewport: false,
     });
 
     if (prevView) cy.viewport({ zoom: prevView.zoom, pan: prevView.pan });

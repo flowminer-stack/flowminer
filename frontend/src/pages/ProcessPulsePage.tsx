@@ -172,7 +172,7 @@ export default function ProcessPulsePage() {
       // Hide edges (not the whole canvas) during a gesture so panning never
       // blanks the area you move into. See ProcessMap for the full rationale.
       textureOnViewport: false,
-      hideEdgesOnViewport: true,
+      hideEdgesOnViewport: false,
       boxSelectionEnabled: false,
     });
     cyRef.current = cy;

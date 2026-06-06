@@ -186,7 +186,7 @@ export default function CausalMapPage() {
       // Hide edges (not the whole canvas) during a gesture so panning never
       // blanks the area you move into. See ProcessMap for the full rationale.
       textureOnViewport: false,
-      hideEdgesOnViewport: true,
+      hideEdgesOnViewport: false,
       boxSelectionEnabled: false,
     });
     if (prevView) cy.viewport({ zoom: prevView.zoom, pan: prevView.pan });
