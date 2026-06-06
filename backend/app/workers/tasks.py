@@ -530,6 +530,29 @@ def sync_connector(self, connector_id: str):
             f"Created EventLog {event_log.id}, file: {file_path}"
         )
 
+        # Best-effort usage metering — feeds the /usage endpoint. Never let a
+        # metering failure fail the sync. Row counts aren't known until
+        # compute_event_log_stats runs, so meter 1 unit per successful sync if
+        # total_events isn't populated yet.
+        try:
+            from app.models import User
+            from app.services.infra.usage import record_usage
+
+            owner = session.get(User, connector.created_by)
+            qty = float(event_log.total_events or 1)
+            project_id = connector.project_id
+            _run_async(
+                record_usage(
+                    user=owner,
+                    kind="connector_sync",
+                    quantity=qty,
+                    resource_type="project",
+                    resource_id=str(project_id),
+                )
+            )
+        except Exception as e:
+            logger.debug("connector_sync usage metering failed: %s", e)
+
         # If column mapping is set, trigger stats computation
         if event_log.case_id_column:
             compute_event_log_stats.delay(str(event_log.id))
@@ -730,24 +753,16 @@ def dispatch_scheduled_reports():
 
 @celery_app.task(name="app.workers.tasks.evaluate_all_alerts")
 def evaluate_all_alerts():
-    """Periodic task: evaluate every active alert across every project and
-    fire notifications on any that trip. Uses the existing per-project
-    evaluate_alerts task so each project's evaluation is isolated."""
-    from app.models import Project
+    """Deprecated alias for ``scheduled_alert_check``.
 
-    session = _get_sync_session()
-    try:
-        projects = session.execute(select(Project)).scalars().all()
-        fanned = 0
-        for project in projects:
-            evaluate_alerts.delay(str(project.id))
-            fanned += 1
-        return {"status": "success", "projects_fanned_out": fanned}
-    except Exception as e:
-        logger.error(f"evaluate_all_alerts failed: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
-    finally:
-        session.close()
+    The old behaviour fanned out a per-project ``evaluate_alerts`` task to
+    *every* project regardless of whether it had any active alerts.
+    ``scheduled_alert_check`` does the same per-project fan-out but only for
+    projects that actually have an active alert, so it is strictly cheaper
+    with identical results. Kept as a thin alias so any lingering callers
+    (or queued beat jobs) keep working.
+    """
+    return scheduled_alert_check()
 
 
 @celery_app.task(name="app.workers.tasks.evaluate_action_rules")
@@ -1097,7 +1112,14 @@ def scan_connector_schedules():
 def stream_audit_to_siem():
     """Push new audit rows to a SIEM HEC. Set SIEM_HEC_URL to enable.
 
-    Uses a Redis cursor so restarts don't re-ship events.
+    Ships *forward* from a persisted ``(created_at, id)`` cursor so no event
+    is ever permanently skipped and none is re-shipped on subsequent runs.
+
+    On the very first run (no cursor in Redis) we start from the OLDEST
+    unsent row and walk forward in batches; each successful batch advances
+    the cursor to the last row shipped. ``id`` is a UUID (not monotonic), so
+    ``created_at`` is the primary ordering key with ``id`` as a stable
+    tiebreaker for rows sharing a timestamp.
     """
     import json as _json
     import os as _os
@@ -1108,27 +1130,51 @@ def stream_audit_to_siem():
         return {"status": "skipped", "reason": "SIEM_HEC_URL not set"}
 
     from app.models import AuditLog
-    from sqlalchemy import desc
+    from sqlalchemy import and_, or_
+
+    _BATCH = 500
+    _CURSOR_KEY = "flowminer:siem:cursor"
+
+    def _parse_cursor(raw):
+        """Decode a ``"<created_at_iso>|<id>"`` cursor → (datetime, str) or None."""
+        if not raw or "|" not in raw:
+            return None
+        ts_raw, id_raw = raw.split("|", 1)
+        try:
+            from datetime import datetime as _dt
+
+            return _dt.fromisoformat(ts_raw), id_raw
+        except Exception:
+            return None
 
     session = _get_sync_session()
     try:
         import redis as _redis
         try:
             rc = _redis.from_url(settings.REDIS_URL, decode_responses=True)
-            last_id = rc.get("flowminer:siem:last_id")
+            cursor = _parse_cursor(rc.get(_CURSOR_KEY))
         except Exception:
             rc = None
-            last_id = None
+            cursor = None
 
-        rows = session.execute(
-            select(AuditLog).order_by(desc(AuditLog.created_at)).limit(500)
-        ).scalars().all()
+        # Walk forward in created_at/id order. With no cursor we start from the
+        # oldest row; otherwise we take only rows strictly after the cursor.
+        stmt = select(AuditLog).order_by(
+            AuditLog.created_at.asc(), AuditLog.id.asc()
+        ).limit(_BATCH)
+        if cursor is not None:
+            cur_ts, cur_id = cursor
+            stmt = stmt.where(
+                or_(
+                    AuditLog.created_at > cur_ts,
+                    and_(
+                        AuditLog.created_at == cur_ts,
+                        AuditLog.id > cur_id,
+                    ),
+                )
+            )
 
-        ship = []
-        for r in rows:
-            if last_id and str(r.id) == last_id:
-                break
-            ship.append(r)
+        ship = session.execute(stmt).scalars().all()
         if not ship:
             return {"status": "ok", "shipped": 0}
 
@@ -1168,9 +1214,13 @@ def stream_audit_to_siem():
             logger.warning("SIEM shipment failed: %s", e)
             return {"status": "error", "message": str(e)}
 
+        # Advance the cursor to the LAST row shipped (rows are ascending), so
+        # the next run resumes strictly after it.
         if rc is not None:
             try:
-                rc.set("flowminer:siem:last_id", str(ship[0].id))
+                last = ship[-1]
+                cur_ts = last.created_at.isoformat() if last.created_at else ""
+                rc.set(_CURSOR_KEY, f"{cur_ts}|{last.id}")
             except Exception:
                 pass
 

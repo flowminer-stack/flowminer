@@ -16,3 +16,7 @@ export { SnowflakeConfig } from './SnowflakeConfig';
 export { BigQueryConfig } from './BigQueryConfig';
 export { GenericErpConfig } from './GenericErpConfig';
 export { ShopifyConfig } from './ShopifyConfig';
+export { WorkdayConfig } from './WorkdayConfig';
+export { CoupaConfig } from './CoupaConfig';
+export { AribaConfig } from './AribaConfig';
+export { OracleFusionConfig } from './OracleFusionConfig';

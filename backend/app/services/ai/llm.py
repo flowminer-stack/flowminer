@@ -34,6 +34,9 @@ Environment variables:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -46,6 +49,129 @@ logger = logging.getLogger(__name__)
 
 class LLMError(Exception):
     pass
+
+
+# ─── Usage attribution + token metering ──────────────────────────────────
+#
+# ``llm.py`` is decoupled from request context (most entry points are plain
+# ``complete`` / ``stream`` calls with no ``User``), but token metering needs
+# to attribute usage to a team/user/resource. We thread that attribution
+# through a contextvar that the API call sites set with ``usage_context(...)``
+# for the duration of an LLM call. When unset, metering still records the
+# event with no owner (team_id/user_id null) rather than dropping it.
+
+_usage_ctx: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "flowminer_llm_usage_ctx", default=None
+)
+
+
+@contextlib.contextmanager
+def usage_context(user=None, resource_id=None, resource_type: str | None = "event_log"):
+    """Attribute LLM token usage recorded within this block to ``user`` /
+    ``resource_id``. Best-effort — safe to wrap any LLM call. Works across
+    ``asyncio.to_thread`` because contextvars are copied into worker threads.
+    """
+    token = _usage_ctx.set(
+        {"user": user, "resource_id": resource_id, "resource_type": resource_type}
+    )
+    try:
+        yield
+    finally:
+        _usage_ctx.reset(token)
+
+
+def _extract_total_tokens(usage) -> int:
+    """Pull a total-token count from a provider usage object/dict.
+
+    Handles the openai shape (``total_tokens`` / ``prompt_tokens`` +
+    ``completion_tokens``), the anthropic shape (``input_tokens`` +
+    ``output_tokens``), and the ollama shape (``prompt_eval_count`` +
+    ``eval_count``). Returns 0 when nothing usable is present.
+    """
+    if usage is None:
+        return 0
+
+    def _get(obj, key):
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    total = _get(usage, "total_tokens")
+    if total:
+        try:
+            return int(total)
+        except (TypeError, ValueError):
+            pass
+
+    parts = 0
+    for in_key, out_key in (
+        ("prompt_tokens", "completion_tokens"),
+        ("input_tokens", "output_tokens"),
+        ("prompt_eval_count", "eval_count"),
+    ):
+        a = _get(usage, in_key)
+        b = _get(usage, out_key)
+        if a is not None or b is not None:
+            try:
+                parts = int(a or 0) + int(b or 0)
+            except (TypeError, ValueError):
+                parts = 0
+            if parts:
+                return parts
+    return parts
+
+
+def _record_token_usage(tokens: int) -> None:
+    """Best-effort: record an ``llm_tokens`` usage event for ``tokens``.
+
+    Central metering spot — every provider response path funnels through
+    here. Never raises. Pulls owner/resource attribution from the
+    ``usage_context`` contextvar if one is active. Bridges the async
+    ``record_usage`` coroutine onto whatever loop is available (or spins
+    one up in the worker thread), so it works from both sync (``complete``,
+    ``call_with_tools`` run via ``asyncio.to_thread``) and async paths.
+    """
+    try:
+        tokens = int(tokens)
+    except (TypeError, ValueError):
+        return
+    if tokens <= 0:
+        return
+
+    ctx = _usage_ctx.get() or {}
+    user = ctx.get("user")
+    resource_id = ctx.get("resource_id")
+    resource_type = ctx.get("resource_type")
+
+    try:
+        from app.services.infra.usage import record_usage
+    except Exception:  # pragma: no cover - import guard
+        return
+
+    coro = record_usage(
+        user,
+        kind="llm_tokens",
+        quantity=float(tokens),
+        resource_type=resource_type,
+        resource_id=str(resource_id) if resource_id is not None else None,
+    )
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        # We're on an event loop (async caller) — schedule and move on.
+        loop.create_task(coro)
+        return
+
+    # Sync caller (e.g. inside asyncio.to_thread): drive the coroutine to
+    # completion on a throwaway loop. record_usage swallows its own errors.
+    try:
+        asyncio.run(coro)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.debug("token usage metering failed: %s", e)
 
 
 def _from_system_settings(key: str) -> str | None:
@@ -196,6 +322,7 @@ def _anthropic_complete(system: str, user: str, temperature: float) -> str:
         system=system,
         messages=[{"role": "user", "content": user}],
     )
+    _record_token_usage(_extract_total_tokens(getattr(msg, "usage", None)))
     # Extract text from the content blocks
     parts = []
     for block in msg.content:
@@ -224,6 +351,7 @@ def _openai_complete(
             {"role": "user", "content": user},
         ],
     )
+    _record_token_usage(_extract_total_tokens(getattr(resp, "usage", None)))
     return resp.choices[0].message.content or ""
 
 
@@ -254,6 +382,7 @@ def _openrouter_complete(
             {"role": "user", "content": user},
         ],
     )
+    _record_token_usage(_extract_total_tokens(getattr(resp, "usage", None)))
     return resp.choices[0].message.content or ""
 
 
@@ -275,6 +404,7 @@ def _ollama_complete(system: str, user: str, temperature: float) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
+        _record_token_usage(_extract_total_tokens(data))
         return data.get("message", {}).get("content", "")
 
 
@@ -349,6 +479,11 @@ async def _anthropic_stream(system: str, user: str, temperature: float) -> Async
     ) as s:
         async for text in s.text_stream:
             yield text
+        try:
+            final = await s.get_final_message()
+            _record_token_usage(_extract_total_tokens(getattr(final, "usage", None)))
+        except Exception as e:  # pragma: no cover - metering only
+            logger.debug("anthropic stream usage capture failed: %s", e)
 
 
 async def _openai_stream(system: str, user: str, temperature: float) -> AsyncIterator[str]:
@@ -363,12 +498,17 @@ async def _openai_stream(system: str, user: str, temperature: float) -> AsyncIte
         model=model,
         temperature=temperature,
         stream=True,
+        stream_options={"include_usage": True},
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
     )
     async for chunk in stream:
+        # The final usage chunk arrives with empty ``choices`` when
+        # ``include_usage`` is set.
+        if getattr(chunk, "usage", None):
+            _record_token_usage(_extract_total_tokens(chunk.usage))
         delta = chunk.choices[0].delta.content if chunk.choices else None
         if delta:
             yield delta
@@ -391,12 +531,15 @@ async def _openrouter_stream(system: str, user: str, temperature: float) -> Asyn
         model=model,
         temperature=temperature,
         stream=True,
+        stream_options={"include_usage": True},
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
     )
     async for chunk in stream:
+        if getattr(chunk, "usage", None):
+            _record_token_usage(_extract_total_tokens(chunk.usage))
         delta = chunk.choices[0].delta.content if chunk.choices else None
         if delta:
             yield delta
@@ -431,10 +574,41 @@ async def _ollama_stream(system: str, user: str, temperature: float) -> AsyncIte
                 if content:
                     yield content
                 if payload.get("done"):
+                    _record_token_usage(_extract_total_tokens(payload))
                     return
 
 
 # ─── Function/tool-calling abstraction (for the agent loop) ──────────────
+
+
+def _anthropic_tools_to_openai(tools: list[dict]) -> list[dict]:
+    """Convert Anthropic tool schemas (name / description / input_schema)
+    into OpenAI function-calling schemas (type=function / function={...}).
+
+    Pass-through for tools already in OpenAI shape, so callers can mix
+    formats. The agent endpoint registers tools in Anthropic format, but
+    the chat path uses OpenAI format — this lets both flow through the
+    OpenAI-style branch unchanged.
+    """
+    converted: list[dict] = []
+    for t in tools:
+        if not isinstance(t, dict):
+            continue
+        if t.get("type") == "function" and isinstance(t.get("function"), dict):
+            converted.append(t)
+            continue
+        converted.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": t.get("name"),
+                    "description": t.get("description", ""),
+                    "parameters": t.get("input_schema")
+                    or {"type": "object", "properties": {}},
+                },
+            }
+        )
+    return converted
 
 
 def call_with_tools(
@@ -446,29 +620,66 @@ def call_with_tools(
     max_turns: int = 5,
     tool_runner=None,
 ) -> dict:
-    """Run an agent loop with tool use.
+    """Run an agent loop with tool use (synchronous, provider-agnostic).
 
     ``tools`` is a list of tool schemas in Anthropic's tool-use format
     (name, description, input_schema). ``tool_runner`` is a function
     ``(name, args) -> result_dict`` that actually executes the tool.
 
-    Returns the final assistant text, the list of tool calls and their
-    results, and the number of turns.
+    Routes to the Anthropic Messages tool-use API for the anthropic
+    provider, and to the OpenAI-compatible function-calling API for the
+    openai / openrouter providers (OpenRouter is FlowMiner's production
+    provider). The return shape is identical across providers:
+    ``{"text", "tool_calls", "turns", "provider"}``.
     """
     p = _provider()
-    if p != "anthropic" or not is_llm_configured():
+    if not is_llm_configured():
         return {
             "text": _null_complete(system, user),
             "tool_calls": [],
             "turns": 0,
             "provider": p,
-            "note": "Agentic tool use requires the anthropic provider; falling back to null.",
+            "note": "No LLM provider configured; falling back to null.",
         }
 
+    if p == "anthropic":
+        return _anthropic_call_with_tools(
+            system, user, tools,
+            temperature=temperature, max_turns=max_turns, tool_runner=tool_runner,
+        )
+    if p in ("openai", "openrouter"):
+        return _openai_call_with_tools(
+            system, user, tools,
+            temperature=temperature, max_turns=max_turns, tool_runner=tool_runner,
+        )
+
+    # ollama / anything else: no server-side tool loop available.
+    return {
+        "text": _null_complete(system, user),
+        "tool_calls": [],
+        "turns": 0,
+        "provider": p,
+        "note": (
+            "Agentic tool use requires the anthropic, openai, or openrouter "
+            "provider; falling back to null."
+        ),
+    }
+
+
+def _anthropic_call_with_tools(
+    system: str,
+    user: str,
+    tools: list[dict],
+    *,
+    temperature: float,
+    max_turns: int,
+    tool_runner,
+) -> dict:
+    p = "anthropic"
     try:
         import anthropic
     except ImportError:
-        return {"text": _null_complete(system, user), "tool_calls": [], "turns": 0}
+        return {"text": _null_complete(system, user), "tool_calls": [], "turns": 0, "provider": p}
 
     model = _model("anthropic")
     client = anthropic.Anthropic(api_key=_api_key("anthropic"))
@@ -485,6 +696,7 @@ def call_with_tools(
             tools=tools,
             messages=messages,
         )
+        _record_token_usage(_extract_total_tokens(getattr(resp, "usage", None)))
         # Collect any text parts
         text_parts = []
         tool_uses = []
@@ -520,6 +732,115 @@ def call_with_tools(
                 "content": json.dumps(result, default=str)[:4000],
             })
         messages.append({"role": "user", "content": tool_results})
+
+    return {
+        "text": "[agent hit max turns without completing]",
+        "tool_calls": tool_calls,
+        "turns": max_turns,
+        "provider": p,
+    }
+
+
+def _openai_call_with_tools(
+    system: str,
+    user: str,
+    tools: list[dict],
+    *,
+    temperature: float,
+    max_turns: int,
+    tool_runner,
+) -> dict:
+    """Synchronous OpenAI-style function-calling agent loop.
+
+    Drives the OpenAI chat-completions API (which also backs OpenRouter
+    via ``base_url``). Mirrors the streaming ``stream_with_tools`` loop but
+    non-streaming, returning the same dict shape as the anthropic path so
+    the frontend doesn't have to branch on provider.
+    """
+    p = _provider()
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return {"text": _null_complete(system, user), "tool_calls": [], "turns": 0, "provider": p}
+
+    if p == "openai":
+        client = OpenAI(api_key=_api_key("openai"))
+        model = _model("openai")
+    else:  # openrouter
+        client = OpenAI(
+            api_key=_api_key("openrouter"),
+            base_url="https://openrouter.ai/api/v1",
+            default_headers=_openrouter_default_headers() or None,
+        )
+        model = _model("openrouter")
+
+    oai_tools = _anthropic_tools_to_openai(tools)
+    messages: list[dict] = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    tool_calls: list[dict] = []
+
+    for turn in range(max_turns):
+        resp = client.chat.completions.create(
+            model=model,
+            temperature=temperature,
+            tools=oai_tools,
+            messages=messages,
+        )
+        _record_token_usage(_extract_total_tokens(getattr(resp, "usage", None)))
+
+        choice = resp.choices[0] if resp.choices else None
+        msg = choice.message if choice else None
+        tc_list = list(getattr(msg, "tool_calls", None) or []) if msg else []
+
+        if not tc_list:
+            return {
+                "text": (getattr(msg, "content", None) or "") if msg else "",
+                "tool_calls": tool_calls,
+                "turns": turn + 1,
+                "provider": p,
+            }
+
+        # Append the assistant turn (with the tool calls) so the next
+        # turn's tool messages reference valid tool_call_ids.
+        messages.append(
+            {
+                "role": "assistant",
+                "content": getattr(msg, "content", None) or None,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments or "{}",
+                        },
+                    }
+                    for tc in tc_list
+                ],
+            }
+        )
+
+        for tc in tc_list:
+            name = tc.function.name
+            raw_args = tc.function.arguments or "{}"
+            try:
+                args = json.loads(raw_args) if raw_args.strip() else {}
+            except json.JSONDecodeError:
+                args = {}
+            try:
+                result = tool_runner(name, args) if tool_runner else {"error": "no runner"}
+            except Exception as e:
+                result = {"error": str(e)}
+            tool_calls.append({"name": name, "args": args, "result": result})
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(result, default=str)[:4000],
+                }
+            )
 
     return {
         "text": "[agent hit max turns without completing]",
@@ -625,6 +946,7 @@ async def stream_with_tools(
             tools=tools,
             messages=messages,
             stream=True,
+            stream_options={"include_usage": True},
         )
 
         # Assemble the response as it streams in. Text chunks flow
@@ -636,6 +958,9 @@ async def stream_with_tools(
         finish_reason: str | None = None
 
         async for chunk in resp_stream:
+            # The final usage chunk (include_usage) carries no choices.
+            if getattr(chunk, "usage", None):
+                _record_token_usage(_extract_total_tokens(chunk.usage))
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]

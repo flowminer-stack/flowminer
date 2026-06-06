@@ -5,6 +5,7 @@ import {
   Github,
   FileText,
   Server,
+  ShoppingBag,
 } from 'lucide-react';
 
 export interface Connector {
@@ -37,7 +38,8 @@ export type ConnectorType =
   | 'workday'
   | 'oracle_fusion'
   | 'coupa'
-  | 'ariba';
+  | 'ariba'
+  | 'shopify';
 
 // Category keys are shared with the backend registry (GET /connectors/registry)
 // so the grouped picker works the same whether the list comes from the registry
@@ -194,6 +196,13 @@ export const types: {
     description: 'Support tickets',
     category: 'erp',
   },
+  {
+    value: 'shopify',
+    label: 'Shopify',
+    icon: <ShoppingBag className="w-5 h-5" />,
+    description: 'Orders & fulfillment events',
+    category: 'erp',
+  },
 ];
 
 export const commonCrons = [
@@ -218,6 +227,7 @@ export const AUTO_MAPPED_TYPES: ConnectorType[] = [
   'oracle_fusion',
   'coupa',
   'ariba',
+  'shopify',
 ];
 
 // Types where the user supplies a SQL/table query and manual column mapping

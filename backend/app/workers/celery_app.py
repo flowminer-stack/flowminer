@@ -32,7 +32,9 @@ celery_app.conf.beat_schedule = {
         "schedule": 300.0,  # every 5 minutes
     },
     "evaluate-alerts-every-5-min": {
-        "task": "app.workers.tasks.evaluate_all_alerts",
+        # scheduled_alert_check filters to projects that actually have active
+        # alerts before fanning out, instead of dispatching to every project.
+        "task": "app.workers.tasks.scheduled_alert_check",
         "schedule": 300.0,
     },
     "conformance-drift-nightly": {

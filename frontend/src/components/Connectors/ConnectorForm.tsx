@@ -38,7 +38,11 @@ import {
   ServiceNowConfig,
   SnowflakeConfig,
   BigQueryConfig,
-  GenericErpConfig,
+  WorkdayConfig,
+  CoupaConfig,
+  AribaConfig,
+  OracleFusionConfig,
+  ShopifyConfig,
 } from './panels';
 
 interface ConnectorFormProps {
@@ -76,7 +80,7 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
   const [host, setHost] = useState(connector?.config?.host || 'localhost');
   const [port, setPort] = useState(connector?.config?.port || '5432');
   const [database, setDatabase] = useState(connector?.config?.database || '');
-  const [username, setUsername] = useState(connector?.config?.username || '');
+  const [username, setUsername] = useState(connector?.config?.user || '');
   const [password, setPassword] = useState(connector?.config?.password || '');
   const [query, setQuery] = useState(connector?.config?.query || '');
   const [showPassword, setShowPassword] = useState(false);
@@ -94,11 +98,11 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
   const [apiAuth, setApiAuth] = useState(connector?.config?.auth_type || 'none');
   const [apiToken, setApiToken] = useState(connector?.config?.token || '');
   const [apiDataPath, setApiDataPath] = useState(connector?.config?.data_path || '');
-  const [apiPaginationType, setApiPaginationType] = useState(connector?.config?.pagination_type || 'none');
-  const [apiPageSize, setApiPageSize] = useState(connector?.config?.page_size ?? 100);
+  const [apiPaginationType, setApiPaginationType] = useState(connector?.config?.pagination?.type || 'none');
+  const [apiPageSize, setApiPageSize] = useState(connector?.config?.pagination?.page_size ?? 100);
 
   // Jira config
-  const [jiraInstanceUrl, setJiraInstanceUrl] = useState(connector?.config?.instance_url || '');
+  const [jiraInstanceUrl, setJiraInstanceUrl] = useState(connector?.config?.url || '');
   const [jiraEmail, setJiraEmail] = useState(connector?.config?.email || '');
   const [jiraApiToken, setJiraApiToken] = useState(connector?.config?.api_token || '');
   const [jiraProjectKey, setJiraProjectKey] = useState(connector?.config?.project_key || '');
@@ -124,6 +128,15 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
   const [zendeskEmail, setZendeskEmail] = useState(connector?.config?.email || '');
   const [zendeskApiToken, setZendeskApiToken] = useState(connector?.config?.api_token || '');
   const [zendeskMaxTickets, setZendeskMaxTickets] = useState(connector?.config?.max_tickets ?? 1000);
+
+  // Shopify config
+  const [shopDomain, setShopDomain] = useState(
+    (connector?.config?.shop_domain || '').replace(/\.myshopify\.com$/, ''),
+  );
+  const [shopifyAccessToken, setShopifyAccessToken] = useState(connector?.config?.access_token || '');
+  const [shopifyWebhookSecret, setShopifyWebhookSecret] = useState(connector?.config?.webhook_secret || '');
+  const [shopifyLookbackDays, setShopifyLookbackDays] = useState(connector?.config?.lookback_days ?? 90);
+  const [shopifyMaxOrders, setShopifyMaxOrders] = useState(connector?.config?.max_orders ?? 5000);
 
   // ERP / SaaS connector configs (SAP, Salesforce, ServiceNow, Snowflake,
   // BigQuery, and the generic ones). Stored as free-form objects to avoid
@@ -204,7 +217,17 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
     };
 
     if (['postgresql', 'mysql', 'sqlserver', 'oracle'].includes(type)) {
-      Object.assign(config, { host, port: Number(port), database, username, password, query });
+      // The DatabaseConfig backend model reads `dialect` (defaults to postgres)
+      // and `user` — emit both so mysql/sqlserver/oracle pick the right driver.
+      Object.assign(config, {
+        dialect: type,
+        host,
+        port: Number(port),
+        database,
+        user: username,
+        password,
+        query,
+      });
     } else if (type === 'csv_watch') {
       Object.assign(config, { file_path: filePath, delimiter, encoding });
     } else if (type === 'api_endpoint') {
@@ -216,12 +239,12 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
         auth_type: apiAuth,
         token: apiToken,
         data_path: apiDataPath,
-        pagination_type: apiPaginationType,
-        page_size: Number(apiPageSize),
+        // ApiEndpointConfig reads a nested pagination object, not flat keys.
+        pagination: { type: apiPaginationType, page_size: Number(apiPageSize) },
       });
     } else if (type === 'jira') {
       Object.assign(config, {
-        instance_url: jiraInstanceUrl,
+        url: jiraInstanceUrl,
         email: jiraEmail,
         api_token: jiraApiToken,
         project_key: jiraProjectKey,
@@ -251,8 +274,18 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
         api_token: zendeskApiToken,
         max_tickets: Number(zendeskMaxTickets),
       });
+    } else if (type === 'shopify') {
+      const domain = shopDomain.trim().replace(/\.myshopify\.com$/, '');
+      Object.assign(config, {
+        shop_domain: domain ? `${domain}.myshopify.com` : '',
+        access_token: shopifyAccessToken,
+        ...(shopifyWebhookSecret ? { webhook_secret: shopifyWebhookSecret } : {}),
+        lookback_days: Number(shopifyLookbackDays),
+        max_orders: Number(shopifyMaxOrders),
+      });
     } else {
-      // ERP / SaaS types managed by erpConfig
+      // ERP / SaaS types managed by erpConfig (SAP, Salesforce, ServiceNow,
+      // Snowflake, BigQuery, Workday, Coupa, Ariba, Oracle Fusion).
       Object.assign(config, erpConfig);
     }
 
@@ -452,10 +485,39 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
           />
         )}
 
-        {/* Generic ERP/SaaS config for remaining enterprise types */}
-        {(['workday', 'oracle_fusion', 'coupa', 'ariba'] as ConnectorType[]).includes(type) && (
-          <GenericErpConfig
-            type={type}
+        {/* Workday config */}
+        {type === 'workday' && (
+          <WorkdayConfig
+            config={erpConfig}
+            onChange={handleErpConfigChange}
+            showPassword={showPassword}
+            onTogglePassword={togglePassword}
+          />
+        )}
+
+        {/* Coupa config */}
+        {type === 'coupa' && (
+          <CoupaConfig
+            config={erpConfig}
+            onChange={handleErpConfigChange}
+            showPassword={showPassword}
+            onTogglePassword={togglePassword}
+          />
+        )}
+
+        {/* SAP Ariba config */}
+        {type === 'ariba' && (
+          <AribaConfig
+            config={erpConfig}
+            onChange={handleErpConfigChange}
+            showPassword={showPassword}
+            onTogglePassword={togglePassword}
+          />
+        )}
+
+        {/* Oracle Fusion config */}
+        {type === 'oracle_fusion' && (
+          <OracleFusionConfig
             config={erpConfig}
             onChange={handleErpConfigChange}
             showPassword={showPassword}
@@ -568,6 +630,24 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
             setZendeskApiToken={setZendeskApiToken}
             zendeskMaxTickets={zendeskMaxTickets}
             setZendeskMaxTickets={setZendeskMaxTickets}
+            showPassword={showPassword}
+            onTogglePassword={togglePassword}
+          />
+        )}
+
+        {/* Shopify config */}
+        {type === 'shopify' && (
+          <ShopifyConfig
+            shopDomain={shopDomain}
+            setShopDomain={setShopDomain}
+            shopifyAccessToken={shopifyAccessToken}
+            setShopifyAccessToken={setShopifyAccessToken}
+            shopifyWebhookSecret={shopifyWebhookSecret}
+            setShopifyWebhookSecret={setShopifyWebhookSecret}
+            shopifyLookbackDays={shopifyLookbackDays}
+            setShopifyLookbackDays={setShopifyLookbackDays}
+            shopifyMaxOrders={shopifyMaxOrders}
+            setShopifyMaxOrders={setShopifyMaxOrders}
             showPassword={showPassword}
             onTogglePassword={togglePassword}
           />

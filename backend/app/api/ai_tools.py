@@ -73,7 +73,8 @@ async def ai_text_to_bpmn(
         "decisions and parallel gateways for concurrent paths. Always "
         "include the bpmndi diagram section so the result is renderable."
     )
-    xml = llm.complete(sys_prompt, body.description, temperature=0.1)
+    with llm.usage_context(user=_current_user, resource_type=None):
+        xml = llm.complete(sys_prompt, body.description, temperature=0.1)
 
     # Strip markdown fences if the model wrapped the output
     stripped = xml.strip()
@@ -200,15 +201,24 @@ async def ai_agent_run(
 
     import asyncio as _asyncio
 
-    result = await _asyncio.to_thread(
-        llm.call_with_tools,
-        system,
-        user_msg,
-        _AGENT_TOOLS,
-        temperature=0.2,
-        max_turns=5,
-        tool_runner=_tool_runner,
-    )
+    # Attribute LLM token usage from this agent run to the caller + log.
+    # The contextvar set here propagates into the worker thread (contextvars
+    # are copied across asyncio.to_thread), so the central metering hook in
+    # llm.py picks up the owner.
+    with llm.usage_context(
+        user=current_user,
+        resource_id=str(body.event_log_id),
+        resource_type="event_log",
+    ):
+        result = await _asyncio.to_thread(
+            llm.call_with_tools,
+            system,
+            user_msg,
+            _AGENT_TOOLS,
+            temperature=0.2,
+            max_turns=5,
+            tool_runner=_tool_runner,
+        )
     return result
 
 
@@ -503,9 +513,14 @@ async def ai_explain_variant(
         "Explain this variant now."
     )
 
-    text = await _asyncio.to_thread(
-        llm.complete, system, user_prompt, temperature=0.2
-    )
+    with llm.usage_context(
+        user=current_user,
+        resource_id=str(body.event_log_id),
+        resource_type="event_log",
+    ):
+        text = await _asyncio.to_thread(
+            llm.complete, system, user_prompt, temperature=0.2
+        )
 
     return ExplainVariantResponse(
         explanation=text.strip(),
@@ -664,9 +679,10 @@ async def ai_explain(
         )
 
     try:
-        raw = await _asyncio.to_thread(
-            llm.complete, _EXPLAIN_SYSTEM, user_prompt, temperature=0.2
-        )
+        with llm.usage_context(user=current_user, resource_type=None):
+            raw = await _asyncio.to_thread(
+                llm.complete, _EXPLAIN_SYSTEM, user_prompt, temperature=0.2
+            )
     except Exception as e:
         logger.warning("ai_explain: LLM call failed for kind=%s: %s", kind, e)
         return ExplainResponse(
@@ -865,12 +881,13 @@ async def ai_extract_log(
 
     # Call the LLM in a thread (complete() is synchronous)
     try:
-        raw = await _asyncio.to_thread(
-            llm.complete,
-            _EXTRACT_SYSTEM_PROMPT,
-            full_user_msg,
-            temperature=0.2,
-        )
+        with llm.usage_context(user=_current_user, resource_type=None):
+            raw = await _asyncio.to_thread(
+                llm.complete,
+                _EXTRACT_SYSTEM_PROMPT,
+                full_user_msg,
+                temperature=0.2,
+            )
     except Exception as e:
         logger.warning("extract-log LLM call failed: %s", e)
         return _EXTRACT_FALLBACK

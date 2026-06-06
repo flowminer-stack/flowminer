@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   Network,
   Workflow,
+  Layers,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore, useUIStore } from '@/store';
@@ -57,6 +58,7 @@ const navSections: NavSection[] = [
     items: [
       { label: 'Governance', path: '/governance', icon: ShieldCheck },
       { label: 'Capability Map', path: '/capability-map', icon: Network },
+      { label: 'Object-Centric', path: '/ocpm', icon: Layers },
       // Mission Control is scoped to /mission-control/:eventLogId — there is no
       // bare /mission-control route in App.tsx, so it must be reached from an
       // event-log detail page, not from a top-level sidebar link. Removed to

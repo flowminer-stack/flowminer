@@ -285,16 +285,17 @@ async def _tool_list_event_logs(args: dict) -> list[TextContent]:
 
     limit = int(args.get("limit", 20))
     async with async_session() as db:
+        # Single join instead of a per-row Project lookup (was up to 500 N+1
+        # queries). We over-fetch up to 500 candidates and stop once `limit`
+        # accessible logs are collected.
         result = await db.execute(
-            select(EventLog).order_by(EventLog.created_at.desc()).limit(500)
+            select(EventLog, Project)
+            .join(Project, EventLog.project_id == Project.id)
+            .order_by(EventLog.created_at.desc())
+            .limit(500)
         )
-        rows = result.scalars().all()
         out: list[dict] = []
-        for log in rows:
-            proj_result = await db.execute(
-                select(Project).where(Project.id == log.project_id)
-            )
-            project = proj_result.scalar_one_or_none()
+        for log, project in result.all():
             if project is None or not _user_can_access_project(_ctx.user, project):
                 continue
             out.append(

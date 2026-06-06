@@ -317,7 +317,12 @@ async def ai_chat(
     )
 
     if not body.stream:
-        text = llm.complete(_SYSTEM_PROMPT, user_prompt)
+        with llm.usage_context(
+            user=current_user,
+            resource_id=str(body.event_log_id),
+            resource_type="event_log",
+        ):
+            text = llm.complete(_SYSTEM_PROMPT, user_prompt)
         return {"answer": text, "llm_configured": llm.is_llm_configured()}
 
     # For tool use the user prompt stays the same, but we beef up the
@@ -390,61 +395,75 @@ async def ai_chat(
         and llm._provider() in ("openai", "openrouter")
     )
 
+    # The generators are consumed by the ASGI server after this handler
+    # returns, so we set the usage-attribution contextvar inside them
+    # (it must be active while the LLM stream actually runs, which is when
+    # llm.py's central metering hook fires).
     async def _gen_tools():
         import logging as _log
         _logger = _log.getLogger(__name__)
-        try:
-            async for event in llm.stream_with_tools(
-                _TOOL_SYSTEM_PROMPT,
-                user_prompt,
-                chat_tools.CHAT_TOOL_SCHEMAS,
-                _tool_runner,
-                temperature=0.2,
-                max_turns=5,
-            ):
-                kind = event.get("kind")
-                if kind == "text":
-                    yield json.dumps({"type": "chunk", "text": event["text"]}) + "\n"
-                elif kind == "tool_start":
-                    yield json.dumps({
-                        "type": "tool_start",
-                        "id": event.get("id"),
-                        "name": event.get("name"),
-                        "args": event.get("args") or {},
-                    }) + "\n"
-                elif kind == "tool_result":
-                    yield json.dumps({
-                        "type": "tool_result",
-                        "id": event.get("id"),
-                        "name": event.get("name"),
-                        "result": event.get("result") or {},
-                    }, default=str) + "\n"
-                elif kind == "tool_warning":
-                    yield json.dumps({
-                        "type": "warning",
-                        "message": event.get("text", ""),
-                    }) + "\n"
-                elif kind == "done":
-                    yield json.dumps({"type": "done"}) + "\n"
-        except Exception as e:
-            _logger.exception("ai_chat tool stream failed")
-            yield json.dumps({
-                "type": "error",
-                "message": f"{type(e).__name__}: {str(e)[:300]}",
-            }) + "\n"
+        with llm.usage_context(
+            user=current_user,
+            resource_id=str(body.event_log_id),
+            resource_type="event_log",
+        ):
+            try:
+                async for event in llm.stream_with_tools(
+                    _TOOL_SYSTEM_PROMPT,
+                    user_prompt,
+                    chat_tools.CHAT_TOOL_SCHEMAS,
+                    _tool_runner,
+                    temperature=0.2,
+                    max_turns=5,
+                ):
+                    kind = event.get("kind")
+                    if kind == "text":
+                        yield json.dumps({"type": "chunk", "text": event["text"]}) + "\n"
+                    elif kind == "tool_start":
+                        yield json.dumps({
+                            "type": "tool_start",
+                            "id": event.get("id"),
+                            "name": event.get("name"),
+                            "args": event.get("args") or {},
+                        }) + "\n"
+                    elif kind == "tool_result":
+                        yield json.dumps({
+                            "type": "tool_result",
+                            "id": event.get("id"),
+                            "name": event.get("name"),
+                            "result": event.get("result") or {},
+                        }, default=str) + "\n"
+                    elif kind == "tool_warning":
+                        yield json.dumps({
+                            "type": "warning",
+                            "message": event.get("text", ""),
+                        }) + "\n"
+                    elif kind == "done":
+                        yield json.dumps({"type": "done"}) + "\n"
+            except Exception as e:
+                _logger.exception("ai_chat tool stream failed")
+                yield json.dumps({
+                    "type": "error",
+                    "message": f"{type(e).__name__}: {str(e)[:300]}",
+                }) + "\n"
 
     async def _gen_plain():
-        try:
-            async for chunk in llm.stream(_SYSTEM_PROMPT, user_prompt):
-                yield json.dumps({"type": "chunk", "text": chunk}) + "\n"
-            yield json.dumps({"type": "done"}) + "\n"
-        except Exception as e:
-            import logging as _log
-            _log.getLogger(__name__).exception("ai_chat stream failed")
-            yield json.dumps({
-                "type": "error",
-                "message": f"{type(e).__name__}: {str(e)[:300]}",
-            }) + "\n"
+        with llm.usage_context(
+            user=current_user,
+            resource_id=str(body.event_log_id),
+            resource_type="event_log",
+        ):
+            try:
+                async for chunk in llm.stream(_SYSTEM_PROMPT, user_prompt):
+                    yield json.dumps({"type": "chunk", "text": chunk}) + "\n"
+                yield json.dumps({"type": "done"}) + "\n"
+            except Exception as e:
+                import logging as _log
+                _log.getLogger(__name__).exception("ai_chat stream failed")
+                yield json.dumps({
+                    "type": "error",
+                    "message": f"{type(e).__name__}: {str(e)[:300]}",
+                }) + "\n"
 
     _gen = _gen_tools if tool_capable else _gen_plain
 
@@ -695,7 +714,12 @@ async def ai_narrate(
         "words or fewer."
     )
     user_prompt = f"Write a report on this process from the data below.\n\n{context}"
-    text = llm.complete(system, user_prompt)
+    with llm.usage_context(
+        user=current_user,
+        resource_id=str(event_log_id),
+        resource_type="event_log",
+    ):
+        text = llm.complete(system, user_prompt)
     return {"markdown": text, "llm_configured": llm.is_llm_configured()}
 
 
@@ -752,7 +776,12 @@ async def ai_suggest_best_practice(
         f"Current process data:\n{context}\n\n"
         "Return the top 3 as JSON."
     )
-    text = llm.complete(system, user_prompt, temperature=0.1)
+    with llm.usage_context(
+        user=current_user,
+        resource_id=str(event_log_id),
+        resource_type="event_log",
+    ):
+        text = llm.complete(system, user_prompt, temperature=0.1)
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:

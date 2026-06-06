@@ -425,5 +425,6 @@ export function ToolResultRender({
   if (render.type === 'line_chart') return <LineChartRender render={render} toolName={tc.name} eventLogId={eventLogId} />;
   if (render.type === 'metric_card') return <MetricCardRender render={render} toolName={tc.name} eventLogId={eventLogId} />;
   if (render.type === 'filter_proposal') return <FilterProposalRender render={render} />;
+  if (render.type === 'conformance_chart') return <ConformanceChartRender render={render} eventLogId={eventLogId} />;
   return null;
 }

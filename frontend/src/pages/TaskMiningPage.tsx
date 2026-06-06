@@ -7,6 +7,7 @@ import {
   Activity,
   Zap,
   AlertCircle,
+  Video,
 } from 'lucide-react';
 import clsx from 'clsx';
 import {
@@ -22,6 +23,15 @@ import PageHeader from '@/components/common/PageHeader';
 import InterAppGraph from '@/components/TaskMining/InterAppGraph';
 import AppTeamHeatmap from '@/components/TaskMining/AppTeamHeatmap';
 
+type Recording = {
+  id: string;
+  agent_version: string | null;
+  hostname: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  event_count: number;
+};
+
 export default function TaskMiningPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const addNotification = useUIStore((s) => s.addNotification);
@@ -33,6 +43,8 @@ export default function TaskMiningPage() {
   const [logs, setLogs] = useState<EventLog[]>([]);
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [crossLinks, setCrossLinks] = useState<TaskPatternCrossLink[] | null>(null);
+  const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [recordingsLoading, setRecordingsLoading] = useState(true);
 
   const loadPatterns = async () => {
     if (!projectId) return;
@@ -64,9 +76,23 @@ export default function TaskMiningPage() {
     }
   };
 
+  const loadRecordings = async () => {
+    if (!projectId) return;
+    setRecordingsLoading(true);
+    try {
+      const list = await taskMiningApi.listRecordings(projectId);
+      setRecordings(list);
+    } catch {
+      // Non-fatal — recordings panel is informational
+    } finally {
+      setRecordingsLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadPatterns();
     loadEventLogs();
+    loadRecordings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -167,6 +193,81 @@ export default function TaskMiningPage() {
               {linking ? 'Linking…' : 'Cross-link to process'}
             </button>
           </>
+        )}
+      </div>
+
+      {/* Recordings summary */}
+      <div className="mt-6">
+        <div className="mb-1 flex items-center gap-2">
+          <Video size={14} className="text-fg-faint" />
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
+            Captured Recordings
+          </p>
+        </div>
+        {recordingsLoading ? (
+          <div className="card flex items-center gap-2 p-4 text-[12px] text-fg-muted">
+            <div className="h-3 w-3 animate-spin rounded-full border border-line border-t-accent" />
+            Loading recordings…
+          </div>
+        ) : recordings.length === 0 ? (
+          <div className="card flex items-center gap-3 p-4">
+            <Video size={20} className="shrink-0 text-fg-ghost" />
+            <p className="text-[12px] text-fg-muted">
+              No recordings yet — run the capture agent in{' '}
+              <code className="rounded bg-tint px-1 py-0.5 text-[11px] text-fg-secondary">
+                tools/capture_agent/
+              </code>{' '}
+              to start streaming desktop events into FlowMiner.
+            </p>
+          </div>
+        ) : (
+          <div className="card overflow-hidden">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="border-b border-line bg-surface-1 text-left">
+                  <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
+                    Host
+                  </th>
+                  <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
+                    Started
+                  </th>
+                  <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
+                    Events
+                  </th>
+                  <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
+                    Status
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {recordings.map((rec) => (
+                  <tr key={rec.id} className="border-b border-line last:border-b-0 hover:bg-tint">
+                    <td className="px-3 py-2.5 font-medium text-fg">
+                      {rec.hostname ?? <span className="text-fg-faint">—</span>}
+                    </td>
+                    <td className="px-3 py-2.5 tabular-nums text-fg-secondary">
+                      {rec.started_at
+                        ? new Date(rec.started_at).toLocaleString(undefined, {
+                            dateStyle: 'short',
+                            timeStyle: 'short',
+                          })
+                        : <span className="text-fg-faint">—</span>}
+                    </td>
+                    <td className="px-3 py-2.5 tabular-nums text-fg-secondary">
+                      {rec.event_count.toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {rec.ended_at ? (
+                        <span className="badge badge-emerald">Complete</span>
+                      ) : (
+                        <span className="badge badge-accent">Recording</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

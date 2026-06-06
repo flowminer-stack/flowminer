@@ -28,12 +28,14 @@ from app.database import get_db
 from app.models import (
     ActionRule,
     Alert,
+    AlertCondition,
     CustomKPI,
     Dashboard,
     EventLog,
     EventLogStatus,
     Initiative,
     LogType,
+    NotificationChannel,
     Project,
     SourceType,
     User,
@@ -207,6 +209,7 @@ async def import_project(
         "action_rules": 0,
     }
 
+    imported_event_logs: list[EventLog] = []
     for el_data in manifest.get("event_logs", []):
         event_log = EventLog(
             project_id=project.id,
@@ -223,7 +226,40 @@ async def import_project(
             hidden=bool(el_data.get("hidden")),
         )
         db.add(event_log)
+        imported_event_logs.append(event_log)
         stats["event_logs"] += 1
+
+    # Alerts require a non-null event_log_id, but the manifest doesn't carry
+    # the original linkage (event-log files are re-uploaded separately and get
+    # fresh IDs). Attach each imported alert to the first imported event log;
+    # if the project has no event logs there's nothing valid to point at, so
+    # we skip alerts entirely rather than violate the FK.
+    if imported_event_logs:
+        await db.flush()  # assign IDs to the new event logs
+        default_event_log = imported_event_logs[0]
+        for a in manifest.get("alerts", []):
+            raw_condition = a.get("condition") or "gt"
+            try:
+                condition = AlertCondition(raw_condition)
+            except ValueError:
+                condition = AlertCondition.gt
+            raw_channel = a.get("notification_channel") or "email"
+            try:
+                channel = NotificationChannel(raw_channel)
+            except ValueError:
+                channel = NotificationChannel.email
+            db.add(Alert(
+                project_id=project.id,
+                event_log_id=default_event_log.id,
+                name=a.get("name", "imported"),
+                metric=a.get("metric") or "avg_case_duration",
+                condition=condition,
+                threshold=a.get("threshold") if a.get("threshold") is not None else 0,
+                is_active=bool(a.get("is_active", True)),
+                notification_channel=channel,
+                created_by=current_user.id,
+            ))
+            stats["alerts"] += 1
 
     for d in manifest.get("dashboards", []):
         db.add(Dashboard(

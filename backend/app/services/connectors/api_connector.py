@@ -42,6 +42,25 @@ def _extract_by_path(data: dict, path: str):
     return current
 
 
+def _build_auth_headers(config: dict) -> dict:
+    """Return auth headers derived from ``auth_type`` / ``token`` config keys.
+
+    auth_type values:
+      'bearer'  → ``Authorization: Bearer <token>``
+      'api_key' → ``<key_header>: <token>``  (key_header defaults to 'X-API-Key')
+      'none' / absent → empty dict (no auth header added)
+    """
+    auth_type = (config.get("auth_type") or "none").lower()
+    token = config.get("token", "")
+
+    if auth_type == "bearer" and token:
+        return {"Authorization": f"Bearer {token}"}
+    if auth_type == "api_key" and token:
+        header_name = config.get("key_header", "X-API-Key")
+        return {header_name: token}
+    return {}
+
+
 class ApiConnector(BaseConnector):
     """Generic REST API connector with offset/page/cursor pagination support."""
 
@@ -60,7 +79,8 @@ class ApiConnector(BaseConnector):
         """
         url = validate_public_url(config["url"])
         method = config.get("method", "GET").upper()
-        headers = config.get("headers", {})
+        # Merge explicit per-request headers with auth headers; auth wins on collision.
+        headers = {**config.get("headers", {}), **_build_auth_headers(config)}
         body = config.get("body", None)
         params = dict(extra_params or {})
 
