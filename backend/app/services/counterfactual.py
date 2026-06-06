@@ -165,6 +165,26 @@ def _score(
     return combined, fit, dist
 
 
+def _net_to_reference_dict(net, initial_marking, final_marking) -> dict:
+    """Serialize a pm4py Petri net to the dict form ``check_conformance`` accepts.
+
+    Produces exactly the structure consumed by
+    ``ConformanceService._reference_model_to_petri_net`` (places, transitions,
+    arcs, initial/final marking by place name) so the discovered reference
+    model can be discovered ONCE and reused across every fitness evaluation
+    instead of being re-discovered per candidate.
+    """
+    return {
+        "places": [{"name": p.name} for p in net.places],
+        "transitions": [{"name": t.name, "label": t.label} for t in net.transitions],
+        "arcs": [
+            {"source": a.source.name, "target": a.target.name} for a in net.arcs
+        ],
+        "initial_marking": [p.name for p in initial_marking],
+        "final_marking": [p.name for p in final_marking],
+    }
+
+
 def generate_counterfactual(
     df: pd.DataFrame,
     case_id: str,
@@ -204,6 +224,25 @@ def generate_counterfactual(
     svc = ConformanceService()
     base_time = case_df[TIMESTAMP_COL].iloc[0]
 
+    # Discover the reference model ONCE, up front, and reuse it for every
+    # candidate. Previously each _fitness call passed reference_model=None,
+    # which made check_conformance re-run pm4py.discover_petri_net_inductive
+    # for every one of the ~population_size * generations candidates — and,
+    # because discovery ran on the candidate's own one-case synthetic frame,
+    # it trivially fit itself (fitness ≡ 1.0). Discovering once from the FULL
+    # log gives a stable reference process to score every candidate against,
+    # which is what the counterfactual search actually needs, and collapses
+    # ~700 redundant discoveries down to one.
+    prebuilt_model = reference_model
+    if prebuilt_model is None:
+        try:
+            _net, _im, _fm = svc._discover_reference_model(df)
+            prebuilt_model = _net_to_reference_dict(_net, _im, _fm)
+        except Exception:
+            # If up-front discovery fails, fall back to the per-call path so
+            # the explainer still returns something rather than erroring.
+            prebuilt_model = None
+
     def _fitness(trace: list[str]) -> float:
         if not trace:
             return 0.0
@@ -217,7 +256,7 @@ def generate_counterfactual(
         synth = pd.DataFrame(rows)
         try:
             result = svc.check_conformance(
-                synth, reference_model=reference_model, method="token_replay"
+                synth, reference_model=prebuilt_model, method="token_replay"
             )
             return float(result.get("fitness") or 0.0)
         except Exception:

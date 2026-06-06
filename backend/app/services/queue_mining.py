@@ -135,9 +135,9 @@ class QueueMiningService:
         if df.empty:
             return {"per_activity": [], "summary": self._empty_summary()}
 
-        # Ensure timestamps are datetime
-        df = df.copy()
+        # Ensure timestamps are datetime; only copy if we need to mutate the column
         if not pd.api.types.is_datetime64_any_dtype(df[TIMESTAMP_COL]):
+            df = df.copy()
             df[TIMESTAMP_COL] = pd.to_datetime(df[TIMESTAMP_COL], utc=True, errors="coerce")
 
         df = df.dropna(subset=[TIMESTAMP_COL])

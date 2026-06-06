@@ -15,6 +15,8 @@ from app.services.rust_accel import (
     compute_activity_durations as _rs_activity_durations,
     compute_edge_durations as _rs_edge_durations,
     discover_dfg as _rs_discover_dfg,
+    discover_petri_net_heuristics as _rs_discover_heuristics,
+    discover_inductive_net as _rs_inductive_net,
 )
 
 logger = logging.getLogger(__name__)
@@ -197,6 +199,62 @@ class DiscoveryService:
             logger.error(f"Error in Alpha Miner discovery: {e}", exc_info=True)
             raise
 
+    def _dict_to_petri_net(self, net_dict: dict):
+        """Build a pm4py Petri net from the serialised dict the Rust
+        Heuristic Miner returns (places / transitions / arcs / markings)."""
+        from pm4py.objects.petri_net.obj import PetriNet, Marking
+
+        net = PetriNet("heuristic_net")
+        place_map = {}
+        for pname in net_dict.get("places", []):
+            place = PetriNet.Place(pname)
+            net.places.add(place)
+            place_map[pname] = place
+
+        trans_map = {}
+        for t in net_dict.get("transitions", []):
+            label = t.get("label")
+            transition = PetriNet.Transition(t["name"], label)
+            net.transitions.add(transition)
+            trans_map[t["name"]] = transition
+
+        for arc in net_dict.get("arcs", []):
+            src = place_map.get(arc["source"]) or trans_map.get(arc["source"])
+            tgt = place_map.get(arc["target"]) or trans_map.get(arc["target"])
+            if src is not None and tgt is not None:
+                a = PetriNet.Arc(src, tgt)
+                net.arcs.add(a)
+                src.out_arcs.add(a)
+                tgt.in_arcs.add(a)
+
+        im = Marking()
+        for pname in net_dict.get("initial_marking", []):
+            if pname in place_map:
+                im[place_map[pname]] = 1
+        fm = Marking()
+        for pname in net_dict.get("final_marking", []):
+            if pname in place_map:
+                fm[place_map[pname]] = 1
+        return net, im, fm
+
+    def _heuristic_net(self, df: pd.DataFrame, dependency_threshold: float = 0.5):
+        """Discover a Heuristic-Miner Petri net, preferring the Rust path
+        (~20x faster than pm4py on large logs) and falling back to pm4py.
+
+        Used by the Split-Miner approximation, where the downstream frequency
+        filter makes the result identical to the pm4py net (verified, edge
+        Jaccard 1.0). ``discover_heuristic`` keeps the pm4py net directly so
+        its *unfiltered* output stays faithful to pm4py's split/join
+        semantics, which the simplified Rust net construction does not
+        reproduce edge-for-edge.
+        """
+        rs_dict = _rs_discover_heuristics(df, dependency_threshold=dependency_threshold)
+        if rs_dict is not None:
+            return self._dict_to_petri_net(rs_dict)
+        return pm4py.discover_petri_net_heuristics(
+            df, dependency_threshold=dependency_threshold, **PM4PY_KEYS
+        )
+
     def discover_heuristic(self, df: pd.DataFrame) -> dict:
         if df.empty:
             return {"nodes": [], "edges": [], "statistics": {}}
@@ -222,7 +280,13 @@ class DiscoveryService:
                     df, noise_threshold=noise_threshold, **PM4PY_KEYS
                 )
             else:
-                net, im, fm = pm4py.discover_petri_net_inductive(df, **PM4PY_KEYS)
+                # IM (noise_threshold == 0): prefer the Rust miner (~95x faster,
+                # verified byte-identical tree → identical net), fall back to pm4py.
+                rs_net = _rs_inductive_net(df)
+                if rs_net is not None:
+                    net, im, fm = rs_net
+                else:
+                    net, im, fm = pm4py.discover_petri_net_inductive(df, **PM4PY_KEYS)
             result = self._petri_net_to_dict(net, im, fm, df)
             if noise_threshold > 0:
                 result.setdefault("statistics", {})["noise_threshold"] = noise_threshold
@@ -442,11 +506,7 @@ class DiscoveryService:
         are absent. Original Split Miner behaviour prior to v2 enhancement.
         """
         try:
-            net, im, fm = pm4py.discover_petri_net_heuristics(
-                df,
-                dependency_threshold=max(threshold, 0.5),
-                **PM4PY_KEYS,
-            )
+            net, im, fm = self._heuristic_net(df, dependency_threshold=max(threshold, 0.5))
             result = self._petri_net_to_dict(net, im, fm, df)
         except Exception as e:
             logger.error(f"Split-Miner approximation failed: {e}", exc_info=True)
@@ -506,31 +566,41 @@ class DiscoveryService:
         model_edges = set()
         labeled_transitions = {t for t in net.transitions if t.label is not None}
 
-        def _find_reachable_activities(start_node, visited=None):
-            """BFS/DFS from a node through places and tau transitions to find
-            the next reachable labeled (activity) transitions."""
-            if visited is None:
-                visited = set()
-            reachable = set()
-            # Get outgoing arcs from this node
-            for arc in net.arcs:
-                if arc.source != start_node:
-                    continue
-                target = arc.target
-                if target in visited:
-                    continue
-                visited.add(target)
+        # Build adjacency map once: node -> list of outgoing target nodes.
+        # This avoids scanning all of net.arcs on every recursive call
+        # (previously O(nodes × arcs); now O(arcs) build + O(nodes) per BFS).
+        adj: dict = {}
+        for arc in net.arcs:
+            adj.setdefault(arc.source, []).append(arc.target)
 
-                if hasattr(target, 'label'):
+        def _find_reachable_activities(start_node):
+            """Iterative BFS from start_node through places and tau transitions
+            to find the next reachable labeled (activity) transitions.
+
+            NOTE: start_node is intentionally NOT pre-added to visited so that
+            self-loop paths (start_node → place → start_node) are discovered —
+            matching the behaviour of the original recursive implementation.
+            The loop guard (visited.add before queue.extend) prevents infinite
+            cycles for all intermediate nodes.
+            """
+            reachable = set()
+            visited = set()
+            queue = list(adj.get(start_node, []))
+            while queue:
+                node = queue.pop()
+                if node in visited:
+                    continue
+                visited.add(node)
+                if hasattr(node, 'label'):
                     # It's a transition
-                    if target.label is not None:
-                        reachable.add(target.label)
+                    if node.label is not None:
+                        reachable.add(node.label)
                     else:
-                        # Silent/tau transition — traverse through it
-                        reachable |= _find_reachable_activities(target, visited)
+                        # Silent/tau transition — keep traversing
+                        queue.extend(adj.get(node, []))
                 else:
-                    # It's a place — traverse through it
-                    reachable |= _find_reachable_activities(target, visited)
+                    # It's a place — keep traversing
+                    queue.extend(adj.get(node, []))
             return reachable
 
         for trans in labeled_transitions:

@@ -118,15 +118,35 @@ def _evaluate_filter(
     tokens = _tokenize_expr(expr)
     pos = [0]  # mutable cursor used by the nested parser
 
-    # Precompute the per-case view we'll reuse for every clause.
+    # Precompute the per-case duration/time view (always needed for case.duration /
+    # case.start / case.end).  Activity and resource groupbys are computed lazily
+    # — only if the parsed expression actually references them.
     case_times = df.groupby(CASE_COL)[TIMESTAMP_COL].agg(["min", "max"])
     case_times["_dur"] = (case_times["max"] - case_times["min"]).dt.total_seconds()
-    acts_per_case = df.groupby(CASE_COL)[ACTIVITY_COL].apply(set)
-    res_per_case = (
-        df.groupby(CASE_COL)[RESOURCE_COL].apply(set)
-        if RESOURCE_COL in df.columns
-        else None
-    )
+
+    # Lazy holders — computed at most once, on first use.
+    _acts_mask_cache: "dict[str, pd.Series]" = {}  # value -> bool Series indexed by case
+    _res_mask_cache: "dict[str, pd.Series]" = {}
+
+    def _acts_any(value: str) -> "pd.Series":
+        """Return bool Series (index = case id) — True if value appears in that case."""
+        if value not in _acts_mask_cache:
+            _acts_mask_cache[value] = (
+                (df[ACTIVITY_COL] == value)
+                .groupby(df[CASE_COL])
+                .any()
+            )
+        return _acts_mask_cache[value]
+
+    def _res_any(value: str) -> "pd.Series":
+        """Return bool Series (index = case id) — True if value appears in that case."""
+        if value not in _res_mask_cache:
+            _res_mask_cache[value] = (
+                (df[RESOURCE_COL] == value)
+                .groupby(df[CASE_COL])
+                .any()
+            )
+        return _res_mask_cache[value]
 
     def peek() -> tuple[str, str] | None:
         return tokens[pos[0]] if pos[0] < len(tokens) else None
@@ -209,24 +229,24 @@ def _evaluate_filter(
 
         if metric == "activity":
             if op in ("=", "contains"):
-                matched = acts_per_case[acts_per_case.apply(lambda s: raw_val in s)]
-                return set(str(c) for c in matched.index)
+                mask = _acts_any(raw_val)
+                return set(str(c) for c in mask[mask].index)
             if op == "!=":
-                matched = acts_per_case[acts_per_case.apply(lambda s: raw_val not in s)]
-                return set(str(c) for c in matched.index)
+                mask = _acts_any(raw_val)
+                return set(str(c) for c in mask[~mask].index)
             warnings.append(f"Op {op} not supported for activity")
             return set(all_case_ids)
 
         if metric in ("resource", "org:resource"):
-            if res_per_case is None:
+            if RESOURCE_COL not in df.columns:
                 warnings.append("No resource column in this log")
                 return set(all_case_ids)
             if op == "=":
-                matched = res_per_case[res_per_case.apply(lambda s: raw_val in s)]
-                return set(str(c) for c in matched.index)
+                mask = _res_any(raw_val)
+                return set(str(c) for c in mask[mask].index)
             if op == "!=":
-                matched = res_per_case[res_per_case.apply(lambda s: raw_val not in s)]
-                return set(str(c) for c in matched.index)
+                mask = _res_any(raw_val)
+                return set(str(c) for c in mask[~mask].index)
             warnings.append(f"Op {op} not supported for resource")
             return set(all_case_ids)
 

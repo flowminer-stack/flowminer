@@ -185,10 +185,10 @@ class DriftDetector:
         """Coerce the timestamp column to datetime if needed."""
         if TIMESTAMP_COL not in df.columns:
             raise ValueError(f"Column '{TIMESTAMP_COL}' not found in dataframe")
-        df = df.copy()
         if not pd.api.types.is_datetime64_any_dtype(df[TIMESTAMP_COL]):
+            df = df.copy()
             df[TIMESTAMP_COL] = pd.to_datetime(df[TIMESTAMP_COL], utc=True, errors="coerce")
-        # Drop rows where timestamp couldn't be parsed
+        # Drop rows where timestamp couldn't be parsed (dropna returns a new frame)
         df = df.dropna(subset=[TIMESTAMP_COL])
         return df
 
@@ -266,7 +266,7 @@ class DriftDetector:
         frames = []
         for i in range(0, len(case_order), n):
             batch = case_order[i : i + n]
-            chunk = df[df[CASE_COL].isin(batch)].copy().reset_index(drop=True)
+            chunk = df[df[CASE_COL].isin(batch)].reset_index(drop=True)
             if not chunk.empty:
                 frames.append(chunk)
         return frames

@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from app.services.ingestion import ACTIVITY_COL, CASE_COL, TIMESTAMP_COL
+from app.services.rust_accel import compute_prefix_features as _rs_prefix_features
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +38,27 @@ def _extract_prefix_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]
     cases — so the classifier can be trained on prefixes of completed
     cases alone.
     """
+    # Rust fast path: one native pass instead of the Python triple loop +
+    # ~1.3M-dict materialisation (all four predictive endpoints share this).
+    if TIMESTAMP_COL in df.columns:
+        try:
+            rs = _rs_prefix_features(df)
+        except Exception as e:  # noqa: BLE001 - never let accel break prediction
+            logger.warning("Rust prefix features failed (%s); using pandas path", e)
+            rs = None
+        if rs is not None:
+            return rs
+
     rows: list[dict[str, Any]] = []
     activity_tokens: set[str] = set()
 
-    grouped = df.sort_values(TIMESTAMP_COL).groupby(CASE_COL, sort=False)
+    # Stable sort by [case, timestamp] so events tied on a timestamp keep their
+    # ingestion order — deterministic and matching the Rust fast path. (A plain
+    # timestamp sort with the default quicksort makes prefixes non-reproducible
+    # on day-granularity logs.)
+    grouped = df.sort_values(
+        [CASE_COL, TIMESTAMP_COL], kind="mergesort"
+    ).groupby(CASE_COL, sort=False)
     case_infos = []
 
     for case_id, group in grouped:

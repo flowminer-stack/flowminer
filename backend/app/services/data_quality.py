@@ -123,10 +123,16 @@ def compute_data_quality(df: pd.DataFrame) -> dict:
         pass
 
     # Out-of-order events within a case
+    # Skip the O(n log n) sort when timestamps are already globally monotonic —
+    # global monotonicity implies per-case monotonicity, so out_of_order == 0.
     try:
-        sorted_df = df.sort_values([CASE_COL, TIMESTAMP_COL])
-        prev_ts = sorted_df.groupby(CASE_COL)[TIMESTAMP_COL].shift(1)
-        out_of_order = int((sorted_df[TIMESTAMP_COL] < prev_ts).sum())
+        ts_col_full = df[TIMESTAMP_COL].dropna()
+        if ts_col_full.is_monotonic_increasing:
+            out_of_order = 0
+        else:
+            sorted_df = df.sort_values([CASE_COL, TIMESTAMP_COL])
+            prev_ts = sorted_df.groupby(CASE_COL)[TIMESTAMP_COL].shift(1)
+            out_of_order = int((sorted_df[TIMESTAMP_COL] < prev_ts).sum())
         if out_of_order > 0:
             pct = round(100.0 * out_of_order / total_events, 2)
             issues.append(

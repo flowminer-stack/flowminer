@@ -132,25 +132,23 @@ def _read_ocel(file_path: str):
 
 
 def _ocel_counts(ocel) -> tuple[int, int]:
-    """Return (event_count, object_count) for an OCEL object."""
-    import pm4py
+    """Return (event_count, object_count) for an OCEL object.
+
+    Uses O(1) attribute reads (``ocel.events`` / ``ocel.objects`` are already
+    materialised DataFrames on the OCEL object) instead of the previous approach
+    of calling ``ocel.get_extended_table()`` (builds a full denormalised
+    events×objects join) and ``pm4py.ocel_objects_summary()`` (runs a groupby
+    aggregation) just to get row counts.
+    """
+    try:
+        event_count = len(ocel.events)
+    except Exception:
+        event_count = 0
 
     try:
-        event_count = len(ocel.get_extended_table())
+        object_count = len(ocel.objects)
     except Exception:
-        try:
-            event_count = len(ocel.events)
-        except Exception:
-            event_count = 0
-
-    try:
-        summary = pm4py.ocel_objects_summary(ocel)
-        object_count = len(summary)
-    except Exception:
-        try:
-            object_count = len(ocel.objects)
-        except Exception:
-            object_count = 0
+        object_count = 0
 
     return event_count, object_count
 

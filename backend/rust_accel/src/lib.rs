@@ -13,6 +13,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use rustc_hash::FxHashMap;
 
+mod inductive;
+
 // ── helpers ──────────────────────────────────────────────────────────
 
 /// Build a (case, timestamp, row-index) stable sort order.
@@ -41,6 +43,25 @@ fn median_sorted(v: &mut Vec<f64>) -> f64 {
     } else {
         (v[n / 2 - 1] + v[n / 2]) / 2.0
     }
+}
+
+/// Linear-interpolation percentile on an already-sorted slice — matches
+/// numpy.percentile's default ("linear") method.
+fn percentile_sorted(v: &[f64], p: f64) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    let n = v.len();
+    if n == 1 {
+        return v[0];
+    }
+    let rank = p / 100.0 * (n - 1) as f64;
+    let lo = rank.floor() as usize;
+    let hi = rank.ceil() as usize;
+    if lo == hi {
+        return v[lo];
+    }
+    v[lo] + (rank - lo as f64) * (v[hi] - v[lo])
 }
 
 // ── DFG discovery ───────────────────────────────────────────────────
@@ -1179,22 +1200,25 @@ fn compute_bottlenecks<'py>(
         }
     }
 
-    // Build activity stats
-    let mut activity_stats: Vec<(usize, f64, f64, usize)> = Vec::new(); // (act, avg, median, freq)
+    // Build activity stats. p95_act is each activity's own 95th-percentile
+    // duration (for DBSM scoring on the Python side — lets it skip rebuilding
+    // a per-event `valid` frame).
+    let mut activity_stats: Vec<(usize, f64, f64, f64, usize)> = Vec::new(); // (act, avg, median, p95, freq)
     for i in 0..n_acts {
         let durs = &mut act_durs[i];
         if durs.is_empty() { continue; }
         let sum: f64 = durs.iter().sum();
         let avg = sum / durs.len() as f64;
-        let med = median_sorted(durs);
-        activity_stats.push((i, avg, med, durs.len()));
+        let med = median_sorted(durs); // sorts durs ascending
+        let p95_act = percentile_sorted(durs, 95.0);
+        activity_stats.push((i, avg, med, p95_act, durs.len()));
     }
 
     // Compute percentiles for bottleneck classification
-    let freq_total: usize = activity_stats.iter().map(|s| s.3).sum();
+    let freq_total: usize = activity_stats.iter().map(|s| s.4).sum();
     let freq_threshold = (freq_total as f64 * 0.005).max(5.0) as usize;
     let mut repr_avgs: Vec<f64> = activity_stats.iter()
-        .filter(|s| s.3 >= freq_threshold)
+        .filter(|s| s.4 >= freq_threshold)
         .map(|s| s.1).collect();
     if repr_avgs.is_empty() {
         repr_avgs = activity_stats.iter().map(|s| s.1).collect();
@@ -1213,12 +1237,12 @@ fn compute_bottlenecks<'py>(
     // Sort: bottlenecks first (by dur desc), then non-bottlenecks
     let mut sorted_stats = activity_stats.clone();
     sorted_stats.sort_by(|a, b| {
-        let a_bn = a.3 >= freq_threshold && a.1 > p75;
-        let b_bn = b.3 >= freq_threshold && b.1 > p75;
+        let a_bn = a.4 >= freq_threshold && a.1 > p75;
+        let b_bn = b.4 >= freq_threshold && b.1 > p75;
         b_bn.cmp(&a_bn).then(b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
     });
 
-    for &(act, avg, med, freq) in &sorted_stats {
+    for &(act, avg, med, p95_act, freq) in &sorted_stats {
         let (severity, is_bn) = if freq < freq_threshold {
             ("low", false)
         } else if avg > p95 { ("critical", true) }
@@ -1230,6 +1254,7 @@ fn compute_bottlenecks<'py>(
         d.set_item("activity", &act_labels[act])?;
         d.set_item("avg_duration", avg)?;
         d.set_item("median_duration", med)?;
+        d.set_item("p95_duration", p95_act)?;
         d.set_item("frequency", freq)?;
         d.set_item("is_bottleneck", is_bn)?;
         d.set_item("severity", severity)?;
@@ -2112,6 +2137,425 @@ fn compute_edge_stats<'py>(
     Ok(result)
 }
 
+// ── Handover-of-work network (raw counts) ───────────────────────────
+
+/// Resource handover-of-work network with RAW counts.
+///
+/// Mirrors `org_mining.get_social_network`: node frequency = number of
+/// events performed by a resource; edge frequency = number of times two
+/// *different*, non-null resources act consecutively within the same case.
+///
+/// `res_codes` use -1 for null/NaN resources (pandas category code for NaN),
+/// which are skipped for both node counts and handovers.
+///
+/// Returns a dict with: nodes (sorted by resource label), edges (sorted by
+/// descending frequency), total_resources, total_handovers.
+#[pyfunction]
+fn compute_handover_network<'py>(
+    py: Python<'py>,
+    case_codes: PyReadonlyArray1<'py, i32>,
+    res_codes: PyReadonlyArray1<'py, i32>,
+    res_labels: Vec<String>,
+    ts_ns: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let cases = case_codes.as_slice()?;
+    let resources = res_codes.as_slice()?;
+    let ts = ts_ns.as_slice()?;
+    let n = cases.len();
+    let n_res = res_labels.len();
+
+    let mut res_event_count = vec![0u64; n_res];
+    let mut handover: FxHashMap<(u32, u32), u64> = FxHashMap::default();
+
+    if n > 0 {
+        let order = build_order(cases, ts);
+        let first = order[0] as usize;
+        let mut prev_case = cases[first];
+        let mut prev_res = resources[first];
+        if prev_res >= 0 { res_event_count[prev_res as usize] += 1; }
+
+        for &idx in &order[1..] {
+            let idx = idx as usize;
+            let cur_case = cases[idx];
+            let cur_res = resources[idx];
+            if cur_res >= 0 { res_event_count[cur_res as usize] += 1; }
+            if cur_case == prev_case && prev_res >= 0 && cur_res >= 0 && prev_res != cur_res {
+                *handover.entry((prev_res as u32, cur_res as u32)).or_insert(0) += 1;
+            }
+            prev_case = cur_case;
+            prev_res = cur_res;
+        }
+    }
+
+    // Nodes — sorted by resource label (matches Python's sorted(items())).
+    let mut node_order: Vec<usize> = (0..n_res).filter(|&i| res_event_count[i] > 0).collect();
+    node_order.sort_by(|&a, &b| res_labels[a].cmp(&res_labels[b]));
+    let nodes = PyList::empty(py);
+    for i in node_order {
+        let d = PyDict::new(py);
+        d.set_item("id", &res_labels[i])?;
+        d.set_item("label", &res_labels[i])?;
+        d.set_item("frequency", res_event_count[i])?;
+        nodes.append(d)?;
+    }
+
+    // Edges — sorted by descending frequency, ties broken by labels for
+    // determinism.
+    let mut edge_vec: Vec<((u32, u32), u64)> = handover.into_iter().collect();
+    edge_vec.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| res_labels[a.0 .0 as usize].cmp(&res_labels[b.0 .0 as usize]))
+            .then_with(|| res_labels[a.0 .1 as usize].cmp(&res_labels[b.0 .1 as usize]))
+    });
+    let total_handovers: u64 = edge_vec.iter().map(|(_, c)| c).sum();
+    let edges = PyList::empty(py);
+    for ((src, tgt), cnt) in &edge_vec {
+        let d = PyDict::new(py);
+        d.set_item("source", &res_labels[*src as usize])?;
+        d.set_item("target", &res_labels[*tgt as usize])?;
+        d.set_item("frequency", *cnt)?;
+        edges.append(d)?;
+    }
+
+    let n_nodes = nodes.len();
+    let result = PyDict::new(py);
+    result.set_item("nodes", nodes)?;
+    result.set_item("edges", edges)?;
+    result.set_item("total_resources", n_nodes)?;
+    result.set_item("total_handovers", total_handovers)?;
+    Ok(result)
+}
+
+// ── Log statistics (single-pass) ────────────────────────────────────
+
+/// Whole-log statistics in a single pass over the (case, ts)-sorted log.
+///
+/// Replaces several full-frame pandas sorts/groupbys in
+/// `StatisticsService.compute_statistics`. Returns the heavy per-case
+/// reductions; the Python wrapper does the cheap final shaping
+/// (rounding, relative frequencies, cases-over-time bucketing).
+///
+/// Returns a dict with:
+///   start_activities, end_activities, activity_frequencies — {label: count}
+///   case_count, event_count                                — int
+///   duration_avg/median/min/max                            — float seconds
+///   avg_events_per_case                                    — float
+///   case_start_ts                                          — list[int64 ns]
+#[pyfunction]
+fn compute_log_statistics<'py>(
+    py: Python<'py>,
+    case_codes: PyReadonlyArray1<'py, i32>,
+    act_codes: PyReadonlyArray1<'py, i32>,
+    act_labels: Vec<String>,
+    ts_ns: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let cases = case_codes.as_slice()?;
+    let acts = act_codes.as_slice()?;
+    let ts = ts_ns.as_slice()?;
+    let n = cases.len();
+    let n_acts = act_labels.len();
+
+    let mut start_counts = vec![0u64; n_acts];
+    let mut end_counts = vec![0u64; n_acts];
+    let mut act_freq = vec![0u64; n_acts];
+    let mut durations: Vec<f64> = Vec::new();
+    let mut case_start_ts: Vec<i64> = Vec::new();
+
+    if n > 0 {
+        let order = build_order(cases, ts);
+        let first = order[0] as usize;
+        let mut prev_case = cases[first];
+        let mut first_act = acts[first] as usize;
+        let mut last_act = acts[first] as usize;
+        let mut min_ts = ts[first];
+        let mut max_ts = ts[first];
+        act_freq[first_act] += 1;
+
+        for &idx in &order[1..] {
+            let idx = idx as usize;
+            let cur_case = cases[idx];
+            let cur_act = acts[idx] as usize;
+            let cur_ts = ts[idx];
+            if cur_case != prev_case {
+                start_counts[first_act] += 1;
+                end_counts[last_act] += 1;
+                // i128 promotion avoids i64 overflow on pathological timestamps
+                // (e.g. NaT sentinels) — the wrapper also guards these, this is
+                // defense-in-depth so a bad row can never wrap to a negative dur.
+                durations.push((max_ts as i128 - min_ts as i128) as f64 / 1_000_000_000.0);
+                case_start_ts.push(min_ts);
+                prev_case = cur_case;
+                first_act = cur_act;
+                min_ts = cur_ts;
+            }
+            last_act = cur_act;
+            max_ts = cur_ts;
+            act_freq[cur_act] += 1;
+        }
+        // flush final case
+        start_counts[first_act] += 1;
+        end_counts[last_act] += 1;
+        durations.push((max_ts - min_ts) as f64 / 1_000_000_000.0);
+        case_start_ts.push(min_ts);
+    }
+
+    let case_count = durations.len() as u64;
+    let (d_avg, d_med, d_min, d_max) = if durations.is_empty() {
+        (0.0, 0.0, 0.0, 0.0)
+    } else {
+        let sum: f64 = durations.iter().sum();
+        let avg = sum / durations.len() as f64;
+        let min = durations.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = durations.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let med = median_sorted(&mut durations);
+        (avg, med, min, max)
+    };
+    let avg_events = if case_count > 0 { n as f64 / case_count as f64 } else { 0.0 };
+
+    let mk_counts = |counts: &[u64]| -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        for (i, &c) in counts.iter().enumerate() {
+            if c > 0 { d.set_item(&act_labels[i], c)?; }
+        }
+        Ok(d)
+    };
+
+    let result = PyDict::new(py);
+    result.set_item("start_activities", mk_counts(&start_counts)?)?;
+    result.set_item("end_activities", mk_counts(&end_counts)?)?;
+    result.set_item("activity_frequencies", mk_counts(&act_freq)?)?;
+    result.set_item("case_count", case_count)?;
+    result.set_item("event_count", n)?;
+    result.set_item("duration_avg", d_avg)?;
+    result.set_item("duration_median", d_med)?;
+    result.set_item("duration_min", d_min)?;
+    result.set_item("duration_max", d_max)?;
+    result.set_item("avg_events_per_case", avg_events)?;
+    result.set_item("case_start_ts", case_start_ts)?;
+    Ok(result)
+}
+
+// ── Prefix features (predictive process monitoring) ─────────────────
+
+/// Build one feature row per (case, prefix-length) for the predictive
+/// models — a single native pass replacing the Python triple loop that
+/// materialised ~1.3M dicts and recomputed `set(prefix)` at O(L²) per case.
+///
+/// Returns numpy columns (row-aligned) plus the sorted set of activity codes
+/// that appear in qualifying cases (>= 2 events). Timestamps are epoch ns;
+/// hour/day-of-week are derived in UTC, matching pandas on UTC/naive columns.
+#[pyfunction]
+fn compute_prefix_features<'py>(
+    py: Python<'py>,
+    case_codes: PyReadonlyArray1<'py, i32>,
+    act_codes: PyReadonlyArray1<'py, i32>,
+    ts_ns: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Bound<'py, PyDict>> {
+    use numpy::PyArray1;
+    let cases = case_codes.as_slice()?;
+    let acts = act_codes.as_slice()?;
+    let ts = ts_ns.as_slice()?;
+    let n = cases.len();
+
+    let mut case_code: Vec<i32> = Vec::new();
+    let mut prefix_length: Vec<i32> = Vec::new();
+    let mut elapsed: Vec<f64> = Vec::new();
+    let mut remaining: Vec<f64> = Vec::new();
+    let mut total: Vec<f64> = Vec::new();
+    let mut unique_so_far: Vec<i32> = Vec::new();
+    let mut rework: Vec<i32> = Vec::new();
+    let mut hour_of_day: Vec<i32> = Vec::new();
+    let mut day_of_week: Vec<i32> = Vec::new();
+    let mut last_act: Vec<i32> = Vec::new();
+    let mut is_last: Vec<bool> = Vec::new();
+    let mut present: std::collections::BTreeSet<i32> = std::collections::BTreeSet::new();
+
+    if n > 0 {
+        let order = build_order(cases, ts);
+
+        // emit all prefix rows for one case given its sorted event slice
+        let mut emit = |c_acts: &[i32], c_ts: &[i64], case: i32,
+                        present: &mut std::collections::BTreeSet<i32>| {
+            let ne = c_acts.len();
+            if ne < 2 {
+                return;
+            }
+            let t0 = c_ts[0];
+            let total_dur = (c_ts[ne - 1] as i128 - t0 as i128) as f64 / 1_000_000_000.0;
+            for &a in c_acts {
+                present.insert(a);
+            }
+            let mut seen: FxHashMap<i32, ()> = FxHashMap::default();
+            for pl in 1..ne {
+                seen.insert(c_acts[pl - 1], ());
+                let el = (c_ts[pl - 1] as i128 - t0 as i128) as f64 / 1_000_000_000.0;
+                let uniq = seen.len() as i32;
+                let secs = (c_ts[pl - 1]).div_euclid(1_000_000_000);
+                let sod = secs.rem_euclid(86_400);
+                let day = secs.div_euclid(86_400);
+                case_code.push(case);
+                prefix_length.push(pl as i32);
+                elapsed.push(el);
+                remaining.push(total_dur - el);
+                total.push(total_dur);
+                unique_so_far.push(uniq);
+                rework.push(pl as i32 - uniq);
+                hour_of_day.push((sod / 3_600) as i32);
+                day_of_week.push(((day + 3).rem_euclid(7)) as i32);
+                last_act.push(c_acts[pl - 1]);
+                is_last.push(pl == ne - 1);
+            }
+        };
+
+        let mut cur_acts: Vec<i32> = Vec::new();
+        let mut cur_ts: Vec<i64> = Vec::new();
+        let mut prev_case = cases[order[0] as usize];
+        for &idx in &order {
+            let idx = idx as usize;
+            if cases[idx] != prev_case {
+                emit(&cur_acts, &cur_ts, prev_case, &mut present);
+                cur_acts.clear();
+                cur_ts.clear();
+                prev_case = cases[idx];
+            }
+            cur_acts.push(acts[idx]);
+            cur_ts.push(ts[idx]);
+        }
+        emit(&cur_acts, &cur_ts, prev_case, &mut present);
+    }
+
+    let result = PyDict::new(py);
+    result.set_item("case_code", PyArray1::from_vec(py, case_code))?;
+    result.set_item("prefix_length", PyArray1::from_vec(py, prefix_length))?;
+    result.set_item("elapsed_seconds", PyArray1::from_vec(py, elapsed))?;
+    result.set_item("remaining_seconds", PyArray1::from_vec(py, remaining))?;
+    result.set_item("total_seconds", PyArray1::from_vec(py, total))?;
+    result.set_item("unique_activities_so_far", PyArray1::from_vec(py, unique_so_far))?;
+    result.set_item("rework_count", PyArray1::from_vec(py, rework))?;
+    result.set_item("hour_of_day", PyArray1::from_vec(py, hour_of_day))?;
+    result.set_item("day_of_week", PyArray1::from_vec(py, day_of_week))?;
+    result.set_item("last_act_code", PyArray1::from_vec(py, last_act))?;
+    result.set_item("is_last_prefix", PyArray1::from_vec(py, is_last))?;
+    result.set_item("present_acts", present.into_iter().collect::<Vec<i32>>())?;
+    Ok(result)
+}
+
+// ── Batch detection (Martin et al. 2015) ────────────────────────────
+
+/// Detect batching of (activity, resource) executions — a Rust port of
+/// pm4py's `discover_batches` for single-timestamp logs (start == complete).
+///
+/// Per (activity, resource): sort events by time, cluster them by consecutive
+/// gap <= `merge_distance` seconds (the overlapping-interval merge is a no-op
+/// for point timestamps; the near-interval merge reduces to gap clustering),
+/// keep clusters with >= `min_batch_size` events. A cluster is "Simultaneous"
+/// when all its timestamps are equal, otherwise "Concurrent batching" (the
+/// only two types reachable when start == complete). Null resources (code < 0)
+/// are skipped. Returns a list of batch dicts sorted by event count desc.
+#[pyfunction]
+fn compute_batches<'py>(
+    py: Python<'py>,
+    case_codes: PyReadonlyArray1<'py, i32>,
+    act_codes: PyReadonlyArray1<'py, i32>,
+    act_labels: Vec<String>,
+    res_codes: PyReadonlyArray1<'py, i32>,
+    res_labels: Vec<String>,
+    ts_ns: PyReadonlyArray1<'py, i64>,
+    merge_distance_secs: f64,
+    min_batch_size: usize,
+) -> PyResult<Bound<'py, PyList>> {
+    let cases = case_codes.as_slice()?;
+    let acts = act_codes.as_slice()?;
+    let resources = res_codes.as_slice()?;
+    let ts = ts_ns.as_slice()?;
+    let n = cases.len();
+    let merge_ns: i64 = (merge_distance_secs * 1_000_000_000.0) as i64;
+
+    // group (act, res) -> Vec<(ts_ns, case)>
+    let mut groups: FxHashMap<(u32, u32), Vec<(i64, i32)>> = FxHashMap::default();
+    for i in 0..n {
+        if resources[i] < 0 {
+            continue; // skip null resources
+        }
+        groups
+            .entry((acts[i] as u32, resources[i] as u32))
+            .or_default()
+            .push((ts[i], cases[i]));
+    }
+
+    // each detected batch, collected then sorted by event count desc
+    struct Batch {
+        act: u32,
+        res: u32,
+        simultaneous: bool,
+        n_events: usize,
+        cases: Vec<i32>,
+        start: i64,
+        end: i64,
+    }
+    let mut out: Vec<Batch> = Vec::new();
+
+    for ((act, res), mut evs) in groups {
+        if evs.len() < min_batch_size {
+            continue;
+        }
+        evs.sort_unstable(); // by (ts, case)
+        let mut i = 0usize;
+        while i < evs.len() {
+            // extend the cluster while consecutive gap <= merge_ns
+            let mut j = i + 1;
+            while j < evs.len() && evs[j].0 - evs[j - 1].0 <= merge_ns {
+                j += 1;
+            }
+            let cluster = &evs[i..j];
+            if cluster.len() >= min_batch_size {
+                let start = cluster[0].0;
+                let end = cluster[cluster.len() - 1].0;
+                let simultaneous = start == end;
+                let mut cs: Vec<i32> = cluster.iter().map(|&(_, c)| c).collect();
+                cs.sort_unstable();
+                cs.dedup();
+                out.push(Batch {
+                    act,
+                    res,
+                    simultaneous,
+                    n_events: cluster.len(),
+                    cases: cs,
+                    start,
+                    end,
+                });
+            }
+            i = j;
+        }
+    }
+
+    out.sort_by(|a, b| {
+        b.n_events
+            .cmp(&a.n_events)
+            .then_with(|| act_labels[a.act as usize].cmp(&act_labels[b.act as usize]))
+            .then_with(|| res_labels[a.res as usize].cmp(&res_labels[b.res as usize]))
+            .then_with(|| a.start.cmp(&b.start))
+    });
+
+    let result = PyList::empty(py);
+    for b in &out {
+        let d = PyDict::new(py);
+        d.set_item("activity", &act_labels[b.act as usize])?;
+        d.set_item("resource", &res_labels[b.res as usize])?;
+        d.set_item(
+            "batch_type",
+            if b.simultaneous { "Simultaneous" } else { "Concurrent batching" },
+        )?;
+        d.set_item("num_cases", b.cases.len())?;
+        d.set_item("num_events", b.n_events)?;
+        d.set_item("case_codes", b.cases.clone())?;
+        d.set_item("start_ns", b.start)?;
+        d.set_item("end_ns", b.end)?;
+        result.append(d)?;
+    }
+    Ok(result)
+}
+
 // ── module ──────────────────────────────────────────────────────────
 
 #[pymodule]
@@ -2135,5 +2579,10 @@ fn flowminer_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_transitions, m)?)?;
     m.add_function(wrap_pyfunction!(compute_rework, m)?)?;
     m.add_function(wrap_pyfunction!(compute_edge_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_handover_network, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_log_statistics, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_prefix_features, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_batches, m)?)?;
+    m.add_function(wrap_pyfunction!(inductive::discover_inductive_tree, m)?)?;
     Ok(())
 }

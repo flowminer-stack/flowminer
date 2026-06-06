@@ -132,27 +132,36 @@ def get_timeline(df: pd.DataFrame, limit: int = 5000) -> dict:
         dict with keys: events (list), start_time (str), end_time (str),
         total_events (int)
     """
-    sorted_df = df.sort_values(TIMESTAMP_COL).reset_index(drop=True)
+    # Stable sort: secondary key (CASE_COL) breaks timestamp ties deterministically.
+    sorted_df = df.sort_values([TIMESTAMP_COL, CASE_COL]).reset_index(drop=True)
     total_events = len(sorted_df)
 
-    # Track the last seen activity per case
-    last_activity: dict[str, str] = {}
-    events = []
+    # Vectorised: compute source (previous activity per case) via a per-case shift.
+    # sort_values is already done; groupby(sort=False) preserves that order.
+    sorted_df = sorted_df.assign(
+        source=sorted_df.groupby(CASE_COL, sort=False)[ACTIVITY_COL].shift(1)
+    )
 
-    for _, row in sorted_df.head(limit).iterrows():
-        case_id = str(row[CASE_COL])
-        activity = str(row[ACTIVITY_COL])
-        ts = pd.Timestamp(row[TIMESTAMP_COL]).isoformat()
+    head = sorted_df.head(limit)
 
-        source = last_activity.get(case_id)
-        last_activity[case_id] = activity
+    # Produce isoformat strings (e.g. "2013-11-07T08:18:29+00:00") vectorially.
+    # strftime %z gives "+0000"; insert colon to match pd.Timestamp.isoformat() output.
+    _ts_raw = head[TIMESTAMP_COL].dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+    timestamps = [s[:-2] + ":" + s[-2:] if len(s) > 6 and s[-5] in "+-" else s
+                  for s in _ts_raw]
+    case_ids = head[CASE_COL].astype(str).tolist()
+    activities = head[ACTIVITY_COL].astype(str).tolist()
+    sources = head["source"].tolist()  # NaN becomes float nan — convert below
 
-        events.append({
+    events = [
+        {
             "timestamp": ts,
-            "case_id": case_id,
-            "activity": activity,
-            "source": source,
-        })
+            "case_id": cid,
+            "activity": act,
+            "source": None if (src != src) else str(src),  # NaN check via nan != nan
+        }
+        for ts, cid, act, src in zip(timestamps, case_ids, activities, sources)
+    ]
 
     start_time = pd.Timestamp(sorted_df[TIMESTAMP_COL].iloc[0]).isoformat() if total_events else ""
     end_time = pd.Timestamp(sorted_df[TIMESTAMP_COL].iloc[-1]).isoformat() if total_events else ""
@@ -185,17 +194,20 @@ def get_dotted_chart(df: pd.DataFrame, limit: int = 10000) -> dict:
             "time_range": {"start": "", "end": ""},
         }
 
-    sorted_df = df.sort_values(TIMESTAMP_COL).reset_index(drop=True)
+    # Stable sort: secondary key (CASE_COL) breaks timestamp ties deterministically.
+    sorted_df = df.sort_values([TIMESTAMP_COL, CASE_COL]).reset_index(drop=True)
     has_resource = RESOURCE_COL in sorted_df.columns
 
-    # Build case_index by first-occurrence order
-    case_index_map: dict[str, int] = {}
-    next_index = 0
-    for case_id in sorted_df[CASE_COL]:
-        key = str(case_id)
-        if key not in case_index_map:
-            case_index_map[key] = next_index
-            next_index += 1
+    # Vectorised case_index: rank cases by first occurrence (first row in sorted order).
+    # drop_duplicates keeps the first row per case, giving a contiguous 0-based rank.
+    first_occ = sorted_df[CASE_COL].astype(str).drop_duplicates()
+    case_index_map: dict[str, int] = {cid: i for i, cid in enumerate(first_occ)}
+
+    # Map case_index onto the full (sorted) frame vectorially.
+    sorted_df = sorted_df.assign(
+        _case_id_str=sorted_df[CASE_COL].astype(str),
+        _case_index=sorted_df[CASE_COL].astype(str).map(case_index_map),
+    )
 
     activities = sorted(df[ACTIVITY_COL].dropna().unique().tolist(), key=str)
     resources: list[str] = []
@@ -205,20 +217,40 @@ def get_dotted_chart(df: pd.DataFrame, limit: int = 10000) -> dict:
             key=str,
         )
 
-    events = []
-    for _, row in sorted_df.head(limit).iterrows():
-        case_id = str(row[CASE_COL])
-        resource_val = None
-        if has_resource:
-            r = row[RESOURCE_COL]
-            resource_val = str(r) if r is not None and not pd.isna(r) else None
-        events.append({
-            "timestamp": pd.Timestamp(row[TIMESTAMP_COL]).isoformat(),
-            "case_id": case_id,
-            "activity": str(row[ACTIVITY_COL]),
-            "resource": resource_val,
-            "case_index": case_index_map[case_id],
-        })
+    head = sorted_df.head(limit)
+
+    # Produce isoformat strings (e.g. "2013-11-07T08:18:29+00:00") vectorially.
+    # strftime %z gives "+0000"; insert colon to match pd.Timestamp.isoformat() output.
+    _ts_raw = head[TIMESTAMP_COL].dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+    timestamps = [s[:-2] + ":" + s[-2:] if len(s) > 6 and s[-5] in "+-" else s
+                  for s in _ts_raw]
+    case_ids = head["_case_id_str"].tolist()
+    act_vals = head[ACTIVITY_COL].astype(str).tolist()
+    case_idxs = head["_case_index"].tolist()
+
+    if has_resource:
+        raw_resources = head[RESOURCE_COL].tolist()
+        events = [
+            {
+                "timestamp": ts,
+                "case_id": cid,
+                "activity": act,
+                "resource": None if (r != r or r is None) else str(r),  # NaN via nan!=nan
+                "case_index": int(ci),
+            }
+            for ts, cid, act, r, ci in zip(timestamps, case_ids, act_vals, raw_resources, case_idxs)
+        ]
+    else:
+        events = [
+            {
+                "timestamp": ts,
+                "case_id": cid,
+                "activity": act,
+                "resource": None,
+                "case_index": int(ci),
+            }
+            for ts, cid, act, ci in zip(timestamps, case_ids, act_vals, case_idxs)
+        ]
 
     start_time = pd.Timestamp(sorted_df[TIMESTAMP_COL].iloc[0]).isoformat()
     end_time = pd.Timestamp(sorted_df[TIMESTAMP_COL].iloc[-1]).isoformat()

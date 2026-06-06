@@ -72,9 +72,9 @@ def enrich_ocel_with_state_transitions(
         ``method`` — "sa_ocpm_kretzschmann_berti_vanderaalst_2025"
     """
     try:
-        objects_df: pd.DataFrame = ocel.objects.copy()
-        events_df: pd.DataFrame = ocel.events.copy()
-        relations_df: pd.DataFrame = ocel.relations.copy()
+        objects_df: pd.DataFrame = ocel.objects
+        events_df: pd.DataFrame = ocel.events
+        relations_df: pd.DataFrame = ocel.relations
     except Exception as e:
         raise ValueError(f"Not a valid OCEL frame: {e}") from e
 
@@ -120,27 +120,37 @@ def enrich_ocel_with_state_transitions(
     current_state_by_oid: dict[str, str] = {}
 
     if ordering_col is not None and objects_scope[ordering_col].notna().any():
-        # Mode 1: temporal object snapshots — iterate in time order
-        sorted_objs = objects_scope.sort_values(ordering_col)
-        for _, row in sorted_objs.iterrows():
-            oid = str(row[oid_col])
-            otype = str(row[type_col])
-            new_state = row[state_column]
-            if pd.isna(new_state):
-                continue
-            new_state_str = str(new_state)
-            prev = current_state_by_oid.get(oid)
-            if prev != new_state_str:
-                distinct_states.setdefault(otype, set()).add(new_state_str)
-                state_transitions.append({
-                    "oid": oid,
-                    "object_type": otype,
-                    "from_state": prev,
-                    "to_state": new_state_str,
-                    "timestamp": pd.to_datetime(row[ordering_col]),
-                    "activity": f"{otype}::state→{new_state_str}",
-                })
-                current_state_by_oid[oid] = new_state_str
+        # Mode 1: temporal object snapshots — vectorised transition detection
+        sorted_objs = objects_scope.dropna(subset=[state_column]).sort_values(
+            [ordering_col, oid_col]
+        )
+        # Convert oid/type to str once
+        sorted_objs = sorted_objs.assign(
+            _oid=sorted_objs[oid_col].astype(str),
+            _otype=sorted_objs[type_col].astype(str),
+            _state=sorted_objs[state_column].astype(str),
+        )
+        # Previous state within each object's history
+        sorted_objs = sorted_objs.assign(
+            _prev_state=sorted_objs.groupby("_oid")["_state"].shift(1)
+        )
+        # Keep only rows where state actually changed (or is the first snapshot)
+        changed = sorted_objs[sorted_objs["_state"] != sorted_objs["_prev_state"]]
+        for _, row in changed.iterrows():
+            oid = row["_oid"]
+            otype = row["_otype"]
+            new_state_str = row["_state"]
+            prev = None if pd.isna(row["_prev_state"]) else row["_prev_state"]
+            distinct_states.setdefault(otype, set()).add(new_state_str)
+            state_transitions.append({
+                "oid": oid,
+                "object_type": otype,
+                "from_state": prev,
+                "to_state": new_state_str,
+                "timestamp": pd.to_datetime(row[ordering_col]),
+                "activity": f"{otype}::state→{new_state_str}",
+            })
+            current_state_by_oid[oid] = new_state_str
     else:
         # Mode 2: object rows are terminal snapshots, so derive
         # "initial state" transitions at the first event of each
@@ -222,25 +232,39 @@ def enrich_ocel_with_state_transitions(
         # We don't mutate the OCEL frame in place here — instead we
         # return the annotations keyed by (event_id, object_type) so
         # callers can choose to materialize them as new columns.
+
+        # Prebuild O(E) lookup: eid (str) → timestamp
+        eid_to_ts: dict[str, Any] = {
+            str(eid_val): ts_val
+            for eid_val, ts_val in zip(
+                events_df[eid_col], events_df[ts_col]
+            )
+        }
+        # Prebuild O(O) lookup: oid (str) → object type (str)
+        oid_to_type: dict[str, str] = {
+            str(oid_val): str(type_val)
+            for oid_val, type_val in zip(
+                objects_df[oid_col], objects_df[type_col]
+            )
+        }
+
         event_state_annotations: dict[str, dict[str, str]] = {}
         for _, row in relations_df.iterrows():
             eid = str(row[rel_eid_col])
             oid = str(row[rel_oid_col])
-            # Look up the event timestamp
-            try:
-                ev_row = events_df[events_df[eid_col].astype(str) == eid].iloc[0]
-            except IndexError:
+            # O(1) timestamp lookup (was O(E) linear scan per relation)
+            ts_val = eid_to_ts.get(eid)
+            if ts_val is None:
                 continue
-            state = _state_at(oid, ev_row[ts_col])
+            state = _state_at(oid, ts_val)
             if state is None:
                 continue
             otype = None
             if rel_type_col and rel_type_col in relations_df.columns:
                 otype = str(row[rel_type_col])
             if otype is None:
-                obj_row = objects_df[objects_df[oid_col].astype(str) == oid]
-                if not obj_row.empty:
-                    otype = str(obj_row.iloc[0][type_col])
+                # O(1) object-type lookup (was O(O) linear scan per relation)
+                otype = oid_to_type.get(oid)
             if otype is None:
                 continue
             event_state_annotations.setdefault(eid, {})[f"state_{otype}"] = state

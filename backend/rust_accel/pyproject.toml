@@ -5,6 +5,10 @@ build-backend = "maturin"
 [project]
 name = "flowminer-accel"
 requires-python = ">=3.10"
+# Version is sourced from Cargo.toml ([package].version). Declaring it dynamic
+# keeps the two in sync and satisfies maturin >=1.4, which otherwise refuses to
+# build without an explicit project.version (would also break the Docker build).
+dynamic = ["version"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

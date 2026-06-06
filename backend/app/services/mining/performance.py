@@ -21,6 +21,7 @@ from app.services.rust_accel import (
     compute_case_overlap as _rs_case_overlap,
     compute_rework as _rs_rework,
     compute_edge_stats as _rs_edge_stats,
+    compute_batches as _rs_batches,
 )
 
 logger = logging.getLogger(__name__)
@@ -202,60 +203,57 @@ def get_batches(df: pd.DataFrame) -> dict:
         dict with key: batches (list of {activity, resource, batch_type,
         num_cases, start_time, end_time})
     """
-    import pm4py
-
     if RESOURCE_COL not in df.columns:
         return {"batches": []}
 
+    # Rust fast path (also fixes the previous pm4py-output mis-parse, which made
+    # this endpoint always return []). Faithful to pm4py's batch detection for
+    # single-timestamp logs.
+    rs = _rs_batches(df)
+    if rs is not None:
+        batches = []
+        for b in rs:
+            start_time = pd.Timestamp(b["start_ns"], tz="UTC").isoformat()
+            end_time = pd.Timestamp(b["end_ns"], tz="UTC").isoformat()
+            batches.append({
+                "activity": b["activity"],
+                "resource": b["resource"],
+                "batch_type": b["batch_type"],
+                "num_cases": int(b["num_cases"]),
+                "start_time": start_time,
+                "end_time": end_time,
+            })
+        return {"batches": batches}
+
+    # Pure-Python fallback via pm4py (only when Rust is unavailable).
+    import pm4py
     try:
         raw = pm4py.discover_batches(
-            df,
-            activity_key=ACTIVITY_COL,
-            timestamp_key=TIMESTAMP_COL,
-            case_id_key=CASE_COL,
-            resource_key=RESOURCE_COL,
+            df, activity_key=ACTIVITY_COL, timestamp_key=TIMESTAMP_COL,
+            case_id_key=CASE_COL, resource_key=RESOURCE_COL,
         )
     except Exception:
         return {"batches": []}
 
     batches = []
     for item in raw:
-        # pm4py returns ((activity, resource, batch_type), case_list) tuples
-        if isinstance(item, (tuple, list)) and len(item) == 2:
-            key, case_ids = item
-            if isinstance(key, (tuple, list)) and len(key) >= 3:
-                activity, resource, batch_type = str(key[0]), str(key[1]), str(key[2])
-            else:
-                continue
-        else:
+        # pm4py returns ((activity, resource), count, {batch_type: [batches]})
+        if not (isinstance(item, (tuple, list)) and len(item) == 3):
             continue
-
-        num_cases = len(case_ids) if case_ids else 0
-
-        # Try to get time range from the filtered dataframe
-        start_time = end_time = None
-        try:
-            mask = (
-                (df[ACTIVITY_COL] == key[0])
-                & (df[RESOURCE_COL] == key[1])
-                & (df[CASE_COL].isin(case_ids))
-            )
-            sub = df[mask][TIMESTAMP_COL].dropna()
-            if not sub.empty:
-                start_time = pd.Timestamp(sub.min()).isoformat()
-                end_time = pd.Timestamp(sub.max()).isoformat()
-        except Exception:
-            pass
-
-        batches.append({
-            "activity": activity,
-            "resource": resource,
-            "batch_type": batch_type,
-            "num_cases": num_cases,
-            "start_time": start_time,
-            "end_time": end_time,
-        })
-
+        (activity, resource), _count, by_type = item
+        for batch_type, blist in (by_type or {}).items():
+            for b in blist:
+                events = b[2] if len(b) >= 3 else []
+                cases = {e[2] for e in events}
+                batches.append({
+                    "activity": str(activity),
+                    "resource": str(resource),
+                    "batch_type": str(batch_type),
+                    "num_cases": len(cases),
+                    "start_time": pd.Timestamp(b[0], unit="s", tz="UTC").isoformat(),
+                    "end_time": pd.Timestamp(b[1], unit="s", tz="UTC").isoformat(),
+                })
+    batches.sort(key=lambda x: -x["num_cases"])
     return {"batches": batches}
 
 

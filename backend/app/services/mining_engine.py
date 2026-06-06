@@ -4,6 +4,9 @@ Provides a unified interface for loading event logs and running analyses.
 """
 
 import logging
+import os
+import threading
+from collections import OrderedDict
 from typing import Optional
 
 import pandas as pd
@@ -34,6 +37,18 @@ from app.services.mining import performance as _performance
 from app.services.mining import simulation as _simulation
 
 logger = logging.getLogger(__name__)
+
+# ── Parsed-DataFrame cache ───────────────────────────────────────────
+# Every mining endpoint funnels through load_event_log(); the Redis result
+# cache only memoizes (analysis, params) outputs, so distinct analyses on the
+# same log each re-parsed the CSV/XES from disk. This in-process LRU keeps the
+# last few *normalized* DataFrames (keyed by file path + mtime + column mapping)
+# so a dashboard that runs several analyses on one log parses it once. Cache
+# hits return a shallow copy (deep=False), which is cheap and safe against the
+# common "add a temp column" pattern while still avoiding the re-parse.
+_DF_CACHE: "OrderedDict[tuple, pd.DataFrame]" = OrderedDict()
+_DF_CACHE_MAX = 2  # bounded so steady memory stays small (≈2 logs)
+_DF_CACHE_LOCK = threading.Lock()
 
 
 class MiningEngine:
@@ -68,9 +83,25 @@ class MiningEngine:
         """
         Load and normalize an event log file into a standardized DataFrame.
 
-        Delegates to IngestionService.load_event_log.
+        Delegates to IngestionService.load_event_log, with an mtime-keyed
+        in-process LRU so repeated analyses of the same log don't re-parse it.
         """
-        return self.ingestion_service.load_event_log(
+        try:
+            mtime = os.path.getmtime(file_path)
+        except OSError:
+            mtime = None  # un-stat-able path → don't cache, just parse
+
+        key = (file_path, mtime, case_id_col, activity_col,
+               timestamp_col, resource_col, cost_col)
+
+        if mtime is not None:
+            with _DF_CACHE_LOCK:
+                cached = _DF_CACHE.get(key)
+                if cached is not None:
+                    _DF_CACHE.move_to_end(key)
+                    return cached.copy(deep=False)
+
+        df = self.ingestion_service.load_event_log(
             file_path=file_path,
             case_id_col=case_id_col,
             activity_col=activity_col,
@@ -78,6 +109,15 @@ class MiningEngine:
             resource_col=resource_col,
             cost_col=cost_col,
         )
+
+        if mtime is not None:
+            with _DF_CACHE_LOCK:
+                _DF_CACHE[key] = df
+                _DF_CACHE.move_to_end(key)
+                while len(_DF_CACHE) > _DF_CACHE_MAX:
+                    _DF_CACHE.popitem(last=False)
+            return df.copy(deep=False)
+        return df
 
     def run_discovery(
         self, df: pd.DataFrame, algorithm: str = "dfg", parameters: dict = None

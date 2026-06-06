@@ -382,19 +382,30 @@ class IngestionService:
 
         ties_fixed = 0
         inversions_fixed = 0
+        one_ms = pd.Timedelta(milliseconds=1)
 
-        # Process per case
+        # Process per case.
+        #
+        # The repair is intrinsically sequential within a case: the tie pass
+        # compares each event against the *already-bumped* previous event (so a
+        # +1 ms bump can cascade into a later distinct timestamp, and runs of
+        # equal timestamps end up alternating +0/+1 ms), and the inversion pass
+        # then swaps adjacent out-of-order pairs in a single forward scan. We
+        # therefore keep the exact two-pass list logic, but operate on the
+        # __ts__ Series alone (not full sub-frames) and write every repaired
+        # value back with a single vectorised assignment instead of ~1 row-by-row
+        # df.at scalar writes.
         rows_total = len(df)
-        for case_id, group in df.groupby(case_id_col, sort=False):
-            idx = group.index.tolist()
-            timestamps = group["__ts__"].tolist()
+        repaired_chunks = []  # list of (index_array, repaired_values_list)
+        for _, ts_group in df["__ts__"].groupby(df[case_id_col], sort=False):
+            timestamps = ts_group.tolist()
 
             # Fix ties: spread identical consecutive timestamps 1 ms apart
             for i in range(1, len(timestamps)):
                 if pd.isna(timestamps[i]) or pd.isna(timestamps[i - 1]):
                     continue
                 if timestamps[i] == timestamps[i - 1]:
-                    timestamps[i] = timestamps[i] + pd.Timedelta(milliseconds=1)
+                    timestamps[i] = timestamps[i] + one_ms
                     ties_fixed += 1
 
             # Fix inversions: if ts[i] < ts[i-1], swap
@@ -406,8 +417,16 @@ class IngestionService:
                     inversions_fixed += 1
 
             if not dry_run:
-                for j, row_idx in enumerate(idx):
-                    df.at[row_idx, "__ts__"] = timestamps[j]
+                repaired_chunks.append((ts_group.index, timestamps))
+
+        if not dry_run and repaired_chunks:
+            # Single vectorised writeback: build one aligned Series spanning all
+            # cases and assign it in one shot.
+            all_index = repaired_chunks[0][0].append(
+                [c[0] for c in repaired_chunks[1:]]
+            ) if len(repaired_chunks) > 1 else repaired_chunks[0][0]
+            all_values = [v for _, vals in repaired_chunks for v in vals]
+            df["__ts__"] = pd.Series(all_values, index=all_index).reindex(df.index)
 
         # Count extreme outliers (> 100 years from median) — informational only
         valid_ts = df["__ts__"].dropna()

@@ -55,9 +55,8 @@ def generate_insights(engine, df: pd.DataFrame) -> dict:
 
     # Case durations — computed early so downstream blocks can reference it
     try:
-        case_durations = df.groupby(CASE_COL)[TIMESTAMP_COL].apply(
-            lambda x: (x.max() - x.min()).total_seconds()
-        )
+        _cd_grp = df.groupby(CASE_COL)[TIMESTAMP_COL]
+        case_durations = (_cd_grp.max() - _cd_grp.min()).dt.total_seconds()
         avg_case_duration = float(case_durations.mean()) if len(case_durations) > 0 else 0.0
     except Exception:
         case_durations = pd.Series(dtype=float)
@@ -435,8 +434,21 @@ def generate_insights(engine, df: pd.DataFrame) -> dict:
                 cases_with_rework_set = set(case_act_counts[case_act_counts['cnt'] > 1][CASE_COL].unique())
 
             if cases_with_rework_set:
-                # Primary resource per case = most frequent resource in that case
-                case_resource = df.groupby(CASE_COL)[RESOURCE_COL].agg(lambda x: x.mode().iloc[0] if len(x.mode()) > 0 else x.iloc[0])
+                # Primary resource per case = most frequent resource (mode) in that case.
+                # Vectorized: count (case, resource) pairs, sort by count desc then resource
+                # asc (alphabetic tie-break mirrors pandas mode().iloc[0] behaviour).
+                _res_counts = (
+                    df.groupby([CASE_COL, RESOURCE_COL], sort=False)
+                    .size()
+                    .rename('_cnt')
+                    .reset_index()
+                    .sort_values([CASE_COL, '_cnt', RESOURCE_COL], ascending=[True, False, True])
+                )
+                case_resource = (
+                    _res_counts
+                    .drop_duplicates(subset=CASE_COL, keep='first')
+                    .set_index(CASE_COL)[RESOURCE_COL]
+                )
                 resource_cases = case_resource.groupby(case_resource).apply(lambda g: g.index.tolist())
                 worst_resource = None
                 worst_ratio = 0
@@ -709,15 +721,19 @@ def generate_insights(engine, df: pd.DataFrame) -> dict:
     try:
         ts = pd.to_datetime(df[TIMESTAMP_COL], errors='coerce')
         if ts.notna().sum() > 0:
-            sorted_by_case = df.assign(_ts=ts).sort_values([CASE_COL, '_ts'])
-            per_case_ts = sorted_by_case.groupby(CASE_COL)['_ts']
-            # A "tie" within a case: two events at the same timestamp
-            ties = int(per_case_ts.apply(lambda s: (s.diff() == pd.Timedelta(0)).sum()).sum())
-            # Inversions shouldn't exist after sort; detect on the
-            # ORIGINAL order instead (useful when the user uploaded
-            # a log that isn't already sorted).
-            original_order = df.assign(_ts=ts).groupby(CASE_COL)['_ts']
-            inversions = int(original_order.apply(lambda s: (s.diff() < pd.Timedelta(0)).sum()).sum())
+            # Build a minimal frame with only the two columns we need (avoids
+            # copying the full wide DataFrame twice via df.assign).
+            _slim = df[[CASE_COL, TIMESTAMP_COL]].copy()
+            _slim['_ts'] = ts
+
+            # Ties: two events in the same case at the same timestamp.
+            # Sort once, then use vectorised groupby().diff() — no per-group lambda.
+            _sorted = _slim.sort_values([CASE_COL, '_ts'])
+            ties = int((_sorted.groupby(CASE_COL)['_ts'].diff() == pd.Timedelta(0)).sum())
+
+            # Inversions: detect on the ORIGINAL row order (the user may have
+            # uploaded an unsorted log). Again, vectorised groupby().diff().
+            inversions = int((_slim.groupby(CASE_COL)['_ts'].diff() < pd.Timedelta(0)).sum())
             if ties + inversions > 0 and (ties + inversions) / max(len(ts), 1) > 0.01:
                 pct = (ties + inversions) / max(len(ts), 1) * 100
                 insights.append({

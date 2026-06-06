@@ -42,19 +42,18 @@ class BottleneckService:
         # Rust fast path (replaces iterrows bottleneck)
         rs_result = _rs_bottlenecks(df)
         if rs_result is not None:
-            # Compute DBSM on top of Rust result if not already present
+            # Compute DBSM on top of Rust result if not already present.
+            # The Rust bottlenecks already carry avg/median/frequency AND each
+            # activity's p95_duration, so DBSM needs no per-event `valid` frame
+            # — this avoids two full-log sorts/copies (~hundreds of MB) on every
+            # bottleneck request.
             if not rs_result.get("dbsm_scores"):
                 try:
-                    sorted_df = df.sort_values([CASE_COL, TIMESTAMP_COL]).copy()
-                    sorted_df["_next_ts"] = sorted_df.groupby(CASE_COL)[TIMESTAMP_COL].shift(-1)
-                    sorted_df["_next_activity"] = sorted_df.groupby(CASE_COL)[ACTIVITY_COL].shift(-1)
-                    sorted_df["_duration_seconds"] = (
-                        sorted_df["_next_ts"] - sorted_df[TIMESTAMP_COL]
-                    ).dt.total_seconds()
-                    valid = sorted_df.dropna(subset=["_duration_seconds"]).copy()
-                    activity_stats = self._compute_activity_stats(valid)
+                    activity_stats = rs_result.get("bottlenecks", [])
                     waiting_times = rs_result.get("waiting_times", [])
-                    rs_result["dbsm_scores"] = self.compute_dbsm_scores(valid, activity_stats, waiting_times)
+                    rs_result["dbsm_scores"] = self.compute_dbsm_scores(
+                        None, activity_stats, waiting_times
+                    )
                 except Exception as e:
                     logger.warning(f"DBSM computation on Rust result failed: {e}")
                     rs_result["dbsm_scores"] = []
@@ -130,11 +129,18 @@ class BottleneckService:
         # Build a lookup from activity -> activity_stats dict (for p95/median)
         stats_by_activity: dict = {s["activity"]: s for s in activity_stats}
 
-        # Compute p95 duration per activity from raw df
+        # p95 duration per activity. Prefer the value the Rust bottleneck pass
+        # already computed (carried on each stat dict) so we avoid re-deriving
+        # per-event durations; fall back to the raw df for the pure-Python path.
         p95_by_activity: dict = {}
-        grouped = df.groupby(ACTIVITY_COL)["_duration_seconds"]
-        for activity, durations in grouped:
-            p95_by_activity[str(activity)] = float(np.percentile(durations.values, 95))
+        if activity_stats and all("p95_duration" in s for s in activity_stats):
+            p95_by_activity = {
+                str(s["activity"]): float(s["p95_duration"]) for s in activity_stats
+            }
+        elif df is not None:
+            grouped = df.groupby(ACTIVITY_COL)["_duration_seconds"]
+            for activity, durations in grouped:
+                p95_by_activity[str(activity)] = float(np.percentile(durations.values, 95))
 
         # Build waiting-time lookup: activity -> avg wait as source
         # Use (activity_avg_wait / overall_avg_wait) * 50, capped at 100

@@ -248,9 +248,9 @@ def _apply_filters(df: pd.DataFrame, filters: ProcessFilter | None) -> pd.DataFr
 
     # Case duration filter
     if filters.duration_min is not None or filters.duration_max is not None:
-        case_dur = filtered.groupby(CASE_COL)[TIMESTAMP_COL].apply(
-            lambda x: (x.max() - x.min()).total_seconds()
-        )
+        # Vectorized: one grouped min/max instead of a per-case apply(lambda).
+        mm = filtered.groupby(CASE_COL)[TIMESTAMP_COL].agg(["min", "max"])
+        case_dur = (mm["max"] - mm["min"]).dt.total_seconds()
         keep = case_dur.index
         if filters.duration_min is not None:
             keep = case_dur[case_dur >= filters.duration_min].index
@@ -303,11 +303,15 @@ def _apply_filters(df: pd.DataFrame, filters: ProcessFilter | None) -> pd.DataFr
             if col not in filtered.columns:
                 continue
             vals = set(attr_filter.values)
-            case_vals = filtered.groupby(CASE_COL)[col].apply(lambda x: set(x.astype(str)))
-            if attr_filter.exclude:
-                keep = case_vals[case_vals.apply(lambda s: s.isdisjoint(vals))].index
-            else:
-                keep = case_vals[case_vals.apply(lambda s: bool(s & vals))].index
+            # Vectorized membership instead of building a Python set per case:
+            # a case matches if ANY of its rows has col in vals.
+            matched = pd.Index(
+                filtered.loc[filtered[col].astype(str).isin(vals), CASE_COL].unique()
+            )
+            if attr_filter.exclude:  # keep cases with NO matching value
+                keep = pd.Index(filtered[CASE_COL].unique()).difference(matched)
+            else:                    # keep cases with a matching value
+                keep = matched
             filtered = filtered[filtered[CASE_COL].isin(keep)]
 
     # Edge-based filters: walk each case's activity sequence in time order

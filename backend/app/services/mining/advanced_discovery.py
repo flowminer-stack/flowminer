@@ -25,6 +25,38 @@ from app.services.rust_accel import (
 
 logger = logging.getLogger(__name__)
 
+# Above this many distinct cases, the unbounded pm4py/sklearn paths
+# (KMeans clustering, ILP miner, correlation mining, feature extraction)
+# become prohibitively slow / memory-hungry. Past the cap we run on a
+# deterministic sample of this many cases instead of the full log.
+# Default behaviour for normal/small logs is completely unchanged.
+_MAX_CASES_FOR_ML = 20000
+
+
+def _sample_cases_if_large(df: pd.DataFrame, fn_name: str) -> pd.DataFrame:
+    """Return ``df`` unchanged unless it has more than ``_MAX_CASES_FOR_ML``
+    distinct cases, in which case return the events for a deterministic
+    sample of the first ``_MAX_CASES_FOR_ML`` cases (by stable order of
+    first appearance) and log a warning.
+
+    The sample is deterministic (no RNG) so repeated runs on the same log
+    yield identical results. Logs at or below the cap are returned as-is,
+    so output is byte-for-byte identical to the previous behaviour.
+    """
+    if CASE_COL not in df.columns:
+        return df
+    n_cases = df[CASE_COL].nunique()
+    if n_cases <= _MAX_CASES_FOR_ML:
+        return df
+    # Stable order of first appearance — deterministic, no shuffling.
+    kept = pd.unique(df[CASE_COL])[:_MAX_CASES_FOR_ML]
+    logger.warning(
+        "%s: log has %d cases (> %d); running on a deterministic sample of "
+        "%d cases. Full-log result is approximate.",
+        fn_name, n_cases, _MAX_CASES_FOR_ML, _MAX_CASES_FOR_ML,
+    )
+    return df[df[CASE_COL].isin(kept)]
+
 
 def cluster_log(df: pd.DataFrame, n_clusters: int = 3) -> dict:
     """
@@ -39,6 +71,8 @@ def cluster_log(df: pd.DataFrame, n_clusters: int = 3) -> dict:
     """
     from sklearn.cluster import KMeans
     import pm4py
+
+    df = _sample_cases_if_large(df, "cluster_log")
 
     clusterer = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     clustered_logs = pm4py.cluster_log(
@@ -111,13 +145,15 @@ def cluster_log_dbscan(df: pd.DataFrame, eps: float = 0.5, min_samples: int = 5)
     if not cases or len(activities) < 2:
         return {"clusters": [], "noise_cases": 0, "method": "dbscan"}
 
-    X = np.zeros((len(cases), len(activities)))
-    for i, case_id in enumerate(cases):
-        case_df = sorted_df[sorted_df[CASE_COL] == case_id]
-        for act in case_df[ACTIVITY_COL]:
-            j = act_to_idx.get(act)
-            if j is not None:
-                X[i, j] += 1
+    # (case x activity) occurrence-count matrix via a single groupby pivot.
+    # The previous per-case `sorted_df[sorted_df[CASE]==case_id]` scan was
+    # O(cases x events) — ~400B ops on a 251k-case log; this is one O(events) pass.
+    counts = (
+        sorted_df.groupby([CASE_COL, ACTIVITY_COL]).size()
+        .unstack(fill_value=0)
+        .reindex(index=cases, columns=activities, fill_value=0)
+    )
+    X = counts.to_numpy(dtype=float)
 
     # Normalize rows (so long cases don't dominate)
     row_sums = X.sum(axis=1, keepdims=True)
@@ -165,6 +201,8 @@ def run_discovery_ilp(df: pd.DataFrame) -> dict:
     logs with complex concurrency, at the cost of higher runtime.
     """
     import pm4py
+
+    df = _sample_cases_if_large(df, "run_discovery_ilp")
 
     try:
         net, im, fm = pm4py.discover_petri_net_ilp(
@@ -357,6 +395,10 @@ def run_correlation_mining(df: pd.DataFrame) -> dict:
     """
     import pm4py
 
+    # Only samples when an explicit case column is present and exceeds the
+    # cap; for genuinely case-less logs the helper returns df unchanged.
+    df = _sample_cases_if_large(df, "run_correlation_mining")
+
     try:
         # The correlation miner is a separate pm4py submodule
         from pm4py.algo.discovery.correlation_mining import algorithm as cm
@@ -390,6 +432,8 @@ def get_features(df: pd.DataFrame) -> dict:
         dict with keys: columns (list[str]), rows (list[dict]), total_cases (int)
     """
     import pm4py
+
+    df = _sample_cases_if_large(df, "get_features")
 
     features_df = pm4py.extract_features_dataframe(
         df,

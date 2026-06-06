@@ -387,6 +387,201 @@ def compute_case_durations(df: pd.DataFrame) -> dict | None:
     return dict(_rs.compute_case_durations(p["case_codes"], p["ts_ns"]))
 
 
+def compute_handover_network(df: pd.DataFrame) -> dict | None:
+    """Resource handover-of-work network with raw counts.
+
+    Returns the same shape as ``org_mining.get_social_network()`` —
+    ``{"nodes", "edges", "total_resources", "total_handovers"}`` — or
+    ``None`` if Rust is unavailable or no resource column is present.
+    """
+    if not RUST_AVAILABLE:
+        return None
+    resource_col = "org:resource"
+    if resource_col not in df.columns:
+        return None
+    # NaT timestamps encode to a sentinel that mis-orders events; the pandas
+    # path sorts NaT last. Defer to it so handover ordering stays consistent.
+    if df[TIMESTAMP_COL].isna().any():
+        return None
+    p = _encode(df)
+    res_cat = df[resource_col].astype("category")
+    res_codes = res_cat.cat.codes.values.astype(np.int32)  # -1 for NaN
+    res_labels = res_cat.cat.categories.tolist()
+    result = _rs.compute_handover_network(
+        p["case_codes"], res_codes, res_labels, p["ts_ns"],
+    )
+    return {
+        "nodes": list(result["nodes"]),
+        "edges": list(result["edges"]),
+        "total_resources": int(result["total_resources"]),
+        "total_handovers": int(result["total_handovers"]),
+    }
+
+
+def compute_log_statistics(df: pd.DataFrame) -> dict | None:
+    """Single-pass whole-log statistics primitives.
+
+    Returns the heavy per-case reductions (start/end activity counts,
+    activity frequencies, case-duration stats, per-case start timestamps)
+    that ``StatisticsService`` shapes into the final response, or ``None``
+    if Rust is unavailable.
+    """
+    if not RUST_AVAILABLE:
+        return None
+    # Null activities encode to category code -1, which would index out of
+    # bounds in the native function; NaT timestamps encode to a sentinel that
+    # overflows the duration math. The pandas path handles both (dropna /
+    # groupby skips NaT), so defer to it rather than guess — these are rare.
+    if df[TIMESTAMP_COL].isna().any():
+        return None
+    p = _encode(df)
+    if (p["act_codes"] < 0).any():
+        return None
+    result = _rs.compute_log_statistics(
+        p["case_codes"], p["act_codes"], p["act_labels"], p["ts_ns"],
+    )
+    return {
+        "start_activities": dict(result["start_activities"]),
+        "end_activities": dict(result["end_activities"]),
+        "activity_frequencies": dict(result["activity_frequencies"]),
+        "case_count": int(result["case_count"]),
+        "event_count": int(result["event_count"]),
+        "duration_avg": float(result["duration_avg"]),
+        "duration_median": float(result["duration_median"]),
+        "duration_min": float(result["duration_min"]),
+        "duration_max": float(result["duration_max"]),
+        "avg_events_per_case": float(result["avg_events_per_case"]),
+        "case_start_ts": list(result["case_start_ts"]),
+    }
+
+
+def compute_prefix_features(df: pd.DataFrame):
+    """Per-(case, prefix-length) feature rows for predictive monitoring.
+
+    Drop-in for ``predictive._extract_prefix_features``: returns
+    ``(feats_df, sorted_activities)`` with the same columns, or ``None`` if
+    Rust is unavailable. One native pass replaces the Python triple loop +
+    ~1.3M-dict materialisation; the DataFrame is built from columnar numpy
+    arrays so there are no per-row Python objects.
+    """
+    if not RUST_AVAILABLE:
+        return None
+    case_cat = df[CASE_COL].astype("category")
+    p = _encode(df)
+    r = _rs.compute_prefix_features(p["case_codes"], p["act_codes"], p["ts_ns"])
+    act_index = pd.Index(p["act_labels"])
+    feats = pd.DataFrame({
+        "case_id": pd.Categorical.from_codes(
+            np.asarray(r["case_code"]), categories=case_cat.cat.categories
+        ).astype(str),
+        "prefix_length": np.asarray(r["prefix_length"]),
+        "elapsed_seconds": np.asarray(r["elapsed_seconds"]),
+        "remaining_seconds": np.asarray(r["remaining_seconds"]),
+        "total_seconds": np.asarray(r["total_seconds"]),
+        "unique_activities_so_far": np.asarray(r["unique_activities_so_far"]),
+        "rework_count": np.asarray(r["rework_count"]),
+        "hour_of_day": np.asarray(r["hour_of_day"]),
+        "day_of_week": np.asarray(r["day_of_week"]),
+        "last_activity": pd.Categorical.from_codes(
+            np.asarray(r["last_act_code"]), categories=act_index
+        ).astype(str),
+        "is_last_prefix": np.asarray(r["is_last_prefix"]),
+    })
+    activities = sorted(str(p["act_labels"][c]) for c in r["present_acts"])
+    return feats, activities
+
+
+def compute_batches(df: pd.DataFrame, merge_distance: int = 15 * 60,
+                    min_batch_size: int = 2):
+    """Batch detection (Martin et al. 2015) in Rust, for single-timestamp logs.
+
+    Returns a list of batch dicts (activity, resource, batch_type, num_cases,
+    num_events, case_codes, start_ns, end_ns) or ``None`` if Rust is
+    unavailable / no resource column. Faithful to pm4py's ``discover_batches``
+    detection for logs where start == complete timestamp (the FlowMiner case).
+    """
+    if not RUST_AVAILABLE:
+        return None
+    resource_col = "org:resource"
+    if resource_col not in df.columns:
+        return None
+    p = _encode(df)
+    res_cat = df[resource_col].astype("category")
+    res_codes = res_cat.cat.codes.values.astype(np.int32)  # -1 for NaN
+    res_labels = res_cat.cat.categories.tolist()
+    batches = list(_rs.compute_batches(
+        p["case_codes"], p["act_codes"], p["act_labels"],
+        res_codes, res_labels, p["ts_ns"],
+        float(merge_distance), int(min_batch_size),
+    ))
+    # map case codes back to labels
+    case_cats = df[CASE_COL].astype("category").cat.categories
+    for b in batches:
+        b["case_ids"] = [str(case_cats[c]) for c in b.pop("case_codes")]
+    return batches
+
+
+def discover_inductive_tree(df: pd.DataFrame):
+    """Inductive-Miner process tree (pm4py IM / UVCL semantics), in Rust.
+
+    Returns the process tree as nested Python objects — an activity leaf is its
+    label (str), a tau leaf is ``None``, and an operator node is
+    ``(symbol, [children])`` with symbol in ``{"->", "X", "+", "*"}`` — or
+    ``None`` if Rust is unavailable.
+
+    Verified language-equivalent (pm4py ``structurally_language_equal``) AND
+    byte-identical (canonical string after fold+tree_sort) to
+    ``pm4py.discover_process_tree_inductive`` on all bundled logs, ~95x faster
+    on BPIC2019. See ``scripts/verify_inductive.py``.
+    """
+    if not RUST_AVAILABLE:
+        return None
+    p = _encode(df)
+    return _rs.discover_inductive_tree(
+        p["case_codes"], p["act_codes"], p["act_labels"], p["ts_ns"],
+    )
+
+
+def discover_inductive_net(df: pd.DataFrame):
+    """Inductive-Miner Petri net via the Rust IM, or ``None`` if unavailable.
+
+    Builds the IM process tree in Rust, then runs pm4py's OWN
+    ``fold`` → ``tree_sort`` → ``convert_to_petri_net`` pipeline (the exact
+    steps ``pm4py.discover_petri_net_inductive`` performs after discovering the
+    tree). Because the Rust tree is byte-identical to pm4py's, the resulting
+    ``(net, initial_marking, final_marking)`` matches pm4py's — only the
+    (43s → 0.45s on BPIC2019) tree-discovery step is replaced. IM semantics
+    only (noise_threshold == 0); callers keep pm4py for the IMf path.
+    """
+    if not RUST_AVAILABLE:
+        return None
+    raw = discover_inductive_tree(df)
+    if raw is None:
+        return None
+    import pm4py
+    from pm4py.objects.process_tree.obj import Operator, ProcessTree
+    from pm4py.objects.process_tree.utils.generic import fold, tree_sort
+
+    ops = {"->": Operator.SEQUENCE, "X": Operator.XOR, "+": Operator.PARALLEL, "*": Operator.LOOP}
+
+    def _build(node):
+        if node is None:
+            return ProcessTree()  # tau / silent
+        if isinstance(node, str):
+            return ProcessTree(label=node)
+        sym, children = node
+        t = ProcessTree(operator=ops[sym])
+        for c in children:
+            ch = _build(c)
+            ch.parent = t
+            t.children.append(ch)
+        return t
+
+    tree = fold(_build(raw))
+    tree_sort(tree)
+    return pm4py.convert_to_petri_net(tree)
+
+
 def parse_xes(file_path: str) -> pd.DataFrame | None:
     """Parse a XES file using Rust's quick-xml.
 

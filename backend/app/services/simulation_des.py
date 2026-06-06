@@ -104,7 +104,13 @@ class DESSimulator:
         # Ensure timestamps are datetime
         df[ts_col] = pd.to_datetime(df[ts_col], utc=True, errors="coerce")
         df = df.dropna(subset=[ts_col])
-        df = df.sort_values([case_col, ts_col])
+        # Stable sort by [case, ts] establishes a single deterministic event
+        # order. The previous implementation re-sorted each case group by
+        # timestamp alone with the (unstable) default quicksort, making the
+        # mined edge counts / durations depend on input row order whenever
+        # timestamps tied. A single stable sort fixes that and lets every
+        # downstream pass reuse one ordering.
+        df = df.sort_values([case_col, ts_col], kind="stable")
 
         # ── Arrival distribution ──────────────────────────────────────
         # Inter-arrival time between consecutive case *starts*
@@ -130,18 +136,34 @@ class DESSimulator:
             "mean_inter_arrival_s": mean_iat,
         }
 
+        # ── Vectorised within-case shifts (single pass) ───────────────
+        # The DataFrame is already stable-sorted by [case, ts]; grouping with
+        # sort=False preserves that order. We compute the next event's
+        # timestamp/activity per case once and reuse it for durations,
+        # directly-follows edges, and first/last activities — replacing three
+        # separate per-group sort+loop passes.
+        case_groups = df.groupby(case_col, sort=False)
+        next_ts = case_groups[ts_col].shift(-1)
+        next_act = case_groups[act_col].shift(-1)
+        # Inter-event durations (NaN at case boundaries via the shift).
+        durations = (next_ts - df[ts_col]).dt.total_seconds()
+
+        src_act = df[act_col]
+        # Rows that have a successor within the same case (i.e. not the last
+        # event of a case) AND a non-negative duration, mirroring the old
+        # `for i in range(len-1): if dur >= 0` guard.
+        edge_mask = next_act.notna()
+        dur_mask = (edge_mask & (durations >= 0)).to_numpy()
+
         # ── Activity durations ────────────────────────────────────────
         activity_durations: dict[str, dict] = {}
-        case_groups = df.groupby(case_col)
         act_dur_map: dict[str, list[float]] = {}
-        for _, grp in case_groups:
-            grp = grp.sort_values(ts_col)
-            activities = grp[act_col].tolist()
-            times = grp[ts_col].tolist()
-            for i in range(len(activities) - 1):
-                dur = (times[i + 1] - times[i]).total_seconds()
-                if dur >= 0:
-                    act_dur_map.setdefault(activities[i], []).append(dur)
+        # Iterate in stable row order so per-activity sample lists and the
+        # key insertion order match the original loop exactly.
+        for act, dur in zip(
+            src_act.to_numpy()[dur_mask], durations.to_numpy()[dur_mask]
+        ):
+            act_dur_map.setdefault(act, []).append(float(dur))
 
         for act, durs in act_dur_map.items():
             if not durs:
@@ -157,15 +179,17 @@ class DESSimulator:
 
         # ── Gateway probabilities ─────────────────────────────────────
         # P(A→B) = freq(A→B) / sum_x(freq(A→x))
+        # Directly-follows edges = (activity, next activity) for every row that
+        # has a successor in the same case. Counted in stable row order so the
+        # edge_counts / out_counts dict iteration order (and thus the
+        # gateway_probabilities key order) matches the original loop.
         edge_counts: dict[tuple[str, str], int] = {}
         out_counts: dict[str, int] = {}
-        for _, grp in case_groups:
-            grp = grp.sort_values(ts_col)
-            acts = grp[act_col].tolist()
-            for i in range(len(acts) - 1):
-                edge = (acts[i], acts[i + 1])
-                edge_counts[edge] = edge_counts.get(edge, 0) + 1
-                out_counts[acts[i]] = out_counts.get(acts[i], 0) + 1
+        edge_idx = edge_mask.to_numpy()
+        for s, t in zip(src_act.to_numpy()[edge_idx], next_act.to_numpy()[edge_idx]):
+            edge = (s, t)
+            edge_counts[edge] = edge_counts.get(edge, 0) + 1
+            out_counts[s] = out_counts.get(s, 0) + 1
 
         gateway_probabilities: dict[str, dict[str, float]] = {}
         for (src, tgt), cnt in edge_counts.items():
@@ -175,21 +199,9 @@ class DESSimulator:
         # ── Resource pools ────────────────────────────────────────────
         resource_pools: dict[str, dict] = {}
         if res_col and res_col in df.columns:
-            res_counts = (
-                df.groupby([act_col, res_col])
-                .size()
-                .reset_index(name="count")
-            )
-            # Primary resource per activity = most frequent
-            act_resource: dict[str, str] = {}
-            for _, row in (
-                res_counts.sort_values("count", ascending=False)
-                .drop_duplicates(subset=[act_col])
-                .iterrows()
-            ):
-                act_resource[row[act_col]] = row[res_col]
-
-            # Build pools: each distinct resource, default capacity 1
+            # Build pools: each distinct resource, default capacity 1.
+            # (The per-activity "primary resource" used by the simulator is
+            # mined separately below as act_resource_map.)
             res_case_counts = df.groupby(res_col)[case_col].nunique()
             for res, ncases in res_case_counts.items():
                 resource_pools[str(res)] = {
@@ -222,14 +234,11 @@ class DESSimulator:
                 act_resource_map[act] = None
 
         # ── Start / sink activities ───────────────────────────────────
-        start_activities: list[str] = []
-        sink_activities: list[str] = []
-        for _, grp in case_groups:
-            grp = grp.sort_values(ts_col)
-            acts = grp[act_col].tolist()
-            if acts:
-                start_activities.append(acts[0])
-                sink_activities.append(acts[-1])
+        # First / last activity per case in the stable [case, ts] order
+        # (groupby sort=False preserves it). first()/last() ignore NaN but
+        # the activity column is non-null here, matching acts[0]/acts[-1].
+        start_activities: list[str] = case_groups[act_col].first().tolist()
+        sink_activities: list[str] = case_groups[act_col].last().tolist()
 
         from collections import Counter
 

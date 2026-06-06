@@ -63,23 +63,34 @@ def anonymize_df(
     if not anonymize_resources and not anonymize_case_ids and not masked_columns:
         return df
 
-    result = df.copy()
+    # Shallow copy: only the pseudonymised columns are reassigned (with fresh
+    # data), so the other columns' blocks are shared read-only with the input
+    # rather than deep-copied. On a 1.6M-row log this avoids copying every
+    # untouched column (hundreds of MB) on every non-admin request.
+    result = df.copy(deep=False)
 
     if anonymize_resources and RESOURCE_COL in result.columns:
-        result[RESOURCE_COL] = result[RESOURCE_COL].astype(str).map(
-            lambda v: _hash_value(v, "resource")
-        )
+        result[RESOURCE_COL] = _hash_column(result[RESOURCE_COL], "resource")
 
     if anonymize_case_ids and CASE_COL in result.columns:
-        result[CASE_COL] = result[CASE_COL].astype(str).map(
-            lambda v: _hash_value(v, "case")
-        )
+        result[CASE_COL] = _hash_column(result[CASE_COL], "case")
 
     if masked_columns:
         for col in masked_columns:
             if col in result.columns:
-                result[col] = result[col].astype(str).map(
-                    lambda v: _hash_value(v, col)
-                )
+                result[col] = _hash_column(result[col], col)
 
     return result
+
+
+def _hash_column(series: pd.Series, label: str) -> pd.Series:
+    """Pseudonymise a column by hashing only its DISTINCT values, then mapping.
+
+    Identical output to a per-row ``_hash_value`` map, but a column with k
+    distinct values costs k SHA-256 calls instead of one per row — a large
+    win for low-cardinality columns (e.g. ~hundreds of resources across
+    millions of events).
+    """
+    s = series.astype(str)
+    mapping = {u: _hash_value(u, label) for u in s.unique()}
+    return s.map(mapping)

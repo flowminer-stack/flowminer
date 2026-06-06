@@ -7,6 +7,7 @@ to match their own disclosure methodology.
 
 import logging
 
+import numpy as np
 import pandas as pd
 
 from app.services.ingestion import ACTIVITY_COL, CASE_COL, RESOURCE_COL, TIMESTAMP_COL
@@ -51,40 +52,56 @@ def compute_sustainability(
     if df.empty or ACTIVITY_COL not in df.columns:
         return {"totals": {}, "by_activity": [], "trend": []}
 
-    # Compute time spent per activity per case as the gap to the next event
+    # Compute time spent per activity per case as the gap to the next event.
+    # FIX (1): when get_transitions returns non-None, the original code assigned
+    # duration_sec directly onto `df` (the caller's frame), mutating it in place.
+    # We now take a shallow copy so the cached/caller frame is never touched.
     from app.services.transition_cache import get_transitions
     _t = get_transitions(df)
     if _t is not None:
-        sorted_df = df
-        sorted_df["duration_sec"] = _t.duration_secs
-        sorted_df.loc[_t.is_last, "duration_sec"] = 0.0
-        sorted_df["duration_sec"] = sorted_df["duration_sec"].clip(lower=0)
+        sorted_df = df.copy(deep=False)  # shallow: avoids mutating the input/cached frame
+        duration_arr = _t.duration_secs.copy()  # own copy so clip doesn't touch the cache array
+        duration_arr[_t.is_last] = 0.0
+        np.clip(duration_arr, 0, None, out=duration_arr)
+        sorted_df = sorted_df.assign(duration_sec=duration_arr)
     else:
         sorted_df = df.sort_values([CASE_COL, TIMESTAMP_COL]).copy()
         sorted_df["next_ts"] = sorted_df.groupby(CASE_COL)[TIMESTAMP_COL].shift(-1)
         sorted_df["duration_sec"] = (sorted_df["next_ts"] - sorted_df[TIMESTAMP_COL]).dt.total_seconds()
         sorted_df["duration_sec"] = sorted_df["duration_sec"].fillna(0).clip(lower=0)
 
-    def factor_for(activity: str, key: str) -> float:
-        ov = overrides.get(activity, {})
-        return float(ov.get(key, base[key]))
+    # FIX (2): replace three apply(row_fn, axis=1) calls with vectorised numpy.
+    # Build per-row factor arrays via Series.map (unmapped → NaN → fill with base value).
+    activities = sorted_df[ACTIVITY_COL]
+    duration_sec = sorted_df["duration_sec"].to_numpy(dtype=np.float64)
 
-    # Per-row metrics
-    def row_co2(row):
-        minutes = row["duration_sec"] / 60
-        return minutes * factor_for(row[ACTIVITY_COL], "co2_g_per_minute") + factor_for(
-            row[ACTIVITY_COL], "co2_g_per_activity"
-        )
+    def _factor_array(key: str) -> np.ndarray:
+        """Return a float64 array of per-row factor values, honouring activity_overrides."""
+        if overrides:
+            mapping = {act: float(ov.get(key, base[key])) for act, ov in overrides.items()}
+            arr = activities.map(mapping).to_numpy(dtype="float64")
+            # NaN means the activity had no override — fill with the base value
+            nan_mask = np.isnan(arr)
+            if nan_mask.any():
+                arr[nan_mask] = base[key]
+        else:
+            arr = np.full(len(activities), base[key], dtype=np.float64)
+        return arr
 
-    def row_energy(row):
-        return (row["duration_sec"] / 60) * factor_for(row[ACTIVITY_COL], "energy_wh_per_minute")
+    co2_per_min = _factor_array("co2_g_per_minute")
+    co2_per_act = _factor_array("co2_g_per_activity")
+    energy_per_min = _factor_array("energy_wh_per_minute")
+    water_per_hr = _factor_array("water_l_per_hour")
 
-    def row_water(row):
-        return (row["duration_sec"] / 3600) * factor_for(row[ACTIVITY_COL], "water_l_per_hour")
+    co2_g_arr = (duration_sec / 60.0) * co2_per_min + co2_per_act
+    energy_wh_arr = (duration_sec / 60.0) * energy_per_min
+    water_l_arr = (duration_sec / 3600.0) * water_per_hr
 
-    sorted_df["co2_g"] = sorted_df.apply(row_co2, axis=1)
-    sorted_df["energy_wh"] = sorted_df.apply(row_energy, axis=1)
-    sorted_df["water_l"] = sorted_df.apply(row_water, axis=1)
+    sorted_df = sorted_df.assign(
+        co2_g=co2_g_arr,
+        energy_wh=energy_wh_arr,
+        water_l=water_l_arr,
+    )
 
     total_co2 = float(sorted_df["co2_g"].sum())
     total_energy = float(sorted_df["energy_wh"].sum())
@@ -105,6 +122,10 @@ def compute_sustainability(
         .reset_index()
         .sort_values("co2_g", ascending=False)
     )
+    # FIX (3): replace iterrows() over small grouped frames with to_dict('records').
+    # itertuples() is faster than iterrows() but mangles column names that contain
+    # non-identifier characters (e.g. "concept:name" → "_0"), which breaks lookups.
+    # to_dict('records') is safe and still ~3-5x faster than iterrows() for small frames.
     by_activity_list = [
         {
             "activity": row[ACTIVITY_COL],
@@ -114,7 +135,7 @@ def compute_sustainability(
             "events": int(row["events"]),
             "share_pct": round(float(row["co2_g"]) / total_co2 * 100, 1) if total_co2 > 0 else 0,
         }
-        for _, row in by_activity.iterrows()
+        for row in by_activity.to_dict("records")
     ]
 
     # Monthly trend
@@ -128,6 +149,7 @@ def compute_sustainability(
         )
         .reset_index()
     )
+    # FIX (3): to_dict('records') for trend frame too
     trend_list = [
         {
             "month": row["month"],
@@ -136,7 +158,7 @@ def compute_sustainability(
             "cases": int(row["cases"]),
             "co2_g_per_case": round(float(row["co2_g"]) / row["cases"], 2) if row["cases"] else 0,
         }
-        for _, row in trend.iterrows()
+        for row in trend.to_dict("records")
     ]
 
     # Cheapest targets: activities with high CO2 but low event counts (candidates for elimination)

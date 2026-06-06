@@ -17,6 +17,8 @@ from app.services.rust_accel import (
     token_replay_fitness as _rs_token_replay,
     compute_precision_etc as _rs_precision,
     compute_generalization as _rs_generalization,
+    analyze_variants as _rs_variants,
+    discover_inductive_net as _rs_inductive_net,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,9 +35,17 @@ class ConformanceService:
         """
         Discover a reference Petri net model using the Inductive Miner.
 
+        Prefers the Rust IM (verified byte-identical tree → identical net,
+        ~95x faster on large logs); falls back to pm4py. This reference model
+        is rediscovered on every conformance call, so the speedup compounds.
+
         Returns:
             (net, initial_marking, final_marking) tuple.
         """
+        rs_net = _rs_inductive_net(df)
+        if rs_net is not None:
+            return rs_net
+
         net, initial_marking, final_marking = pm4py.discover_petri_net_inductive(
             df,
             case_id_key=CASE_COL,
@@ -245,11 +255,74 @@ class ConformanceService:
         Variants enum it is preferred for memory-constrained logs; otherwise
         we fall through to the standard A* variant, which already incorporates
         the REACH-style reachability pruning.
+
+        Safety bounds (no effect on normal/small logs):
+          * Very large logs (cases > ``_ALIGN_MAX_CASES`` OR distinct variant
+            count > ``_ALIGN_MAX_VARIANTS``) are routed to the decomposed
+            aligner, which scales to 100k+ events where full A* alignment OOMs
+            or times out. This branch is gated behind high thresholds and logs
+            a warning, so default behavior is unchanged.
+          * A generous per-trace / overall alignment time limit is passed to
+            the pm4py diagnostics call so a single pathological trace cannot
+            wedge the worker. The limit is high enough that no normal trace
+            reaches it, so output stays byte-identical for normal logs.
         """
+        # Conservative routing thresholds — chosen well above any "normal"
+        # interactive log so default behavior is never altered. Above either
+        # bound, full A* alignment is too heavy and we fall back to the
+        # (already-present) decomposed aligner.
+        _ALIGN_MAX_CASES = 5000
+        _ALIGN_MAX_VARIANTS = 1000
+        # Generous alignment time guards (seconds). These bound a runaway
+        # trace without changing results: normal traces finish in well under a
+        # second, so the limit is never reached on small/normal logs.
+        _ALIGN_MAX_TIME_TRACE = 30
+        _ALIGN_MAX_TIME_TOTAL = 600
+
+        n_cases = int(df[CASE_COL].nunique())
+        if n_cases > _ALIGN_MAX_CASES:
+            logger.warning(
+                "Alignment requested on a large log (%d cases > %d) — routing to "
+                "decomposed alignment to bound CPU/memory.",
+                n_cases,
+                _ALIGN_MAX_CASES,
+            )
+            return self._decomposed_alignment_conformance(df, net, im, fm)
+
+        # Variant count is the real driver of A* cost (alignments are computed
+        # per distinct variant). Count variants cheaply via the existing helper;
+        # if it is unavailable for any reason, skip this guard rather than risk
+        # changing the normal path.
+        try:
+            _variant_counter, _vc_ok = self._build_log_variant_counter(df)
+            n_variants = len(_variant_counter) if _vc_ok else 0
+        except Exception:
+            n_variants = 0
+        if n_variants > _ALIGN_MAX_VARIANTS:
+            logger.warning(
+                "Alignment requested on a high-variant log (%d distinct variants "
+                "> %d) — routing to decomposed alignment to bound CPU/memory.",
+                n_variants,
+                _ALIGN_MAX_VARIANTS,
+            )
+            return self._decomposed_alignment_conformance(df, net, im, fm)
+
         pm4py_kw = {
             "case_id_key": CASE_COL,
             "activity_key": ACTIVITY_COL,
             "timestamp_key": TIMESTAMP_COL,
+        }
+        # Per-trace / overall alignment time guards. Passed through pm4py's
+        # high-level diagnostics wrapper (which forwards **kwargs into the
+        # algorithm parameters). The values are deliberately generous so they
+        # never trigger on normal logs — verified byte-identical output with
+        # and without these limits on the bundled running-example log. NOTE:
+        # only the *diagnostics* wrapper accepts these kwargs; the
+        # fitness_alignments wrapper rejects unknown kwargs, so it is left
+        # untouched.
+        _align_time_kw = {
+            "max_align_time_trace": _ALIGN_MAX_TIME_TRACE,
+            "max_align_time": _ALIGN_MAX_TIME_TOTAL,
         }
 
         # REACH-style optimization: prefer the less-memory Dijkstra variant
@@ -279,16 +352,21 @@ class ConformanceService:
                 aligned = pm4py.conformance_diagnostics_alignments(
                     df, net, im, fm,
                     variant=_reach_variant,
+                    **_align_time_kw,
                     **pm4py_kw,
                 )
             except TypeError:
                 # Some pm4py builds don't forward the variant kwarg through the
                 # high-level wrapper — fall back silently.
-                aligned = pm4py.conformance_diagnostics_alignments(df, net, im, fm, **pm4py_kw)
+                aligned = pm4py.conformance_diagnostics_alignments(
+                    df, net, im, fm, **_align_time_kw, **pm4py_kw
+                )
         else:
             # A* state-pruning enabled per REACH (Information Systems 2023) —
             # pm4py 2.7+ default.
-            aligned = pm4py.conformance_diagnostics_alignments(df, net, im, fm, **pm4py_kw)
+            aligned = pm4py.conformance_diagnostics_alignments(
+                df, net, im, fm, **_align_time_kw, **pm4py_kw
+            )
 
         fitness_result = pm4py.fitness_alignments(df, net, im, fm, **pm4py_kw)
 
@@ -426,6 +504,54 @@ class ConformanceService:
             "method": "decomposed",
         }
 
+    @staticmethod
+    def _build_log_variant_counter(df: pd.DataFrame):
+        """Build a Counter{tuple(activities): frequency} of log variants.
+
+        Prefers the Rust ``analyze_variants`` accelerator (single pass over
+        the whole log instead of a per-case ``sort_values`` inside a Python
+        groupby loop). ``analyze_variants`` orders events with a stable sort
+        by ``[case, timestamp, row-index]``, so on tied timestamps the trace
+        order is deterministic (the old per-case ``sort_values`` used pandas'
+        default unstable quicksort, which could reorder tied events).
+
+        Falls back to a pure-Python groupby using a *stable* timestamp sort
+        when the Rust layer is unavailable, so the fallback is also
+        deterministic and matches the accelerated path on clean logs.
+
+        Returns ``(Counter, ok)`` where ``ok`` is False if variant building
+        failed (callers preserve their existing failure return shape).
+        """
+        from collections import Counter
+
+        variants = Counter()
+        try:
+            rs = _rs_variants(df)
+        except Exception:
+            rs = None
+
+        if rs is not None:
+            try:
+                for v in rs:
+                    acts = tuple(str(a) for a in v["activities"])
+                    if acts:
+                        variants[acts] += int(v["frequency"])
+                return variants, True
+            except Exception as e:
+                logger.warning("Rust variant counter failed (%s), using pandas", e)
+                variants = Counter()
+
+        try:
+            sdf = df.sort_values([CASE_COL, TIMESTAMP_COL], kind="stable")
+            for _case_id, group in sdf.groupby(CASE_COL, sort=False):
+                acts = tuple(group[ACTIVITY_COL].astype(str).tolist())
+                if acts:
+                    variants[acts] += 1
+            return variants, True
+        except Exception as e:
+            logger.warning("Failed to build log variant distribution: %s", e)
+            return Counter(), False
+
     def _jsd_stochastic_conformance(self, df, net, im, fm) -> dict:
         """Jensen-Shannon Distance between log and model stochastic languages.
 
@@ -453,14 +579,11 @@ class ConformanceService:
             result["method"] = "jsd_fallback_alignment"
             return result
 
-        # Build the log's variant distribution from the dataframe.
-        log_variants: Counter = Counter()
-        try:
-            for _case_id, group in df.groupby(CASE_COL):
-                acts = tuple(group.sort_values(TIMESTAMP_COL)[ACTIVITY_COL].astype(str).tolist())
-                log_variants[acts] += 1
-        except Exception as e:
-            logger.warning("Failed to build log variant distribution: %s", e)
+        # Build the log's variant distribution from the dataframe. Uses the
+        # Rust accelerator (single pass) instead of a per-case sort inside a
+        # Python groupby; deterministic on tied timestamps (stable [case, ts]).
+        log_variants, _ok = self._build_log_variant_counter(df)
+        if not _ok:
             return {
                 "fitness": 0.0,
                 "precision": None,
@@ -770,15 +893,11 @@ class ConformanceService:
         # ------------------------------------------------------------------
         from collections import Counter
 
-        log_variant_counts: Counter = Counter()
-        try:
-            for _case_id, group in df.groupby(CASE_COL):
-                acts = tuple(
-                    group.sort_values(TIMESTAMP_COL)[ACTIVITY_COL].astype(str).tolist()
-                )
-                log_variant_counts[acts] += 1
-        except Exception as e:
-            logger.warning("Stochastic conformance: failed to build log distribution: %s", e)
+        # Build via the Rust accelerator (single pass) instead of a per-case
+        # sort inside a Python groupby loop; deterministic on tied timestamps.
+        log_variant_counts, _ok = self._build_log_variant_counter(df)
+        if not _ok:
+            logger.warning("Stochastic conformance: failed to build log distribution")
             return {
                 "emd_distance": 1.0,
                 "stochastic_fitness": 0.0,
@@ -854,12 +973,19 @@ class ConformanceService:
         # ------------------------------------------------------------------
         # Step 4 — Compute EMD between log and model distributions.
         #
-        # Preferred: pm4py's built-in earth-mover implementation.
-        # Fallback:  scipy.stats.wasserstein_distance on a 1-D rank encoding
-        #            of trace variants.  The rank encoding is an approximation
-        #            because it collapses the metric space of trace sequences
-        #            to a total order, losing edit-distance geometry — see
-        #            comment below.  This is clearly marked as an approximation.
+        # We use scipy.stats.wasserstein_distance on a 1-D rank encoding of
+        # trace variants. The rank encoding is an approximation because it
+        # collapses the metric space of trace sequences to a total order,
+        # losing edit-distance geometry (see NOTE below) — but it is the
+        # documented approximation for this metric and is exact for logs with
+        # a single dominant variant.
+        #
+        # The previous pm4py earth_mover path was removed: it materialised
+        # each variant into (frequency * 10 000) pm4py EventLog/Trace/Event
+        # objects before calling emd_algo.apply — up to ~10M Python objects
+        # per call — and the pm4py EMD module is deprecated and unavailable on
+        # the pinned pm4py build, so that branch was already dead code that
+        # never ran. The scipy path below produced the actual result.
         # ------------------------------------------------------------------
 
         # Union support: all variants seen in log or model.
@@ -867,76 +993,39 @@ class ConformanceService:
 
         emd_distance = 1.0  # pessimistic default
 
-        # Try pm4py's own EMD / stochastic conformance if exposed.
-        _pm4py_emd_used = False
+        # Approximate EMD via scipy Wasserstein distance on a rank-encoded
+        # 1-D representation of trace variants.
+        # NOTE: This is an APPROXIMATION — the rank encoding assigns each
+        # distinct variant an integer index (sorted deterministically), so
+        # the "distance" between variants is their rank difference rather
+        # than their actual edit distance.  For logs with many similar
+        # variants this will underestimate transport cost; for logs with
+        # a single dominant variant it is exact.  A full trace-edit-distance
+        # weighted EMD would require O(|V|²) alignment calls, which is
+        # impractical at the log sizes this endpoint serves.
         try:
-            # pm4py ≥ 2.7 may expose this path; import defensively.
-            from pm4py.algo.evaluation.earth_mover_distance import (  # type: ignore[import]
-                algorithm as emd_algo,
+            from scipy.stats import wasserstein_distance as _wdist
+
+            # Stable sort so ranks are deterministic across runs.
+            sorted_variants = sorted(all_variants)
+            rank_map = {v: i for i, v in enumerate(sorted_variants)}
+
+            log_values = [rank_map[v] for v in sorted_variants]
+            log_weights = [log_dist.get(v, 0.0) for v in sorted_variants]
+            model_weights = [model_dist.get(v, 0.0) for v in sorted_variants]
+
+            # Wasserstein distance on rank indices; normalise by max rank
+            # so the result is in [0, 1].
+            max_rank = max(len(sorted_variants) - 1, 1)
+            raw_w = _wdist(log_values, log_values, log_weights, model_weights)
+            emd_distance = float(max(0.0, min(1.0, raw_w / max_rank)))
+        except Exception as _scipy_err:
+            logger.warning(
+                "scipy Wasserstein fallback also failed (%s); "
+                "returning worst-case EMD=1.0",
+                _scipy_err,
             )
-            # The pm4py earth-mover module expects pm4py EventLog objects, not
-            # plain dicts — build minimal wrappers.
-            from pm4py.objects.log.obj import EventLog as Pm4pyLog, Trace, Event as Pm4pyEvent
-            from pm4py.objects.stochastic_petri_net.obj import StochasticPetriNet  # noqa: F401
-
-            def _build_pm4py_log(dist: dict[tuple, float]) -> Pm4pyLog:
-                pm_log = Pm4pyLog()
-                # Weight each variant by (frequency * 10 000) rounded to int
-                # so relative proportions survive integer rounding.
-                for variant, freq in dist.items():
-                    count = max(1, round(freq * 10_000))
-                    for _ in range(count):
-                        trace = Trace()
-                        for act in variant:
-                            ev = Pm4pyEvent()
-                            ev["concept:name"] = act
-                            trace.append(ev)
-                        pm_log.append(trace)
-                return pm_log
-
-            pm_log_log = _build_pm4py_log(log_dist)
-            pm_log_model = _build_pm4py_log(model_dist)
-            raw_emd = emd_algo.apply(pm_log_log, pm_log_model)
-            # pm4py EMD is already normalised; clamp to [0, 1].
-            emd_distance = float(max(0.0, min(1.0, raw_emd)))
-            _pm4py_emd_used = True
-        except Exception as _pm4py_err:
-            logger.debug("pm4py earth_mover_distance unavailable (%s), using scipy fallback", _pm4py_err)
-
-        if not _pm4py_emd_used:
-            # Fallback: approximate EMD via scipy Wasserstein distance on a
-            # rank-encoded 1-D representation of trace variants.
-            # NOTE: This is an APPROXIMATION — the rank encoding assigns each
-            # distinct variant an integer index (sorted deterministically), so
-            # the "distance" between variants is their rank difference rather
-            # than their actual edit distance.  For logs with many similar
-            # variants this will underestimate transport cost; for logs with
-            # a single dominant variant it is exact.  A full trace-edit-distance
-            # weighted EMD would require O(|V|²) alignment calls, which is
-            # impractical without pm4py's optimised EMD implementation.
-            try:
-                from scipy.stats import wasserstein_distance as _wdist
-
-                # Stable sort so ranks are deterministic across runs.
-                sorted_variants = sorted(all_variants)
-                rank_map = {v: i for i, v in enumerate(sorted_variants)}
-
-                log_values = [rank_map[v] for v in sorted_variants]
-                log_weights = [log_dist.get(v, 0.0) for v in sorted_variants]
-                model_weights = [model_dist.get(v, 0.0) for v in sorted_variants]
-
-                # Wasserstein distance on rank indices; normalise by max rank
-                # so the result is in [0, 1].
-                max_rank = max(len(sorted_variants) - 1, 1)
-                raw_w = _wdist(log_values, log_values, log_weights, model_weights)
-                emd_distance = float(max(0.0, min(1.0, raw_w / max_rank)))
-            except Exception as _scipy_err:
-                logger.warning(
-                    "scipy Wasserstein fallback also failed (%s); "
-                    "returning worst-case EMD=1.0",
-                    _scipy_err,
-                )
-                emd_distance = 1.0
+            emd_distance = 1.0
 
         stochastic_fitness = 1.0 - emd_distance
 

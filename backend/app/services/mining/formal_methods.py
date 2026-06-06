@@ -436,10 +436,21 @@ def get_declare(df: pd.DataFrame, support_threshold: float = 0.7) -> dict:
     pair_precedence: dict[tuple, int] = _dd(int) # cases where every B is preceded by A
 
     for seq in cases.values():
-        act_set = set(seq)
+        # Single left-to-right pass: count occurrences and record the first
+        # and last position of each activity. This collapses the former
+        # O(k² · n²) per-case work (per pair: rebuild index lists + nested
+        # "is there a later/earlier match" scans) into O(n) for the scan plus
+        # O(k²) for the pair enumeration, giving identical counters.
         act_counts = _dd(int)
-        for a in seq:
+        first_pos: dict[str, int] = {}
+        last_pos: dict[str, int] = {}
+        for i, a in enumerate(seq):
             act_counts[a] += 1
+            if a not in first_pos:
+                first_pos[a] = i
+            last_pos[a] = i
+
+        act_set = first_pos.keys()  # unique activities in the case
 
         for a in act_set:
             act_cases[a] += 1
@@ -451,33 +462,26 @@ def get_declare(df: pd.DataFrame, support_threshold: float = 0.7) -> dict:
                 act_end[a] += 1
 
         for a in act_set:
+            fa, la = first_pos[a], last_pos[a]
             for b in act_set:
                 if a == b:
                     continue
                 ab = (a, b)
                 pair_both[ab] += 1
 
-                # A before B: some occurrence of A appears before some occurrence of B
-                indices_a = [i for i, x in enumerate(seq) if x == a]
-                indices_b = [i for i, x in enumerate(seq) if x == b]
-
-                if any(ia < ib for ia in indices_a for ib in indices_b):
+                # A before B: some occurrence of A precedes some occurrence of
+                # B ⟺ first(A) < last(B).
+                if fa < last_pos[b]:
                     pair_a_before_b[ab] += 1
 
-                # Response(A,B): every A in the sequence is eventually followed by B
-                resp_ok = all(
-                    any(seq[j] == b for j in range(i + 1, len(seq)))
-                    for i, x in enumerate(seq) if x == a
-                )
-                if resp_ok:
+                # Response(A,B): every A is eventually followed by B ⟺ the last
+                # A has a B strictly after it ⟺ last(A) < last(B).
+                if la < last_pos[b]:
                     pair_response[ab] += 1
 
-                # Precedence(A,B): every B in the sequence is preceded by A
-                prec_ok = all(
-                    any(seq[j] == a for j in range(0, i))
-                    for i, x in enumerate(seq) if x == b
-                )
-                if prec_ok:
+                # Precedence(A,B): every B is preceded by A ⟺ the first B has an
+                # A strictly before it ⟺ first(A) < first(B).
+                if fa < first_pos[b]:
                     pair_precedence[ab] += 1
 
     _NARRATIVES = {
