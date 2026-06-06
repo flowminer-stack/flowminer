@@ -1,4 +1,5 @@
 import { ChevronDown, Eye, EyeOff } from 'lucide-react';
+import { Disclosure } from './Disclosure';
 
 interface OdooConfigProps {
   odooHost: string;
@@ -38,30 +39,17 @@ export function OdooConfig({
       <h3 className="text-sm font-semibold text-fg-secondary">
         Odoo Settings
       </h3>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">
-            Host
-          </label>
-          <input
-            type="text"
-            value={odooHost}
-            onChange={(e) => setOdooHost(e.target.value)}
-            placeholder="localhost"
-            className="input w-full"
-          />
-        </div>
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">
-            Port
-          </label>
-          <input
-            type="number"
-            value={odooPort}
-            onChange={(e) => setOdooPort(Number(e.target.value))}
-            className="input w-full"
-          />
-        </div>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">
+          Host
+        </label>
+        <input
+          type="text"
+          value={odooHost}
+          onChange={(e) => setOdooHost(e.target.value)}
+          placeholder="localhost"
+          className="input w-full"
+        />
       </div>
       <div>
         <label className="block text-[11px] font-medium text-fg-faint mb-1">
@@ -128,6 +116,19 @@ export function OdooConfig({
           <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-faint pointer-events-none" />
         </div>
       </div>
+      <Disclosure label="Advanced settings" hint="port">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">
+            Port
+          </label>
+          <input
+            type="number"
+            value={odooPort}
+            onChange={(e) => setOdooPort(Number(e.target.value))}
+            className="input w-full"
+          />
+        </div>
+      </Disclosure>
     </div>
   );
 }

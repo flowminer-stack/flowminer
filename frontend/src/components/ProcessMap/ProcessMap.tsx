@@ -11,6 +11,7 @@ import {
   Map as MapIcon,
 } from 'lucide-react';
 import { formatNumber, formatDuration } from '../../utils/format';
+import { simplifyGraph } from '../../utils/simplifyGraph';
 import type { ProcessNode, ProcessEdge, Annotation } from '../../types';
 import { useUIStore } from '../../store';
 import ExportMenu from './ExportMenu';
@@ -319,46 +320,13 @@ function getFilteredElements(
     edges = edges.filter((e) => kept.has(e.source) && kept.has(e.target));
   }
 
-  // Identify start and end node IDs
-  const startIds = new Set(nodes.filter((n) => n.is_start).map((n) => n.id));
-  const endIds = new Set(nodes.filter((n) => n.is_end).map((n) => n.id));
-
-  // Step 1: Always keep edges connected to start or end nodes (structural backbone)
-  const backboneEdges: ProcessEdge[] = [];
-  const otherEdges: ProcessEdge[] = [];
-  for (const edge of edges) {
-    if (startIds.has(edge.source) || startIds.has(edge.target) ||
-        endIds.has(edge.source) || endIds.has(edge.target)) {
-      backboneEdges.push(edge);
-    } else {
-      otherEdges.push(edge);
-    }
-  }
-
-  // Step 2: From the remaining edges, take top-N by frequency based on complexity
-  const sortedOther = [...otherEdges].sort((a, b) => b.frequency - a.frequency);
-  const otherCount = Math.max(0, Math.ceil((complexity / 100) * sortedOther.length));
-  const selectedOther = sortedOther.slice(0, otherCount);
-
-  // Step 3: Merge backbone + selected edges
-  const allVisibleEdges = [...backboneEdges, ...selectedOther];
-
-  // Step 4: Collect visible node IDs from visible edges
-  const visibleNodeIds = new Set<string>();
-  for (const edge of allVisibleEdges) {
-    visibleNodeIds.add(edge.source);
-    visibleNodeIds.add(edge.target);
-  }
-  // Always include start/end nodes themselves
-  for (const id of startIds) visibleNodeIds.add(id);
-  for (const id of endIds) visibleNodeIds.add(id);
-
-  // Step 5: Final filter — only keep edges where both endpoints made it through
-  const connectedEdges = allVisibleEdges.filter(
-    (e) => visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target),
-  );
-
-  const visibleNodes = nodes.filter((n) => visibleNodeIds.has(n.id));
+  // Top-paths simplification: rank edges by frequency and keep the strongest
+  // up to the detail level, with a bounded start/end connectivity guarantee.
+  // (See simplifyGraph — this replaces the old "keep every start/end edge"
+  // backbone that swallowed dense real-world logs like BPIC2019 whole.)
+  const { nodes: visibleNodes, edges: connectedEdges } = simplifyGraph(nodes, edges, {
+    complexity,
+  });
 
   const freqs = visibleNodes.map((n) => n.frequency);
   const minFreq = Math.min(...freqs);
@@ -616,11 +584,13 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
       // the expected zoom per wheel tick — the "takes forever to zoom in".
       wheelSensitivity: 1.0,
       boxSelectionEnabled: false,
-      // pixelRatio:1 paints ~4x fewer pixels than :2 on HiDPI per frame;
-      // textureOnViewport snapshots the canvas during a gesture so pan/
-      // zoom transforms a bitmap instead of re-rastering every vector.
+      // pixelRatio:'auto' keeps text crisp on HiDPI. We hide edges (not the
+      // whole canvas) during a gesture: textureOnViewport blanks any region
+      // you pan *into* until release, whereas hideEdgesOnViewport keeps nodes
+      // live and only drops the expensive edges, snapping them back on stop.
       pixelRatio: 'auto',
-      textureOnViewport: true,
+      textureOnViewport: false,
+      hideEdgesOnViewport: true,
       // Touch / mobile parity: allow pinch-to-zoom and one-finger pan
       // on touch devices so the map is usable on tablets and phones.
       // Cytoscape enables these by default, but we set them explicitly

@@ -282,4 +282,4 @@ The new-user journey from CSV to first insight has structural strengths (drag-an
 
 ---
 
-*Audit sourced from: 8 competitor research deep-dives (Celonis, Apromore, Power Automate/Signavio, UiPath/IBM/ARIS, Disco/QPR/Workfellow, pm4py/ProM/bupaR, general buyer pain-points, cross-vendor pricing), 3 codebase capability maps, 31 candidates each verified against live source files at `/home/josh/Documents/Projects/flowminer`. Dated 2026-06-02.*
+*Audit sourced from: 8 competitor research deep-dives (Celonis, Apromore, Power Automate/Signavio, UiPath/IBM/ARIS, Disco/QPR/Workfellow, pm4py/ProM/bupaR, general buyer pain-points, cross-vendor pricing), 3 codebase capability maps, 31 candidates each verified against live source files in the repository. Dated 2026-06-02.*

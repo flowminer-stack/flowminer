@@ -9,6 +9,10 @@ import {
   Zap,
   Clock,
   Columns,
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Pencil,
 } from 'lucide-react';
 import { parseCronToHuman } from '../../utils/format';
 import { connectors as connectorsApi } from '@/api/client';
@@ -17,6 +21,7 @@ import {
   Connector,
   ConnectorType,
   commonCrons,
+  types as connectorTypes,
   AUTO_MAPPED_TYPES,
   MANUAL_MAPPED_TYPES,
   ColumnField,
@@ -149,6 +154,19 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
 
+  // Wizard step. Editing an existing connector jumps straight to the connect
+  // step — the source is already chosen.
+  const STEPS = [
+    { id: 'source', label: 'Choose source' },
+    { id: 'connect', label: 'Connect' },
+    { id: 'finalize', label: 'Finish' },
+  ] as const;
+  const [step, setStep] = useState(connector ? 1 : 0);
+  const [editingSchedule, setEditingSchedule] = useState(false);
+
+  const typeLabel = (t: ConnectorType) =>
+    connectorTypes.find((x) => x.value === t)?.label ?? t;
+
   const getDefaultPort = (t: ConnectorType) => {
     switch (t) {
       case 'postgresql': return '5432';
@@ -160,10 +178,22 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
   };
 
   const handleTypeChange = (newType: ConnectorType) => {
+    // Auto-suggest a friendly name when the field is empty or still holds the
+    // previously-selected type's default — so most users never touch it.
+    setName((prev) =>
+      !prev.trim() || prev === typeLabel(type) ? typeLabel(newType) : prev,
+    );
     setType(newType);
     setPort(getDefaultPort(newType));
     setTestStatus('idle');
     setSchemaColumns([]);
+  };
+
+  // Advance from the source step, filling a default name if the user left it
+  // blank, so the wizard never blocks on a field they don't care about.
+  const goToConnect = () => {
+    if (!name.trim()) setName(typeLabel(type));
+    setStep(1);
   };
 
   const buildConfig = () => {
@@ -287,17 +317,61 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
               {connector ? 'Edit Connector' : 'New Connector'}
             </h2>
             <p className="text-[12px] text-fg-muted">
-              Configure a data source for continuous process mining
+              {step === 0
+                ? 'Pick where your event data lives — we’ll guide you the rest of the way'
+                : step === 1
+                  ? `Connect to ${typeLabel(type)}`
+                  : 'Review and finish — almost there'}
             </p>
           </div>
+        </div>
+
+        {/* Stepper — matches the upload flow's step indicator for consistency */}
+        <div className="mt-4 flex items-center gap-2">
+          {STEPS.map((s, index) => (
+            <div key={s.id} className="flex items-center gap-2">
+              <div
+                className={clsx(
+                  'flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold transition-colors',
+                  index <= step ? 'bg-accent text-surface-0' : 'bg-tint text-fg-muted',
+                )}
+              >
+                {index < step ? <Check size={16} /> : index + 1}
+              </div>
+              <span
+                className={clsx(
+                  'text-[12px] font-medium',
+                  index <= step ? 'text-fg' : 'text-fg-faint',
+                )}
+              >
+                {s.label}
+              </span>
+              {index < STEPS.length - 1 && (
+                <div
+                  className={clsx(
+                    'mx-2 h-px w-8',
+                    index < step ? 'bg-accent' : 'bg-tint',
+                  )}
+                />
+              )}
+            </div>
+          ))}
         </div>
       </div>
 
       <div className="p-6 space-y-6">
+        {/* ───────────── STEP 0 · CHOOSE SOURCE ───────────── */}
+        {step === 0 && (
+          <ConnectorTypeSelector value={type} onChange={handleTypeChange} registry={registry} />
+        )}
+
+        {/* ───────────── STEP 1 · CONNECT ───────────── */}
+        {step === 1 && (
+          <>
         {/* Name */}
         <div>
           <label className="block text-[12px] font-medium text-fg-muted mb-1.5">
-            Connector Name
+            Name this connection
           </label>
           <input
             type="text"
@@ -307,9 +381,6 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
             className="input w-full"
           />
         </div>
-
-        {/* Type selector */}
-        <ConnectorTypeSelector value={type} onChange={handleTypeChange} registry={registry} />
 
         {/* Database config */}
         {isDatabase && (
@@ -502,6 +573,68 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
           />
         )}
 
+        {/* Test connection */}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleTest}
+            disabled={testStatus === 'testing'}
+            className={clsx(
+              'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border transition-all',
+              testStatus === 'testing'
+                ? 'bg-surface-1 text-fg-faint border-line cursor-wait'
+                : 'btn-secondary'
+            )}
+          >
+            {testStatus === 'testing' ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Zap className="w-4 h-4" />
+            )}
+            Test Connection
+          </button>
+
+          {testStatus === 'success' && (
+            <div className="flex items-center gap-1.5 text-xs font-medium text-success bg-success/10 px-3 py-1.5 rounded-lg">
+              <CheckCircle className="w-4 h-4" />
+              {testMessage}
+            </div>
+          )}
+          {testStatus === 'error' && (
+            <div className="flex items-center gap-1.5 text-xs font-medium text-danger bg-danger/10 px-3 py-1.5 rounded-lg">
+              <XCircle className="w-4 h-4" />
+              {testMessage}
+            </div>
+          )}
+        </div>
+          </>
+        )}
+
+        {/* ───────────── STEP 2 · FINALIZE ───────────── */}
+        {step === 2 && (
+          <>
+        {/* Summary */}
+        <div className="flex items-center gap-3 rounded-xl border border-line bg-surface-1 p-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+            <Database className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-[13px] font-semibold text-fg">
+              {name || 'Untitled connection'}
+            </p>
+            <p className="text-[12px] text-fg-muted">
+              {typeLabel(type)} · {parseCronToHuman(schedule)}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setStep(1)}
+            className="btn-ghost ml-auto shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 text-xs"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+            Edit
+          </button>
+        </div>
+
         {/* Column mapping */}
         {isManualMapped && (
           <div className="space-y-3 p-4 bg-surface-1 rounded-xl border border-line">
@@ -559,114 +692,107 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
           </div>
         )}
 
-        {/* Schedule */}
-        <div className="space-y-3 p-4 bg-surface-1 rounded-xl border border-line">
+        {/* Schedule — collapsed to a friendly one-liner by default */}
+        <div className="p-4 bg-surface-1 rounded-xl border border-line">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-fg-secondary flex items-center gap-2">
               <Clock className="w-4 h-4 text-fg-faint" />
-              Sync Schedule
+              Syncs {parseCronToHuman(schedule).toLowerCase()}
             </h3>
-            <span className="text-xs font-medium text-accent bg-accent/10 px-2 py-0.5 rounded-md">
-              {parseCronToHuman(schedule)}
-            </span>
+            <button
+              type="button"
+              onClick={() => setEditingSchedule((v) => !v)}
+              className="text-xs text-accent hover:text-accent-hover font-medium transition-colors"
+            >
+              {editingSchedule ? 'Done' : 'Change'}
+            </button>
           </div>
 
-          {!customCron ? (
-            <div className="grid grid-cols-3 gap-2">
-              {commonCrons.map((cron) => (
-                <button
-                  key={cron.value}
-                  onClick={() => setSchedule(cron.value)}
-                  className={clsx(
-                    'px-3 py-2 rounded-lg text-xs font-medium border transition-all',
-                    schedule === cron.value
-                      ? 'bg-accent/10 text-accent border-line-strong'
-                      : 'bg-surface-2 text-fg-muted border-line hover:border-line-strong'
-                  )}
-                >
-                  {cron.label}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div>
-              <label className="block text-[11px] font-medium text-fg-faint mb-1">
-                Cron Expression
-              </label>
-              <input
-                type="text"
-                value={schedule}
-                onChange={(e) => setSchedule(e.target.value)}
-                placeholder="*/5 * * * *"
-                className="input w-full font-mono"
-              />
-            </div>
-          )}
+          {editingSchedule && (
+            <div className="mt-3 space-y-3">
+              {!customCron ? (
+                <div className="grid grid-cols-3 gap-2">
+                  {commonCrons.map((cron) => (
+                    <button
+                      key={cron.value}
+                      onClick={() => setSchedule(cron.value)}
+                      className={clsx(
+                        'px-3 py-2 rounded-lg text-xs font-medium border transition-all',
+                        schedule === cron.value
+                          ? 'bg-accent/10 text-accent border-line-strong'
+                          : 'bg-surface-2 text-fg-muted border-line hover:border-line-strong'
+                      )}
+                    >
+                      {cron.label}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-[11px] font-medium text-fg-faint mb-1">
+                    Cron Expression
+                  </label>
+                  <input
+                    type="text"
+                    value={schedule}
+                    onChange={(e) => setSchedule(e.target.value)}
+                    placeholder="*/5 * * * *"
+                    className="input w-full font-mono"
+                  />
+                </div>
+              )}
 
-          <button
-            onClick={() => setCustomCron(!customCron)}
-            className="text-xs text-accent hover:text-accent-hover font-medium transition-colors"
-          >
-            {customCron ? 'Use preset schedules' : 'Use custom cron expression'}
-          </button>
-        </div>
-
-        {/* Test connection */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleTest}
-            disabled={testStatus === 'testing'}
-            className={clsx(
-              'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border transition-all',
-              testStatus === 'testing'
-                ? 'bg-surface-1 text-fg-faint border-line cursor-wait'
-                : 'btn-secondary'
-            )}
-          >
-            {testStatus === 'testing' ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Zap className="w-4 h-4" />
-            )}
-            Test Connection
-          </button>
-
-          {testStatus === 'success' && (
-            <div className="flex items-center gap-1.5 text-xs font-medium text-success bg-success/10 px-3 py-1.5 rounded-lg">
-              <CheckCircle className="w-4 h-4" />
-              {testMessage}
-            </div>
-          )}
-          {testStatus === 'error' && (
-            <div className="flex items-center gap-1.5 text-xs font-medium text-danger bg-danger/10 px-3 py-1.5 rounded-lg">
-              <XCircle className="w-4 h-4" />
-              {testMessage}
+              <button
+                onClick={() => setCustomCron(!customCron)}
+                className="text-xs text-accent hover:text-accent-hover font-medium transition-colors"
+              >
+                {customCron ? 'Use preset schedules' : 'Use custom cron expression'}
+              </button>
             </div>
           )}
         </div>
+
+          </>
+        )}
       </div>
 
-      {/* Footer */}
-      <div className="px-6 py-4 border-t border-line bg-surface-1 flex items-center justify-end gap-3">
+      {/* Footer · step-aware navigation */}
+      <div className="px-6 py-4 border-t border-line bg-surface-1 flex items-center justify-between gap-3">
         <button
-          onClick={onCancel}
-          className="btn-ghost px-4 py-2 text-sm font-medium"
+          onClick={step === 0 ? onCancel : () => setStep(step - 1)}
+          className="btn-ghost flex items-center gap-1.5 px-4 py-2 text-sm font-medium"
         >
-          Cancel
-        </button>
-        <button
-          onClick={handleSave}
-          disabled={!name.trim()}
-          className={clsx(
-            'flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-semibold transition-all',
-            name.trim()
-              ? 'btn-primary'
-              : 'bg-tint text-fg-faint cursor-not-allowed'
+          {step === 0 ? (
+            'Cancel'
+          ) : (
+            <>
+              <ArrowLeft className="w-4 h-4" />
+              Back
+            </>
           )}
-        >
-          <Save className="w-4 h-4" />
-          {connector ? 'Update Connector' : 'Create Connector'}
         </button>
+
+        {step < 2 ? (
+          <button
+            onClick={step === 0 ? goToConnect : () => setStep(2)}
+            className="btn-primary flex items-center gap-1.5 px-5 py-2 text-sm font-semibold"
+          >
+            Next
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        ) : (
+          <button
+            onClick={handleSave}
+            disabled={!name.trim()}
+            className={clsx(
+              'flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-semibold transition-all',
+              name.trim() ? 'btn-primary' : 'bg-tint text-fg-faint cursor-not-allowed'
+            )}
+          >
+            <Save className="w-4 h-4" />
+            {connector ? 'Update Connector' : 'Create Connector'}
+          </button>
+        )}
       </div>
     </div>
   );

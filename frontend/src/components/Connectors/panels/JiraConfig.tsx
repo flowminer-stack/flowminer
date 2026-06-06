@@ -1,4 +1,5 @@
 import { Eye, EyeOff } from 'lucide-react';
+import { Disclosure } from './Disclosure';
 
 interface JiraConfigProps {
   jiraInstanceUrl: string;
@@ -81,19 +82,19 @@ export function JiraConfig({
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">
-            Project Key
-          </label>
-          <input
-            type="text"
-            value={jiraProjectKey}
-            onChange={(e) => setJiraProjectKey(e.target.value)}
-            placeholder="PROJ"
-            className="input w-full font-mono"
-          />
-        </div>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">
+          Project Key
+        </label>
+        <input
+          type="text"
+          value={jiraProjectKey}
+          onChange={(e) => setJiraProjectKey(e.target.value)}
+          placeholder="PROJ"
+          className="input w-full font-mono"
+        />
+      </div>
+      <Disclosure label="Advanced settings" hint="result limit">
         <div>
           <label className="block text-[11px] font-medium text-fg-faint mb-1">
             Max Results
@@ -106,7 +107,7 @@ export function JiraConfig({
             className="input w-full"
           />
         </div>
-      </div>
+      </Disclosure>
     </div>
   );
 }

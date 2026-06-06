@@ -7,8 +7,15 @@
  *
  *   - wheelSensitivity 1.0  — cytoscape's calibrated default (0.3 was ~3x slower)
  *   - minZoom 0.15 / maxZoom 5 — room to zoom out on dense graphs and in to read
- *   - pixelRatio 1 — ~4x fewer pixels per frame than the HiDPI default ('auto'=2)
- *   - textureOnViewport — snapshot the canvas during a gesture instead of re-rastering
+ *   - pixelRatio 'auto' — crisp text on HiDPI displays
+ *   - hideEdgesOnViewport — drop only the (expensive) edges mid-gesture and snap
+ *     them back on release; nodes stay live so you always see where you're panning.
+ *
+ * NOTE: we deliberately do NOT set `textureOnViewport`. It snapshots only the
+ * currently-visible region into a bitmap and reuses it for the whole gesture, so
+ * any area you pan *toward* falls outside the snapshot and renders blank until you
+ * stop moving. `hideEdgesOnViewport` gives the same dense-graph perf win (edges are
+ * ~90% of the raster cost) without ever blanking the canvas.
  *
  * Usage:  cytoscape({ container, elements, style, layout, ...FLUID_CY_OPTS })
  */
@@ -17,7 +24,8 @@ export const FLUID_CY_OPTS = {
   maxZoom: 5,
   wheelSensitivity: 1.0,
   pixelRatio: 'auto',
-  textureOnViewport: true,
+  textureOnViewport: false,
+  hideEdgesOnViewport: true,
 } as const;
 
 /** Hide labels that would render smaller than this on screen (level-of-detail). */

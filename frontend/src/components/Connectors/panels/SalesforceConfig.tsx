@@ -1,4 +1,5 @@
 import { Eye, EyeOff } from 'lucide-react';
+import { Disclosure } from './Disclosure';
 
 interface SalesforceConfigProps {
   config: Record<string, any>;
@@ -52,17 +53,17 @@ export function SalesforceConfig({ config, onChange, showPassword, onTogglePassw
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">Object / SOQL</label>
-          <input
-            type="text"
-            value={config.sobject || ''}
-            onChange={(e) => onChange('sobject', e.target.value)}
-            placeholder="Case"
-            className="input w-full font-mono"
-          />
-        </div>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">Object / SOQL</label>
+        <input
+          type="text"
+          value={config.sobject || ''}
+          onChange={(e) => onChange('sobject', e.target.value)}
+          placeholder="Case"
+          className="input w-full font-mono"
+        />
+      </div>
+      <Disclosure label="Advanced settings" hint="record limit">
         <div>
           <label className="block text-[11px] font-medium text-fg-faint mb-1">Max Records</label>
           <input
@@ -73,7 +74,7 @@ export function SalesforceConfig({ config, onChange, showPassword, onTogglePassw
             className="input w-full"
           />
         </div>
-      </div>
+      </Disclosure>
     </div>
   );
 }

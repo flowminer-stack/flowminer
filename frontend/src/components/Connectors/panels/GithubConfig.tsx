@@ -1,4 +1,5 @@
 import { ChevronDown, Eye, EyeOff } from 'lucide-react';
+import { Disclosure } from './Disclosure';
 
 interface GithubConfigProps {
   githubToken: string;
@@ -81,23 +82,23 @@ export function GithubConfig({
           />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">
-            Event Type
-          </label>
-          <div className="relative">
-            <select
-              value={githubEventType}
-              onChange={(e) => setGithubEventType(e.target.value)}
-              className="select w-full"
-            >
-              <option value="pull_requests">Pull Requests</option>
-              <option value="issues">Issues</option>
-            </select>
-            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-faint pointer-events-none" />
-          </div>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">
+          Event Type
+        </label>
+        <div className="relative">
+          <select
+            value={githubEventType}
+            onChange={(e) => setGithubEventType(e.target.value)}
+            className="select w-full"
+          >
+            <option value="pull_requests">Pull Requests</option>
+            <option value="issues">Issues</option>
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-faint pointer-events-none" />
         </div>
+      </div>
+      <Disclosure label="Advanced settings" hint="item limit">
         <div>
           <label className="block text-[11px] font-medium text-fg-faint mb-1">
             Max Items
@@ -110,7 +111,7 @@ export function GithubConfig({
             className="input w-full"
           />
         </div>
-      </div>
+      </Disclosure>
     </div>
   );
 }

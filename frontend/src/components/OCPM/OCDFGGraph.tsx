@@ -136,11 +136,13 @@ export default function OCDFGGraph({
       minZoom: 0.15,
       maxZoom: 5,
       // 1.0 is cytoscape's calibrated default; 0.3 made wheel zoom ~3x
-      // slower than every other app. pixelRatio:1 + textureOnViewport
-      // keep pan/zoom cheap on HiDPI.
+      // slower than every other app. hideEdgesOnViewport keeps pan/zoom
+      // cheap without blanking the canvas (see ProcessMap for why not
+      // textureOnViewport).
       wheelSensitivity: 1.0,
       pixelRatio: 'auto',
-      textureOnViewport: true,
+      textureOnViewport: false,
+      hideEdgesOnViewport: true,
     });
 
     if (prevView) cy.viewport({ zoom: prevView.zoom, pan: prevView.pan });

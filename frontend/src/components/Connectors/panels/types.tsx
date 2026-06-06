@@ -39,125 +39,160 @@ export type ConnectorType =
   | 'coupa'
   | 'ariba';
 
+// Category keys are shared with the backend registry (GET /connectors/registry)
+// so the grouped picker works the same whether the list comes from the registry
+// or this static fallback.
+export type CategoryKey = 'db' | 'warehouse' | 'file' | 'api' | 'devops' | 'erp';
+
+// Display metadata for each category, in the order groups should appear.
+export const CONNECTOR_GROUPS: { key: CategoryKey; label: string }[] = [
+  { key: 'db', label: 'Databases' },
+  { key: 'warehouse', label: 'Data warehouses' },
+  { key: 'file', label: 'Files & folders' },
+  { key: 'api', label: 'Custom API' },
+  { key: 'devops', label: 'Dev & issue tracking' },
+  { key: 'erp', label: 'Business systems' },
+];
+
 export const types: {
   value: ConnectorType;
   label: string;
   icon: React.ReactNode;
   description: string;
+  category: CategoryKey;
 }[] = [
   {
     value: 'postgresql',
     label: 'PostgreSQL',
     icon: <Database className="w-5 h-5" />,
-    description: 'Connect to a PostgreSQL database',
+    description: 'Open-source relational database',
+    category: 'db',
   },
   {
     value: 'mysql',
     label: 'MySQL',
     icon: <Database className="w-5 h-5" />,
-    description: 'Connect to a MySQL database',
+    description: 'Popular relational database',
+    category: 'db',
   },
   {
     value: 'sqlserver',
     label: 'SQL Server',
     icon: <Server className="w-5 h-5" />,
-    description: 'Connect to Microsoft SQL Server',
+    description: 'Microsoft SQL Server',
+    category: 'db',
   },
   {
     value: 'oracle',
     label: 'Oracle DB',
     icon: <Database className="w-5 h-5" />,
-    description: 'Connect to an Oracle database',
+    description: 'Oracle relational database',
+    category: 'db',
   },
   {
     value: 'snowflake',
     label: 'Snowflake',
     icon: <Database className="w-5 h-5" />,
-    description: 'Connect to Snowflake data warehouse',
+    description: 'Cloud data warehouse',
+    category: 'warehouse',
   },
   {
     value: 'bigquery',
     label: 'BigQuery',
     icon: <Database className="w-5 h-5" />,
-    description: 'Connect to Google BigQuery',
+    description: 'Google Cloud warehouse',
+    category: 'warehouse',
   },
   {
     value: 'csv_watch',
     label: 'CSV Watch',
     icon: <FileText className="w-5 h-5" />,
-    description: 'Watch a directory for CSV files',
+    description: 'Auto-import CSVs from a folder',
+    category: 'file',
   },
   {
     value: 'api_endpoint',
     label: 'REST API',
     icon: <Globe className="w-5 h-5" />,
-    description: 'Fetch data from a REST API',
+    description: 'Pull events from any REST endpoint',
+    category: 'api',
   },
   {
     value: 'jira',
     label: 'Jira',
     icon: <Globe className="w-5 h-5" />,
-    description: 'Import issues from Jira',
+    description: 'Issues & sprints from Jira',
+    category: 'devops',
   },
   {
     value: 'github',
     label: 'GitHub',
     icon: <Github className="w-5 h-5" />,
-    description: 'Import PRs or issues from GitHub',
+    description: 'Pull requests & issues',
+    category: 'devops',
   },
   {
     value: 'salesforce',
     label: 'Salesforce',
     icon: <Globe className="w-5 h-5" />,
-    description: 'Connect to Salesforce CRM',
+    description: 'CRM cases & opportunities',
+    category: 'erp',
   },
   {
     value: 'servicenow',
     label: 'ServiceNow',
     icon: <Globe className="w-5 h-5" />,
-    description: 'Import tickets from ServiceNow',
+    description: 'Tickets & ITSM records',
+    category: 'erp',
   },
   {
     value: 'sap',
     label: 'SAP',
     icon: <Server className="w-5 h-5" />,
-    description: 'Connect to SAP ERP',
+    description: 'SAP ERP tables & RFCs',
+    category: 'erp',
   },
   {
     value: 'workday',
     label: 'Workday',
     icon: <Globe className="w-5 h-5" />,
-    description: 'Connect to Workday HCM/Finance',
+    description: 'HCM & finance records',
+    category: 'erp',
   },
   {
     value: 'oracle_fusion',
     label: 'Oracle Fusion',
     icon: <Server className="w-5 h-5" />,
-    description: 'Connect to Oracle Fusion Cloud',
+    description: 'Oracle Fusion Cloud apps',
+    category: 'erp',
   },
   {
     value: 'coupa',
     label: 'Coupa',
     icon: <Globe className="w-5 h-5" />,
-    description: 'Connect to Coupa procurement',
+    description: 'Procurement & spend',
+    category: 'erp',
   },
   {
     value: 'ariba',
     label: 'SAP Ariba',
     icon: <Globe className="w-5 h-5" />,
-    description: 'Connect to SAP Ariba procurement',
+    description: 'Procurement & sourcing',
+    category: 'erp',
   },
   {
     value: 'odoo',
     label: 'Odoo',
     icon: <Database className="w-5 h-5" />,
-    description: 'Connect to an Odoo instance',
+    description: 'Orders, invoices & tickets',
+    category: 'erp',
   },
   {
     value: 'zendesk',
     label: 'Zendesk',
     icon: <Globe className="w-5 h-5" />,
-    description: 'Import tickets from Zendesk',
+    description: 'Support tickets',
+    category: 'erp',
   },
 ];
 

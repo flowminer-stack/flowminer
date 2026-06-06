@@ -1,4 +1,5 @@
 import { Eye, EyeOff } from 'lucide-react';
+import { Disclosure } from './Disclosure';
 
 interface ZendeskConfigProps {
   zendeskSubdomain: string;
@@ -82,18 +83,20 @@ export function ZendeskConfig({
           </div>
         </div>
       </div>
-      <div>
-        <label className="block text-[11px] font-medium text-fg-faint mb-1">
-          Max Tickets
-        </label>
-        <input
-          type="number"
-          value={zendeskMaxTickets}
-          onChange={(e) => setZendeskMaxTickets(Number(e.target.value))}
-          min={1}
-          className="input w-full"
-        />
-      </div>
+      <Disclosure label="Advanced settings" hint="ticket limit">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">
+            Max Tickets
+          </label>
+          <input
+            type="number"
+            value={zendeskMaxTickets}
+            onChange={(e) => setZendeskMaxTickets(Number(e.target.value))}
+            min={1}
+            className="input w-full"
+          />
+        </div>
+      </Disclosure>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { type Core } from 'cytoscape';
 import {
@@ -17,12 +17,16 @@ import {
   Wand2,
   Sparkles,
   HelpCircle,
+  Building2,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEventLogData, useProcessMap } from '@/hooks/useProcessMining';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import Markdown from '@/components/common/Markdown';
 import ProcessMap from '@/components/ProcessMap/ProcessMap';
+// Lazy so three.js (the WebGL chunk) only loads when the City tab is shown —
+// small logs that open on the 2D map never pay for it.
+const ProcessCityCanvas = lazy(() => import('@/components/ProcessMap/ProcessCityCanvas'));
 import MapToolbar from '@/components/ProcessMap/MapToolbar';
 import NodeContextMenu from '@/components/ProcessMap/NodeContextMenu';
 import CommentThread from '@/components/ProcessMap/CommentThread';
@@ -50,9 +54,15 @@ import { useProcessFilters } from '@/hooks/useProcessFilters';
 import { mining as miningApi, ai as aiApi } from '@/api/client';
 import { useUIStore } from '@/store';
 import { formatDuration } from '@/utils/format';
+import { simplifyGraph } from '@/utils/simplifyGraph';
+import { isWebGLAvailable } from '@/utils/webgl';
 import type { ProcessFilter } from '@/types';
 
-type Tab = 'map' | 'happy_path' | 'bpmn' | 'cases' | 'analysis';
+type Tab = 'map' | 'city' | 'happy_path' | 'bpmn' | 'cases' | 'analysis';
+
+// Logs at or above this edge count land on the 3D City by default (when WebGL
+// is available) instead of a 2D hairball; smaller logs open on the flat map.
+const LARGE_EDGE_THRESHOLD = 80;
 
 /* ── Page ─────────────────────────────────────────────────────────────── */
 
@@ -95,14 +105,32 @@ export default function ProcessViewPage() {
   }, [discovery]);
 
   const [searchParams] = useSearchParams();
-  const urlTab = (searchParams.get('tab') as Tab) || 'map';
+  const tabParam = searchParams.get('tab') as Tab | null;
   const initialAnalysisId = searchParams.get('analysis') ?? undefined;
-  const [tab, setTab] = useState<Tab>(urlTab);
+  const [tab, setTab] = useState<Tab>(tabParam ?? 'map');
 
-  // Sync tab + analysis selection when URL search params change.
+  // Only force the tab from the URL when a `?tab=` param is actually present.
+  // A no-param landing is left free to default to the City view (below).
   useEffect(() => {
-    setTab(urlTab);
-  }, [urlTab]);
+    if (tabParam) setTab(tabParam);
+  }, [tabParam]);
+
+  // Default large logs to the 3D City instead of a 2D hairball, once per log,
+  // when WebGL is available and the user didn't request a specific tab. Decided
+  // during render (guarded by a ref) so React re-renders before paint — no flash
+  // of the dense flat map. Manual tab clicks afterwards are never overridden.
+  const landedLogIdRef = useRef<string | null>(null);
+  if (discovery && eventLogId && landedLogIdRef.current !== eventLogId) {
+    landedLogIdRef.current = eventLogId;
+    if (
+      !tabParam &&
+      tab !== 'city' &&
+      discovery.edges.length >= LARGE_EDGE_THRESHOLD &&
+      isWebGLAvailable()
+    ) {
+      setTab('city');
+    }
+  }
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [complexity, setComplexity] = useState(80);
   const [cleanView, setCleanView] = useState(false);
@@ -210,30 +238,12 @@ export default function ProcessViewPage() {
     setComplexity(100);
   };
 
-  // Visible node/edge counts
+  // Visible node/edge counts — mirror exactly what the map renders by reusing
+  // the same top-paths simplification (so the "N · E" badge is accurate).
   const visibleCounts = (() => {
     if (!discovery) return { nodes: 0, edges: 0 };
-    const { nodes: n, edges: e } = discovery;
-    const startIds = new Set(n.filter((x) => x.is_start).map((x) => x.id));
-    const endIds = new Set(n.filter((x) => x.is_end).map((x) => x.id));
-    const backbone: typeof e = [];
-    const other: typeof e = [];
-    for (const edge of e) {
-      if (startIds.has(edge.source) || startIds.has(edge.target) ||
-          endIds.has(edge.source) || endIds.has(edge.target)) {
-        backbone.push(edge);
-      } else {
-        other.push(edge);
-      }
-    }
-    const sorted = [...other].sort((a, b) => b.frequency - a.frequency);
-    const count = Math.max(0, Math.ceil((complexity / 100) * sorted.length));
-    const all = [...backbone, ...sorted.slice(0, count)];
-    const nodeIds = new Set<string>();
-    for (const edge of all) { nodeIds.add(edge.source); nodeIds.add(edge.target); }
-    for (const id of startIds) nodeIds.add(id);
-    for (const id of endIds) nodeIds.add(id);
-    return { nodes: nodeIds.size, edges: all.length };
+    const { nodes, edges } = simplifyGraph(discovery.nodes, discovery.edges, { complexity });
+    return { nodes: nodes.length, edges: edges.length };
   })();
 
   const explainMap = async () => {
@@ -308,6 +318,7 @@ export default function ProcessViewPage() {
         <div className="flex rounded-lg border border-line bg-surface-1 p-0.5 gap-0.5" style={{ boxShadow: 'var(--shadow-xs)' }}>
           {[
             { id: 'map' as Tab, label: 'Map', icon: Map },
+            { id: 'city' as Tab, label: 'City', icon: Building2 },
             { id: 'happy_path' as Tab, label: 'Happy Path', icon: GitBranch },
             { id: 'bpmn' as Tab, label: 'BPMN', icon: FileCode2 },
             { id: 'cases' as Tab, label: 'Cases', icon: Table2 },
@@ -418,6 +429,38 @@ export default function ProcessViewPage() {
       {tab === 'bpmn' && eventLogId && (
         <div className="mt-3 flex-1 overflow-hidden rounded-lg border border-line bg-surface-2">
           <BPMNViewer eventLogId={eventLogId} />
+        </div>
+      )}
+
+      {/* ── City tab (3D Process City) ──────────────────────────────────── */}
+      {tab === 'city' && eventLogId && discovery && (
+        <div className="mt-3 flex-1 overflow-auto rounded-lg border border-line bg-surface-2 p-4">
+          {isWebGLAvailable() ? (
+            <Suspense fallback={<LoadingSpinner size="lg" text="Constructing the city…" />}>
+              <ProcessCityCanvas
+                nodes={discovery.nodes}
+                edges={discovery.edges}
+                heightClass="h-[calc(100vh-19rem)]"
+              />
+              <p className="mt-2 text-[11px] text-fg-faint">
+                Skyline shows every activity; streets are simplified to the busiest paths. Prefer the classic flow diagram?{' '}
+                <button onClick={() => setTab('map')} className="font-medium text-accent hover:underline">
+                  Open the Map
+                </button>
+                .
+              </p>
+            </Suspense>
+          ) : (
+            <div className="flex h-[400px] flex-col items-center justify-center gap-3 text-center">
+              <Building2 size={28} className="text-fg-faint" />
+              <p className="max-w-sm text-[13px] text-fg-muted">
+                Process City needs WebGL, which isn’t available in this browser or environment.{' '}
+                <button onClick={() => setTab('map')} className="font-medium text-accent hover:underline">
+                  Open the Map instead.
+                </button>
+              </p>
+            </div>
+          )}
         </div>
       )}
 

@@ -1,4 +1,5 @@
 export * from './types';
+export { Disclosure } from './Disclosure';
 export { ColumnField } from './ColumnField';
 export { ConnectorTypeSelector } from './ConnectorTypeSelector';
 export { DatabaseConfig } from './DatabaseConfig';

@@ -1,4 +1,5 @@
 import { Eye, EyeOff, Info } from 'lucide-react';
+import { Disclosure } from './Disclosure';
 
 interface SnowflakeConfigProps {
   config: Record<string, any>;
@@ -56,7 +57,7 @@ export function SnowflakeConfig({ config, onChange, showPassword, onTogglePasswo
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="block text-[11px] font-medium text-fg-faint mb-1">Warehouse</label>
           <input
@@ -77,16 +78,6 @@ export function SnowflakeConfig({ config, onChange, showPassword, onTogglePasswo
             className="input w-full font-mono"
           />
         </div>
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">Schema</label>
-          <input
-            type="text"
-            value={config.schema || ''}
-            onChange={(e) => onChange('schema', e.target.value)}
-            placeholder="PUBLIC"
-            className="input w-full font-mono"
-          />
-        </div>
       </div>
       <div>
         <label className="block text-[11px] font-medium text-fg-faint mb-1">SQL Query or Table</label>
@@ -102,6 +93,18 @@ export function SnowflakeConfig({ config, onChange, showPassword, onTogglePasswo
           Use {'{{last_sync}}'} as a placeholder for incremental fetching
         </p>
       </div>
+      <Disclosure label="Advanced settings" hint="schema">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">Schema</label>
+          <input
+            type="text"
+            value={config.schema || ''}
+            onChange={(e) => onChange('schema', e.target.value)}
+            placeholder="PUBLIC"
+            className="input w-full font-mono"
+          />
+        </div>
+      </Disclosure>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { Eye, EyeOff } from 'lucide-react';
+import { Disclosure } from './Disclosure';
 import { types, ConnectorType } from './types';
 
 interface GenericErpConfigProps {
@@ -61,17 +62,17 @@ export function GenericErpConfig({
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">Entity / Table</label>
-          <input
-            type="text"
-            value={config.entity || ''}
-            onChange={(e) => onChange('entity', e.target.value)}
-            placeholder="WorkerHistory"
-            className="input w-full font-mono"
-          />
-        </div>
+      <div>
+        <label className="block text-[11px] font-medium text-fg-faint mb-1">Entity / Table</label>
+        <input
+          type="text"
+          value={config.entity || ''}
+          onChange={(e) => onChange('entity', e.target.value)}
+          placeholder="WorkerHistory"
+          className="input w-full font-mono"
+        />
+      </div>
+      <Disclosure label="Advanced settings" hint="record limit">
         <div>
           <label className="block text-[11px] font-medium text-fg-faint mb-1">Max Records</label>
           <input
@@ -82,7 +83,7 @@ export function GenericErpConfig({
             className="input w-full"
           />
         </div>
-      </div>
+      </Disclosure>
     </div>
   );
 }

@@ -350,7 +350,8 @@ export default function UploadPage() {
               Select your event log file
             </h2>
             <p className="mt-1 text-[12px] text-fg-muted">
-              Upload a CSV, XES, Excel, Parquet, or OCEL file containing your event data.
+              Drop a CSV, XES, Excel, Parquet, or OCEL file — we’ll auto-detect
+              your columns and let you adjust them before mining.
             </p>
             <div className="mt-4">
               <FileUpload

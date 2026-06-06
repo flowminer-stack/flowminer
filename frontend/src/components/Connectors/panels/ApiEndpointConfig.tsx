@@ -1,4 +1,5 @@
 import { ChevronDown, Eye, EyeOff } from 'lucide-react';
+import { Disclosure } from './Disclosure';
 
 interface ApiEndpointConfigProps {
   apiUrl: string;
@@ -80,94 +81,23 @@ export function ApiEndpointConfig({
           />
         </div>
       </div>
+
       <div>
         <label className="block text-[11px] font-medium text-fg-faint mb-1">
-          Headers (JSON)
+          Authentication
         </label>
-        <textarea
-          value={apiHeaders}
-          onChange={(e) => setApiHeaders(e.target.value)}
-          placeholder='{"Content-Type": "application/json"}'
-          rows={2}
-          className="input w-full font-mono resize-none"
-        />
-      </div>
-      {apiMethod === 'POST' && (
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">
-            Body (JSON)
-          </label>
-          <textarea
-            value={apiBody}
-            onChange={(e) => setApiBody(e.target.value)}
-            placeholder='{"filter": {}}'
-            rows={2}
-            className="input w-full font-mono resize-none"
-          />
-        </div>
-      )}
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">
-            Data Path
-          </label>
-          <input
-            type="text"
-            value={apiDataPath}
-            onChange={(e) => setApiDataPath(e.target.value)}
-            placeholder="data.items"
-            className="input w-full font-mono"
-          />
-        </div>
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">
-            Pagination Type
-          </label>
-          <div className="relative">
-            <select
-              value={apiPaginationType}
-              onChange={(e) => setApiPaginationType(e.target.value)}
-              className="select w-full"
-            >
-              <option value="none">None</option>
-              <option value="offset">Offset</option>
-              <option value="page">Page</option>
-              <option value="cursor">Cursor</option>
-            </select>
-            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-faint pointer-events-none" />
-          </div>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">
-            Page Size
-          </label>
-          <input
-            type="number"
-            value={apiPageSize}
-            onChange={(e) => setApiPageSize(Number(e.target.value))}
-            min={1}
-            className="input w-full"
-          />
-        </div>
-        <div>
-          <label className="block text-[11px] font-medium text-fg-faint mb-1">
-            Authentication
-          </label>
-          <div className="relative">
-            <select
-              value={apiAuth}
-              onChange={(e) => setApiAuth(e.target.value)}
-              className="select w-full"
-            >
-              <option value="none">None</option>
-              <option value="bearer">Bearer Token</option>
-              <option value="api_key">API Key</option>
-              <option value="basic">Basic Auth</option>
-            </select>
-            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-faint pointer-events-none" />
-          </div>
+        <div className="relative">
+          <select
+            value={apiAuth}
+            onChange={(e) => setApiAuth(e.target.value)}
+            className="select w-full"
+          >
+            <option value="none">None</option>
+            <option value="bearer">Bearer Token</option>
+            <option value="api_key">API Key</option>
+            <option value="basic">Basic Auth</option>
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-faint pointer-events-none" />
         </div>
       </div>
       {apiAuth !== 'none' && (
@@ -197,6 +127,79 @@ export function ApiEndpointConfig({
           </div>
         </div>
       )}
+
+      <Disclosure label="Advanced settings" hint="headers, response path, pagination">
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">
+            Headers (JSON)
+          </label>
+          <textarea
+            value={apiHeaders}
+            onChange={(e) => setApiHeaders(e.target.value)}
+            placeholder='{"Content-Type": "application/json"}'
+            rows={2}
+            className="input w-full font-mono resize-none"
+          />
+        </div>
+        {apiMethod === 'POST' && (
+          <div>
+            <label className="block text-[11px] font-medium text-fg-faint mb-1">
+              Body (JSON)
+            </label>
+            <textarea
+              value={apiBody}
+              onChange={(e) => setApiBody(e.target.value)}
+              placeholder='{"filter": {}}'
+              rows={2}
+              className="input w-full font-mono resize-none"
+            />
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-[11px] font-medium text-fg-faint mb-1">
+              Data Path
+            </label>
+            <input
+              type="text"
+              value={apiDataPath}
+              onChange={(e) => setApiDataPath(e.target.value)}
+              placeholder="data.items"
+              className="input w-full font-mono"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-medium text-fg-faint mb-1">
+              Pagination Type
+            </label>
+            <div className="relative">
+              <select
+                value={apiPaginationType}
+                onChange={(e) => setApiPaginationType(e.target.value)}
+                className="select w-full"
+              >
+                <option value="none">None</option>
+                <option value="offset">Offset</option>
+                <option value="page">Page</option>
+                <option value="cursor">Cursor</option>
+              </select>
+              <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-faint pointer-events-none" />
+            </div>
+          </div>
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-faint mb-1">
+            Page Size
+          </label>
+          <input
+            type="number"
+            value={apiPageSize}
+            onChange={(e) => setApiPageSize(Number(e.target.value))}
+            min={1}
+            className="input w-full"
+          />
+        </div>
+      </Disclosure>
     </div>
   );
 }

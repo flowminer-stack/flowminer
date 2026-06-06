@@ -90,7 +90,7 @@ function ObjectGraphVisual({ data }: { data: ObjectsGraphResponse }) {
         },
       ],
       layout: { name: 'circle', padding: 60, animate: false } as any,
-      userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.15, maxZoom: 5, wheelSensitivity: 1.0, pixelRatio: 'auto', textureOnViewport: true,
+      userZoomingEnabled: true, userPanningEnabled: true, minZoom: 0.15, maxZoom: 5, wheelSensitivity: 1.0, pixelRatio: 'auto', textureOnViewport: false, hideEdgesOnViewport: true,
     });
 
     return () => { cy.destroy(); };

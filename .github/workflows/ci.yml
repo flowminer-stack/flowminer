@@ -173,4 +173,3 @@ jobs:
           # best-effort scan — false positives can be silenced
           # via .gitleaksignore.
           GITLEAKS_NOTIFY_USER_LIST: ""
-        continue-on-error: true

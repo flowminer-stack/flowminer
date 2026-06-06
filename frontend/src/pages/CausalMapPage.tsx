@@ -183,7 +183,10 @@ export default function CausalMapPage() {
       maxZoom: 5,
       wheelSensitivity: 1.0,
       pixelRatio: 'auto',
-      textureOnViewport: true,
+      // Hide edges (not the whole canvas) during a gesture so panning never
+      // blanks the area you move into. See ProcessMap for the full rationale.
+      textureOnViewport: false,
+      hideEdgesOnViewport: true,
       boxSelectionEnabled: false,
     });
     if (prevView) cy.viewport({ zoom: prevView.zoom, pan: prevView.pan });
