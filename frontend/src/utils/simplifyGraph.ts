@@ -84,16 +84,25 @@ export function simplifyGraph(
 
   if (opts.keepAllNodes) return { nodes, edges: keptEdges };
 
+  // Keep only nodes that an actually-kept edge touches. We deliberately do NOT
+  // force-keep every start/end activity: a sparse miner (the Alpha Miner on a
+  // noisy log like BPIC2019 leaves ~half the activities — including dozens of
+  // "end" activities — with no edges at all) would otherwise litter the map
+  // with isolated boxes that bury the real connected process and read as "no
+  // connections". An orphaned activity isn't part of the discovered flow, so
+  // it's dropped from the 2D map (the City view keeps every node via
+  // keepAllNodes). The bounded-connectivity pass above already re-attaches the
+  // strongest edge for any start/end that HAS one, so reachable anchors survive.
   const visibleNodeIds = new Set<string>();
   for (const e of keptEdges) {
     visibleNodeIds.add(e.source);
     visibleNodeIds.add(e.target);
   }
-  for (const id of startIds) visibleNodeIds.add(id);
-  for (const id of endIds) visibleNodeIds.add(id);
 
-  return {
-    nodes: nodes.filter((n) => visibleNodeIds.has(n.id)),
-    edges: keptEdges,
-  };
+  const keptNodes = nodes.filter((n) => visibleNodeIds.has(n.id));
+  // Safety net: never blank the canvas (e.g. if every edge referenced an
+  // unknown id) — fall back to all nodes.
+  if (keptNodes.length === 0) return { nodes, edges: keptEdges };
+
+  return { nodes: keptNodes, edges: keptEdges };
 }
