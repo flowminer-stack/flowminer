@@ -385,12 +385,15 @@ export default function ProcessViewPage() {
         <AnalysisDropdown eventLogId={eventLogId!} />
       </div>
 
+      {/* Scrollable stage. The active view keeps its full viewport height; the
+          Data Quality panel stacks ABOVE it, so opening Quality makes the whole
+          area scroll — the view slides off-screen and reappears as you scroll
+          past Quality — instead of the view being compressed. */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+
       {/* ── Data Quality panel ──────────────────────────────────────────── */}
-      {/* Capped height with internal scroll so it never squeezes the graph
-          below to nothing (without max-h, overflow-y-auto is a no-op and the
-          panel grows to its full content height, compressing the diagram). */}
       {qualityOpen && eventLogId && (
-        <div className="mt-3 max-h-[45vh] shrink-0 overflow-y-auto rounded-lg border border-line bg-surface-2 p-4">
+        <div className="mt-3 rounded-lg border border-line bg-surface-2 p-4">
           <div className="flex items-center justify-between">
             <span className="text-[13px] font-semibold text-fg">Data Quality</span>
             <button
@@ -403,6 +406,10 @@ export default function ProcessViewPage() {
           <DataQualityCard eventLogId={eventLogId} />
         </div>
       )}
+
+      {/* Fixed-height stage — keeps the active view at full viewport height so
+          it never shrinks when the Quality panel is open above it. */}
+      <div className="flex h-full min-h-0 flex-col">
 
       {/* ── Insights panel (map tab only) ───────────────────────────────── */}
       {tab === 'map' && eventLogId && discovery && (
@@ -889,6 +896,9 @@ export default function ProcessViewPage() {
           </div>
         </>
       )}
+
+      </div>{/* /stage */}
+      </div>{/* /scroll region */}
 
       {/* Activity detail modal */}
       {eventLogId && selectedNode && (
