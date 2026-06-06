@@ -57,6 +57,36 @@ export type LogBuilderBuildResponse = Omit<
   };
 };
 
+// ─── Suggest Mapping ─────────────────────────────────────────────────────────
+
+export interface SuggestMappingRequest {
+  /** Staging path from a prior /upload-raw call — the server will profile it. */
+  staging_path?: string;
+  /**
+   * Column profile already held by the client (preview_table shape).
+   * Use this when the staging_path is not available (connector preview, etc.).
+   */
+  columns?: Array<{ name: string; dtype?: string; kind?: string; nunique?: number; null_ratio?: number }>;
+  /** Sample rows — the server feeds them to the LLM alongside the column profile. */
+  sample_rows?: Record<string, unknown>[];
+  /** Optional source-system hint that biases the LLM (e.g. "sap", "servicenow"). */
+  connector_type?: string;
+}
+
+export interface SuggestMappingResponse {
+  case_id_column: string | null;
+  activity_column: string | null;
+  timestamp_column: string | null;
+  resource_column: string | null;
+  object_type_columns: string[];
+  confidence: number;
+  rationale: string;
+  /** "llm" when a model ran; "heuristic" when no LLM is configured or it failed. */
+  source: 'llm' | 'heuristic';
+  /** Whether the backend has an LLM configured at all. */
+  llm_configured: boolean;
+}
+
 // ─── Log Builder ─────────────────────────────────────────────────────────────
 
 // A prebuilt process content pack (recipe): a system-specific template that
@@ -124,6 +154,18 @@ export const logBuilder = {
 
   getTemplate: async (id: string): Promise<ProcessRecipe> => {
     const r = await api.get<ProcessRecipe>(`/log-builder/templates/${id}`);
+    return r.data;
+  },
+
+  /**
+   * Ask the AI (or heuristic fallback) to suggest the case_id / activity /
+   * timestamp / resource column mapping for a staged table.  Pass either
+   * `staging_path` (from uploadRaw) or a client-side `columns` + `sample_rows`
+   * profile.  Never throws on a mapping failure — the backend always returns a
+   * best-effort answer.
+   */
+  suggestMapping: async (body: SuggestMappingRequest): Promise<SuggestMappingResponse> => {
+    const r = await api.post<SuggestMappingResponse>('/log-builder/suggest-mapping', body);
     return r.data;
   },
 };

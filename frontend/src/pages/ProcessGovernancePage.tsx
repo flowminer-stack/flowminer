@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
-import { FileCheck, Plus, Clock } from 'lucide-react';
+import { FileCheck, Plus, Clock, GitPullRequest } from 'lucide-react';
+import clsx from 'clsx';
 import PageHeader from '@/components/common/PageHeader';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import { governance, type GovernanceEntry, type GovernanceStatus } from '@/api/client';
+import ChangeRequestsPanel from '@/components/Governance/ChangeRequestsPanel';
+import { useProjectsStore } from '@/store';
 
 // ARIS Flows-style governance lifecycle. Backed by ``governance_entries``
 // + ``governance_transitions`` so every promotion is recorded with
@@ -25,10 +28,31 @@ const nextState: Record<GovernanceStatus, GovernanceStatus | null> = {
   retired: null,
 };
 
+type Tab = 'entries' | 'change-requests';
+
+const TABS: Array<{ value: Tab; label: string; icon: typeof FileCheck }> = [
+  { value: 'entries', label: 'Lifecycle entries', icon: FileCheck },
+  { value: 'change-requests', label: 'Change requests', icon: GitPullRequest },
+];
+
 export default function ProcessGovernancePage() {
+  const [tab, setTab] = useState<Tab>('entries');
   const [entries, setEntries] = useState<GovernanceEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Record<string, unknown[]>>({});
+
+  // Project scope for the change-requests panel
+  const projects = useProjectsStore((s) => s.projects);
+  const fetchProjects = useProjectsStore((s) => s.fetchProjects);
+  const currentProject = useProjectsStore((s) => s.currentProject);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+
+  // Derive the effective project id: prefer currentProject, fall back to picker
+  const projectId = currentProject?.id ?? selectedProjectId;
+
+  useEffect(() => {
+    fetchProjects();
+  }, [fetchProjects]);
 
   const reload = () => {
     setLoading(true);
@@ -87,24 +111,46 @@ export default function ProcessGovernancePage() {
         description="Draft → review → approved → published → retired. Every promotion is audited with actor and comment."
       />
 
-      <div className="mt-6 flex items-center justify-end">
-        <button onClick={handleAdd} className="btn-primary text-[11px]">
-          <Plus size={11} />
-          New process entry
-        </button>
+      {/* Tab bar */}
+      <div className="mt-5 flex items-center gap-1 border-b border-line">
+        {TABS.map(({ value, label, icon: Icon }) => (
+          <button
+            key={value}
+            onClick={() => setTab(value)}
+            className={clsx(
+              'flex items-center gap-1.5 border-b-2 px-3 pb-2 pt-1 text-[12px] font-medium transition-colors',
+              tab === value
+                ? 'border-accent text-accent'
+                : 'border-transparent text-fg-muted hover:text-fg',
+            )}
+          >
+            <Icon size={13} />
+            {label}
+          </button>
+        ))}
       </div>
 
-      {loading ? (
-        <LoadingSpinner fullPage text="Loading governance entries…" />
-      ) : entries.length === 0 ? (
-        <div className="mt-12 rounded-lg border border-dashed border-line bg-surface-1 p-8 text-center">
-          <p className="text-[12px] text-fg-muted">
-            No governance entries yet. Add one to track a process model through its lifecycle.
-          </p>
-        </div>
-      ) : (
-        <div className="mt-6 space-y-2">
-          {entries.map((e) => {
+      {/* ── Lifecycle entries tab ─────────────────────────────────────── */}
+      {tab === 'entries' && (
+        <>
+          <div className="mt-6 flex items-center justify-end">
+            <button onClick={handleAdd} className="btn-primary text-[11px]">
+              <Plus size={11} />
+              New process entry
+            </button>
+          </div>
+
+          {loading ? (
+            <LoadingSpinner fullPage text="Loading governance entries…" />
+          ) : entries.length === 0 ? (
+            <div className="mt-12 rounded-lg border border-dashed border-line bg-surface-1 p-8 text-center">
+              <p className="text-[12px] text-fg-muted">
+                No governance entries yet. Add one to track a process model through its lifecycle.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-6 space-y-2">
+              {entries.map((e) => {
             const history = expanded[e.id];
             return (
               <div key={e.id} className="rounded-lg border border-line bg-surface-1 p-4">
@@ -184,7 +230,43 @@ export default function ProcessGovernancePage() {
                 )}
               </div>
             );
-          })}
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── Change requests tab ───────────────────────────────────────── */}
+      {tab === 'change-requests' && (
+        <div className="mt-6">
+          {/* Project picker — shown only when no current project is set in the store */}
+          {!currentProject && (
+            <div className="mb-5 flex items-center gap-3">
+              <label className="text-[12px] font-medium text-fg-muted">Project</label>
+              <select
+                value={selectedProjectId}
+                onChange={(e) => setSelectedProjectId(e.target.value)}
+                className="input py-1 text-[11px]"
+              >
+                <option value="">Select a project…</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {projectId ? (
+            <ChangeRequestsPanel projectId={projectId} />
+          ) : (
+            <div className="mt-12 rounded-lg border border-dashed border-line bg-surface-1 p-8 text-center">
+              <p className="text-[12px] text-fg-muted">
+                Select a project above to view and create change requests.
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>

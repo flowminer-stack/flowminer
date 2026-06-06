@@ -13,9 +13,11 @@ import {
   Boxes,
   Package,
   X,
+  Sparkles,
+  Loader2,
 } from 'lucide-react';
 import { logBuilder } from '@/api/client';
-import type { ProcessRecipe } from '@/api/logBuilder';
+import type { ProcessRecipe, SuggestMappingResponse } from '@/api/logBuilder';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import PageHeader from '@/components/common/PageHeader';
 import { useUIStore } from '@/store';
@@ -99,6 +101,11 @@ export default function EventLogBuilderPage() {
   const [passthrough, setPassthrough] = useState<string[]>([]);
   const [nextId, setNextId] = useState(1);
   const [nextSourceId, setNextSourceId] = useState(1);
+
+  // ── AI mapping suggestion ────────────────────────────────────────────────────
+  const [aiSuggesting, setAiSuggesting] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState<SuggestMappingResponse | null>(null);
+  const [aiSuggestError, setAiSuggestError] = useState<string | null>(null);
 
   // ── Process content packs (recipes) ─────────────────────────────────────────
   // A recipe pre-fills the builder's process scaffold (events, case id, joins,
@@ -212,6 +219,8 @@ export default function EventLogBuilderPage() {
     setNextSourceId(1);
     setLogName('Built log');
     setSelectedRecipeId('');
+    setAiSuggestion(null);
+    setAiSuggestError(null);
   };
 
   // Apply a content pack: pre-fill the editable process scaffold from the
@@ -242,34 +251,112 @@ export default function EventLogBuilderPage() {
     setSelectedRecipeId('');
   };
 
+  // Apply an AI suggestion's output: pre-fill case_id, resource, and event rows.
+  // Called both automatically (after primary upload, standard mode, no recipe)
+  // and manually via the "Suggest mapping with AI" button.
+  const applySuggestion = (s: SuggestMappingResponse, currentWideColumns: WideColumn[]) => {
+    const colNames = new Set(currentWideColumns.map((c) => c.name));
+    if (s.case_id_column && colNames.has(s.case_id_column)) {
+      setCaseIdColumn(s.case_id_column);
+    }
+    if (s.resource_column && colNames.has(s.resource_column)) {
+      setResourceColumn(s.resource_column);
+    }
+    // Timestamp-ish columns suggested by the AI as event timestamps.
+    // activity_column from the AI maps to the activity_name label; timestamp to
+    // the timestamp column. If the AI only named a timestamp column we fall back
+    // to using the datetime columns (same as the manual heuristic).
+    const tsColName = s.timestamp_column && colNames.has(s.timestamp_column)
+      ? s.timestamp_column
+      : null;
+    const actColName = s.activity_column && colNames.has(s.activity_column)
+      ? s.activity_column
+      : null;
+
+    if (tsColName) {
+      const mapped: EventMapping[] = [
+        {
+          id: 1,
+          activity_name: actColName ? humanize(actColName) : humanize(tsColName),
+          timestamp_column: tsColName,
+        },
+      ];
+      // Supplement with remaining datetime columns (up to 6 total).
+      const dtCols = currentWideColumns.filter(
+        (c) => (c.kind === 'datetime' || c.kind === 'datetime_like') && c.name !== tsColName,
+      );
+      dtCols.slice(0, 5).forEach((c, i) => {
+        mapped.push({ id: i + 2, activity_name: humanize(c.name), timestamp_column: c.name });
+      });
+      setEvents(mapped);
+      setNextId(mapped.length + 1);
+    }
+  };
+
+  // Call /log-builder/suggest-mapping and, if in standard mode with no recipe,
+  // auto-apply the result. Otherwise just store it so the user can apply it.
+  const callSuggestMapping = async (
+    stagingPath: string,
+    currentWideColumns: WideColumn[],
+    autoApply: boolean,
+  ) => {
+    setAiSuggesting(true);
+    setAiSuggestError(null);
+    try {
+      const suggestion = await logBuilder.suggestMapping({ staging_path: stagingPath });
+      setAiSuggestion(suggestion);
+      if (autoApply) {
+        applySuggestion(suggestion, currentWideColumns);
+      }
+    } catch (err: unknown) {
+      setAiSuggestError(errMsg(err));
+    } finally {
+      setAiSuggesting(false);
+    }
+  };
+
   // Upload the very first (primary) source and auto-suggest a mapping.
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
+    // Clear any previous AI suggestion state when a new file is uploaded.
+    setAiSuggestion(null);
+    setAiSuggestError(null);
     try {
       const r = await logBuilder.uploadRaw(file);
       const sid = nextSourceId;
-      setSources([
-        { id: sid, preview: r, joinLeftOn: '', joinRightOn: '', joinHow: 'left' },
-      ]);
+      const newSource: SourceTable = { id: sid, preview: r, joinLeftOn: '', joinRightOn: '', joinHow: 'left' };
+      setSources([newSource]);
       setNextSourceId(sid + 1);
+
       // When a content pack is active its process scaffold takes precedence —
       // don't overwrite the recipe's events/case-id with auto-detection.
       if (selectedRecipeId) return;
-      // Auto-suggest: first non-datetime column as case id, datetime cols as events.
-      const nonDatetime = r.columns.find(
-        (c) => c.kind !== 'datetime' && c.kind !== 'datetime_like',
-      );
-      if (nonDatetime) setCaseIdColumn(nonDatetime.name);
-      const tsCols = r.columns.filter((c) => c.kind === 'datetime' || c.kind === 'datetime_like');
-      const mapped = tsCols.slice(0, 6).map((c, i) => ({
-        id: i + 1,
-        activity_name: humanize(c.name),
-        timestamp_column: c.name,
+
+      // Build the wide-column list for the new single source (mirrors wideColumns memo).
+      const initialWideColumns: WideColumn[] = r.columns.map((c) => ({
+        ...c,
+        sourceId: sid,
+        sourceLabel: file.name || `Source 1`,
+        originalName: c.name,
       }));
-      setEvents(mapped);
-      setNextId(mapped.length + 1);
+
+      if (buildMode === 'standard') {
+        // Fire AI suggestion and auto-apply in standard mode (no recipe).
+        // The heuristic fallback is handled server-side; we never block the upload.
+        void callSuggestMapping(r.staging_path, initialWideColumns, true);
+      } else {
+        // OCEL mode: still seed a simple heuristic so the user has something to start with.
+        const tsCols = r.columns.filter((c) => c.kind === 'datetime' || c.kind === 'datetime_like');
+        const mapped = tsCols.slice(0, 6).map((c, i) => ({
+          id: i + 1,
+          activity_name: humanize(c.name),
+          timestamp_column: c.name,
+        }));
+        setEvents(mapped);
+        setNextId(mapped.length + 1);
+      }
     } catch (err: unknown) {
       addNotification({ type: 'error', title: 'Upload failed', message: errMsg(err) });
     } finally {
@@ -722,7 +809,57 @@ export default function EventLogBuilderPage() {
           {/* ── Step 3: Mapping + events ────────────────────────────────── */}
           <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
             <div className="rounded-lg border border-line bg-surface-1 p-4">
-              <h2 className="mb-3 text-[13px] font-semibold text-fg">Configuration</h2>
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-[13px] font-semibold text-fg">Configuration</h2>
+                {/* AI suggest button — standard mode only, no active recipe */}
+                {!isOcel && !selectedRecipeId && sources.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      callSuggestMapping(
+                        sources[0].preview.staging_path,
+                        wideColumns,
+                        true,
+                      )
+                    }
+                    disabled={aiSuggesting}
+                    className="btn-ghost flex items-center gap-1 text-[11px] disabled:opacity-50"
+                    title="Let AI pre-fill the column mapping"
+                  >
+                    {aiSuggesting ? (
+                      <Loader2 size={12} className="animate-spin" />
+                    ) : (
+                      <Sparkles size={12} className="text-accent" />
+                    )}
+                    {aiSuggesting ? 'Suggesting…' : 'Suggest mapping with AI'}
+                  </button>
+                )}
+              </div>
+
+              {/* AI suggestion feedback strip */}
+              {!isOcel && !selectedRecipeId && (aiSuggestion || aiSuggestError) && (
+                <div
+                  className={`mb-3 flex items-start gap-2 rounded border px-2.5 py-2 text-[11px] ${
+                    aiSuggestError
+                      ? 'border-danger/30 bg-danger/5 text-danger'
+                      : 'border-accent/30 bg-accent/5 text-fg-muted'
+                  }`}
+                >
+                  {aiSuggestError ? (
+                    <Info size={12} className="mt-0.5 shrink-0 text-danger" />
+                  ) : (
+                    <Sparkles size={12} className="mt-0.5 shrink-0 text-accent" />
+                  )}
+                  <span>
+                    {aiSuggestError
+                      ? `AI suggestion failed: ${aiSuggestError}`
+                      : aiSuggestion
+                        ? `${aiSuggestion.source === 'llm' ? 'AI' : 'Heuristic'} suggested (confidence ${Math.round((aiSuggestion.confidence ?? 0) * 100)}%): ${aiSuggestion.rationale}`
+                        : null}
+                  </span>
+                </div>
+              )}
+
               <div className="space-y-3">
                 <Field label="Log type">
                   <div className="grid grid-cols-2 gap-2">
@@ -790,7 +927,14 @@ export default function EventLogBuilderPage() {
                     )}
                   </Field>
                 ) : (
-                  <Field label="Case ID column">
+                  <Field
+                    label="Case ID column"
+                    hint={
+                      aiSuggestion?.case_id_column === caseIdColumn && caseIdColumn
+                        ? 'AI suggested'
+                        : undefined
+                    }
+                  >
                     <select
                       className="input w-full"
                       value={caseIdColumn}
@@ -806,7 +950,14 @@ export default function EventLogBuilderPage() {
                     </select>
                   </Field>
                 )}
-                <Field label="Resource column (optional)">
+                <Field
+                  label="Resource column (optional)"
+                  hint={
+                    aiSuggestion?.resource_column === resourceColumn && resourceColumn
+                      ? 'AI suggested'
+                      : undefined
+                  }
+                >
                   <select
                     className="input w-full"
                     value={resourceColumn}
@@ -979,10 +1130,26 @@ function JoinEditor({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div>
-      <label className="mb-1 block text-[11px] font-medium text-fg-muted">{label}</label>
+      <div className="mb-1 flex items-center gap-1.5">
+        <label className="text-[11px] font-medium text-fg-muted">{label}</label>
+        {hint && (
+          <span className="flex items-center gap-0.5 rounded bg-accent/10 px-1 py-0.5 text-[9px] font-medium text-accent">
+            <Sparkles size={9} />
+            {hint}
+          </span>
+        )}
+      </div>
       {children}
     </div>
   );

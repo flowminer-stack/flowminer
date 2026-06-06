@@ -10,6 +10,7 @@ import {
 import PageHeader from '@/components/common/PageHeader';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
+import CostOfQualityCard from '@/components/Scorecards/CostOfQualityCard';
 import { mining } from '@/api/client';
 import { useEventLogData } from '@/hooks/useProcessMining';
 import type { ConformanceResponse, ReworkResponse, ProcessStatistics } from '@/types';
@@ -198,6 +199,13 @@ export default function ProcessHealthPage() {
           </div>
         ))}
       </div>
+
+      {/* Cost of quality — dollar impact of rework, bottlenecks, escalations */}
+      {eventLogId && (
+        <div className="mt-4">
+          <CostOfQualityCard eventLogId={eventLogId} />
+        </div>
+      )}
 
       {/* Health ring + dimension breakdown */}
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">

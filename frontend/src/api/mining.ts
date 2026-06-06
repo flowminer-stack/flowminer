@@ -121,6 +121,19 @@ export const mining = {
     URL.revokeObjectURL(url);
   },
 
+  downloadDecisionRulesDmn: async (eventLogId: string): Promise<void> => {
+    const response = await api.get(`/mining/decision-rules/${eventLogId}/dmn`, {
+      responseType: 'blob',
+    });
+    const url = URL.createObjectURL(response.data);
+    const a = document.createElement('a');
+    a.href = url;
+    // Backend sets a Content-Disposition filename; this is the fallback.
+    a.download = `decisions_${eventLogId}.dmn`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+
   getRootCause: async (eventLogId: string): Promise<RootCauseResponse> => {
     const response = await api.get<RootCauseResponse>(
       `/mining/root-cause/${eventLogId}`,

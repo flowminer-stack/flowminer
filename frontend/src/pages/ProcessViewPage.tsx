@@ -18,6 +18,10 @@ import {
   Sparkles,
   HelpCircle,
   Building2,
+  Code2,
+  FileDown,
+  Search,
+  Layers,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEventLogData, useProcessMap } from '@/hooks/useProcessMining';
@@ -49,9 +53,11 @@ import InsightsPanel from '@/components/InsightsPanel/InsightsPanel';
 import FilterPanel from '@/components/ProcessMap/FilterPanel';
 import ComplexityScoreBadge from '@/components/ProcessMap/ComplexityScoreBadge';
 import AnalysisDropdown from '@/components/ProcessMap/AnalysisDropdown';
+import ExportWorkflowModal from '@/components/Scorecards/ExportWorkflowModal';
 import { algorithmOptions, detailLevels, type Algorithm } from '@/components/ProcessMap/mapControlsConfig';
 import { useProcessFilters } from '@/hooks/useProcessFilters';
-import { mining as miningApi, ai as aiApi } from '@/api/client';
+import { mining as miningApi, ai as aiApi, competitive as competitiveApi } from '@/api/client';
+import type { BpmnQResponse, HierarchyResponse } from '@/api/competitive';
 import { useUIStore } from '@/store';
 import { formatDuration } from '@/utils/format';
 import { simplifyGraph } from '@/utils/simplifyGraph';
@@ -142,6 +148,27 @@ export default function ProcessViewPage() {
   const [exportingReport, setExportingReport] = useState(false);
   const [selectedEdge, setSelectedEdge] = useState<{ source: string; target: string } | null>(null);
 
+  // ── Export as Code (workflow engine codegen) ─────────────────────
+  const [exportCodeOpen, setExportCodeOpen] = useState(false);
+
+  // ── Download DMN (decision rules) ────────────────────────────────
+  const [downloadingDmn, setDownloadingDmn] = useState(false);
+
+  // ── Path search (bpmn-q structural query) ────────────────────────
+  const [pathQuery, setPathQuery] = useState('');
+  const [pathResults, setPathResults] = useState<BpmnQResponse | null>(null);
+  const [pathLoading, setPathLoading] = useState(false);
+  const [pathError, setPathError] = useState<string | null>(null);
+
+  // ── Activity grouping (hierarchy buckets) ────────────────────────
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [groupPattern, setGroupPattern] = useState('');
+  const [groupLabel, setGroupLabel] = useState('');
+  const [groupRules, setGroupRules] = useState<{ pattern: string; bucket: string }[]>([]);
+  const [groupResults, setGroupResults] = useState<HierarchyResponse | null>(null);
+  const [groupLoading, setGroupLoading] = useState(false);
+  const [groupError, setGroupError] = useState<string | null>(null);
+
   // ── "What does this map mean?" narration (finding #15) ────────────
   // On demand, ask the AI to read the *current* map config — algorithm,
   // noise threshold, complexity, and how many nodes/edges are actually
@@ -199,6 +226,61 @@ export default function ProcessViewPage() {
       addNotification({ type: 'error', title: 'Failed to generate report' });
     } finally {
       setExportingReport(false);
+    }
+  };
+
+  const handleDownloadDmn = async () => {
+    if (!eventLogId) return;
+    setDownloadingDmn(true);
+    try {
+      await miningApi.downloadDecisionRulesDmn(eventLogId);
+    } catch {
+      addNotification({ type: 'error', title: 'Failed to export DMN' });
+    } finally {
+      setDownloadingDmn(false);
+    }
+  };
+
+  const runPathSearch = async () => {
+    if (!eventLogId) return;
+    const pattern = pathQuery.trim();
+    if (!pattern) return;
+    setPathLoading(true);
+    setPathError(null);
+    try {
+      const r = await competitiveApi.bpmnQ(eventLogId, pattern);
+      setPathResults(r);
+    } catch (e) {
+      const ax = e as { response?: { data?: { detail?: string } } };
+      setPathError(ax?.response?.data?.detail ?? "Pattern must be 'A -> B' (or 'A -> ?' / 'A -> <end>').");
+      setPathResults(null);
+    } finally {
+      setPathLoading(false);
+    }
+  };
+
+  const addGroupRule = () => {
+    const pattern = groupPattern.trim();
+    const bucket = groupLabel.trim();
+    if (!pattern || !bucket) return;
+    setGroupRules((prev) => [...prev, { pattern, bucket }]);
+    setGroupPattern('');
+    setGroupLabel('');
+  };
+
+  const runGrouping = async (rules: { pattern: string; bucket: string }[]) => {
+    if (!eventLogId || rules.length === 0) return;
+    setGroupLoading(true);
+    setGroupError(null);
+    try {
+      const r = await competitiveApi.hierarchy(eventLogId, rules);
+      setGroupResults(r);
+    } catch (e) {
+      const ax = e as { response?: { data?: { detail?: string } } };
+      setGroupError(ax?.response?.data?.detail ?? 'Failed to group activities. Check your regex rules.');
+      setGroupResults(null);
+    } finally {
+      setGroupLoading(false);
     }
   };
 
@@ -367,6 +449,34 @@ export default function ProcessViewPage() {
             <FileCode2 size={13} />
           )}
           Report
+        </button>
+
+        {/* Export as Code — turn the mined happy path into runnable
+            orchestration code (Temporal / n8n / Airflow). Opens the
+            self-contained ExportWorkflowModal. */}
+        <button
+          onClick={() => setExportCodeOpen(true)}
+          className="btn-secondary text-[12px]"
+          title="Export the mined process as runnable workflow code"
+        >
+          <Code2 size={13} />
+          Export as Code
+        </button>
+
+        {/* Download DMN — export discovered decision rules as a DMN 1.4
+            XML file for Camunda / Trisotech. Triggers a blob download. */}
+        <button
+          onClick={handleDownloadDmn}
+          disabled={downloadingDmn}
+          className="btn-secondary text-[12px]"
+          title="Download discovered decision rules as a DMN 1.4 file"
+        >
+          {downloadingDmn ? (
+            <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-line-strong border-t-fg-secondary" />
+          ) : (
+            <FileDown size={13} />
+          )}
+          Download DMN
         </button>
 
         {/* Ask AI — scoped to the current event log. Placed next to
@@ -612,6 +722,50 @@ export default function ProcessViewPage() {
 
               {/* Actions */}
               <div className="flex items-center gap-1.5">
+                {/* Path search (bpmn-q) — structural query on the DFG.
+                    e.g. "Approve -> Pay", "Approve -> ?", "Pay -> <end>".
+                    Results render in the right side panel. */}
+                <div className="flex items-center gap-1 rounded-lg border border-line bg-surface-1 pl-2 pr-1 py-0.5">
+                  <Search size={11} className="shrink-0 text-fg-faint" />
+                  <input
+                    value={pathQuery}
+                    onChange={(e) => setPathQuery(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') runPathSearch(); }}
+                    placeholder="A -> B"
+                    title="Find paths: A -> B, A -> ? (any next), A -> <end>"
+                    className="w-24 bg-transparent text-[11px] text-fg placeholder:text-fg-faint focus:outline-none"
+                  />
+                  <button
+                    onClick={runPathSearch}
+                    disabled={pathLoading || !pathQuery.trim()}
+                    className="rounded px-1.5 py-0.5 text-[10px] font-semibold text-accent hover:bg-accent/10 disabled:opacity-40"
+                  >
+                    {pathLoading ? '…' : 'Find'}
+                  </button>
+                </div>
+
+                {/* Group activities (hierarchy) — collapse activities into
+                    higher-level buckets via regex rules. Opens an inline
+                    editor; results render in the right side panel. */}
+                <button
+                  onClick={() => setGroupOpen((o) => !o)}
+                  title="Group activities into higher-level buckets with regex rules"
+                  className={clsx(
+                    'flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-semibold transition-all duration-100',
+                    groupOpen || groupResults
+                      ? 'bg-accent/10 text-accent'
+                      : 'text-fg-muted hover:bg-surface-3 hover:text-fg',
+                  )}
+                >
+                  <Layers size={12} />
+                  Group activities
+                  {groupRules.length > 0 && (
+                    <span className="rounded-full bg-accent/20 px-1.5 py-px text-[10px] font-bold text-accent">
+                      {groupRules.length}
+                    </span>
+                  )}
+                </button>
+
                 <button
                   onClick={() => setFilterOpen((o) => !o)}
                   title="Detailed filter panel. Changes here scope the map and are mirrored into the universal filter chips, so the analysis tabs stay in sync."
@@ -648,6 +802,176 @@ export default function ProcessViewPage() {
               </div>
             </div>
           </div>
+
+          {/* ── Group activities editor (hierarchy) ───────────────────── */}
+          {groupOpen && (
+            <div className="mt-2 rounded-xl border border-line bg-surface-2 px-3 py-2.5" style={{ boxShadow: 'var(--shadow-xs)' }}>
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-[12px] font-semibold text-fg">
+                  <Layers size={13} className="text-accent" />
+                  Group activities
+                </span>
+                <button
+                  onClick={() => setGroupOpen(false)}
+                  className="rounded p-1 text-fg-faint transition-colors hover:bg-tint hover:text-fg-muted"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+              <p className="mt-1 text-[11px] text-fg-faint">
+                Add regex rules that map activity names to a bucket label. The first matching rule wins; unmatched activities fall into <span className="font-mono">other</span>.
+              </p>
+
+              {/* Rule editor row */}
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <input
+                  value={groupPattern}
+                  onChange={(e) => setGroupPattern(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addGroupRule(); }}
+                  placeholder="regex e.g. ^(Create|Submit)"
+                  className="w-48 rounded-lg border border-line bg-surface-1 px-2 py-1 text-[11px] text-fg placeholder:text-fg-faint focus:border-accent focus:outline-none"
+                />
+                <span className="text-[11px] text-fg-faint">→</span>
+                <input
+                  value={groupLabel}
+                  onChange={(e) => setGroupLabel(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addGroupRule(); }}
+                  placeholder="bucket label"
+                  className="w-36 rounded-lg border border-line bg-surface-1 px-2 py-1 text-[11px] text-fg placeholder:text-fg-faint focus:border-accent focus:outline-none"
+                />
+                <button
+                  onClick={addGroupRule}
+                  disabled={!groupPattern.trim() || !groupLabel.trim()}
+                  className="btn-secondary text-[11px] disabled:opacity-40"
+                >
+                  Add rule
+                </button>
+                <button
+                  onClick={() => runGrouping(groupRules)}
+                  disabled={groupLoading || groupRules.length === 0}
+                  className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-accent/90 disabled:opacity-40"
+                >
+                  {groupLoading ? 'Grouping…' : 'Apply grouping'}
+                </button>
+                {(groupRules.length > 0 || groupResults) && (
+                  <button
+                    onClick={() => { setGroupRules([]); setGroupResults(null); setGroupError(null); }}
+                    className="text-[11px] text-fg-faint hover:text-fg-muted"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+
+              {/* Active rules */}
+              {groupRules.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {groupRules.map((r, i) => (
+                    <span
+                      key={`${r.pattern}-${i}`}
+                      className="inline-flex items-center gap-1 rounded-full border border-line bg-surface-1 px-2 py-0.5 text-[10px] text-fg-muted"
+                    >
+                      <span className="font-mono">{r.pattern}</span>
+                      <span className="text-fg-faint">→</span>
+                      <span className="font-semibold text-fg">{r.bucket}</span>
+                      <button
+                        onClick={() => setGroupRules((prev) => prev.filter((_, j) => j !== i))}
+                        className="ml-0.5 rounded text-fg-faint hover:text-danger"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {groupError && <p className="mt-2 text-[11px] text-danger">{groupError}</p>}
+
+              {/* Grouped result */}
+              {groupResults && (
+                <div className="mt-3 overflow-hidden rounded-lg border border-line">
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr className="border-b border-line bg-surface-1 text-fg-faint">
+                        <th className="px-2.5 py-1.5 text-left font-semibold">Bucket</th>
+                        <th className="px-2.5 py-1.5 text-right font-semibold">Activities</th>
+                        <th className="px-2.5 py-1.5 text-right font-semibold">Events</th>
+                        <th className="px-2.5 py-1.5 text-right font-semibold">Avg dwell</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {groupResults.buckets.map((b) => (
+                        <tr key={b.bucket} className="border-b border-line/60 last:border-0">
+                          <td className="px-2.5 py-1.5 font-medium text-fg">{b.bucket}</td>
+                          <td className="px-2.5 py-1.5 text-right tabular-nums text-fg-muted">{b.activity_count}</td>
+                          <td className="px-2.5 py-1.5 text-right tabular-nums text-fg-muted">{b.total_events.toLocaleString()}</td>
+                          <td className="px-2.5 py-1.5 text-right tabular-nums text-fg-muted">
+                            {b.avg_duration_seconds > 0 ? formatDuration(b.avg_duration_seconds) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Path search results (bpmn-q) ──────────────────────────── */}
+          {(pathResults || pathError) && (
+            <div className="mt-2 rounded-xl border border-line bg-surface-2 px-3 py-2.5" style={{ boxShadow: 'var(--shadow-xs)' }}>
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-[12px] font-semibold text-fg">
+                  <Search size={13} className="text-accent" />
+                  Path matches
+                  {pathResults && (
+                    <span className="font-mono text-[11px] font-normal text-fg-faint">{pathResults.pattern}</span>
+                  )}
+                </span>
+                <button
+                  onClick={() => { setPathResults(null); setPathError(null); }}
+                  className="rounded p-1 text-fg-faint transition-colors hover:bg-tint hover:text-fg-muted"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+
+              {pathError ? (
+                <p className="mt-2 text-[11px] text-danger">{pathError}</p>
+              ) : pathResults && pathResults.matches.length === 0 ? (
+                <p className="mt-2 text-[11px] text-fg-faint">No edges in the graph match this pattern.</p>
+              ) : pathResults ? (
+                <>
+                  <p className="mt-1 text-[11px] text-fg-muted">
+                    {pathResults.matches.length} matching transition{pathResults.matches.length === 1 ? '' : 's'} ·{' '}
+                    {pathResults.matches.reduce((s, m) => s + m.count, 0).toLocaleString()} occurrences
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {pathResults.matches
+                      .slice()
+                      .sort((a, b) => b.count - a.count)
+                      .slice(0, 24)
+                      .map((m) => (
+                        <span
+                          key={`${m.source}->${m.target}`}
+                          className="inline-flex items-center gap-1 rounded-full border border-line bg-surface-1 px-2 py-0.5 text-[10px]"
+                        >
+                          <span className="font-medium text-fg">{m.source}</span>
+                          <span className="text-fg-faint">→</span>
+                          <span className="font-medium text-fg">{m.target}</span>
+                          <span className="ml-0.5 rounded-full bg-accent/15 px-1.5 text-[10px] font-bold tabular-nums text-accent">
+                            {m.count.toLocaleString()}
+                          </span>
+                        </span>
+                      ))}
+                  </div>
+                  {pathResults.matches.length > 24 && (
+                    <p className="mt-1.5 text-[10px] text-fg-faint">Showing top 24 of {pathResults.matches.length} matches.</p>
+                  )}
+                </>
+              ) : null}
+            </div>
+          )}
 
           {/* Map + side panel */}
           <div className="mt-2 flex flex-1 flex-col md:flex-row gap-3 overflow-hidden min-h-0">
@@ -899,6 +1223,15 @@ export default function ProcessViewPage() {
 
       </div>{/* /stage */}
       </div>{/* /scroll region */}
+
+      {/* Export as Code modal — process-to-workflow codegen */}
+      {eventLogId && exportCodeOpen && (
+        <ExportWorkflowModal
+          eventLogId={eventLogId}
+          isOpen={exportCodeOpen}
+          onClose={() => setExportCodeOpen(false)}
+        />
+      )}
 
       {/* Activity detail modal */}
       {eventLogId && selectedNode && (

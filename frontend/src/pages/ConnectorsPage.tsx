@@ -24,6 +24,7 @@ import Modal from '@/components/common/Modal';
 import PageHeader from '@/components/common/PageHeader';
 import ConnectorForm from '@/components/Connectors/ConnectorForm';
 import ExtractionCopilot from '@/components/Connectors/ExtractionCopilot';
+import BiExportCard from '@/components/BI/BiExportCard';
 import { useUIStore } from '@/store';
 
 const typeIcons: Record<string, React.ElementType> = {
@@ -311,6 +312,11 @@ export default function ConnectorsPage() {
           })}
         </div>
       )}
+
+      {/* Connect external BI tools (Power BI / Tableau) to the BI export API */}
+      <div className="mt-8">
+        <BiExportCard />
+      </div>
 
       {/* Create Connector Modal */}
       <Modal

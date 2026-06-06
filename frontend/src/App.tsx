@@ -53,6 +53,11 @@ const ProcessPulsePage = lazy(() => import('@/pages/ProcessPulsePage'));
 const ProcessCityPage = lazy(() => import('@/pages/ProcessCityPage'));
 const CasesAtRiskPage = lazy(() => import('@/pages/CasesAtRiskPage'));
 const ActionRulesPage = lazy(() => import('@/pages/ActionRulesPage'));
+const LineagePage = lazy(() => import('@/pages/LineagePage'));
+const KpisPage = lazy(() => import('@/pages/KpisPage'));
+const JourneyMapPage = lazy(() => import('@/pages/JourneyMapPage'));
+const ScheduledReportsPage = lazy(() => import('@/pages/ScheduledReportsPage'));
+const UsageAdminPage = lazy(() => import('@/pages/UsageAdminPage'));
 
 // ─── Protected Route ─────────────────────────────────────────────────────────
 
@@ -244,6 +249,12 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/admin/users" element={<UserManagementPage />} />
           <Route path="/admin/audit" element={<AuditLogPage />} />
+          <Route path="/admin/usage" element={<UsageAdminPage />} />
+          <Route path="/lineage/:eventLogId" element={<LineagePage />} />
+          <Route path="/kpis" element={<KpisPage />} />
+          <Route path="/kpis/:projectId" element={<KpisPage />} />
+          <Route path="/journeys/:projectId" element={<JourneyMapPage />} />
+          <Route path="/scheduled-reports/:projectId" element={<ScheduledReportsPage />} />
         </Route>
 
         {/* Redirect root — demoMode visitors always land in /projects. */}

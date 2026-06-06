@@ -373,3 +373,130 @@ class Client:
             "/task-mining/patterns",
             params={"project_id": project_id, "limit": limit, "offset": offset},
         )
+
+    # ── BI connector ─────────────────────────────────────────────────────────
+
+    async def bi_tables(self) -> dict:
+        """List the BI tables this server exposes, with column schemas.
+
+        Returns a dict with a ``tables`` key. Each entry contains the table
+        ``name``, ``description``, ``path``, and ``columns`` array. Call this
+        once to build a schema picker or validate column names before you
+        start pulling rows.
+        """
+        return await self._request("GET", "/bi/tables")
+
+    async def bi_statistics(self, event_log_id: str) -> list[dict]:
+        """Return the one-row KPI table for *event_log_id*.
+
+        Columns: ``event_log_id``, ``total_cases``, ``total_events``,
+        ``total_activities``, ``avg_case_duration_hours``,
+        ``median_case_duration_hours``, ``start_timestamp``,
+        ``end_timestamp``.
+        """
+        return await self._request(
+            "GET", "/bi/statistics", params={"event_log_id": event_log_id}
+        )
+
+    async def bi_variants(
+        self, event_log_id: str, limit: int = 500
+    ) -> list[dict]:
+        """Return process variants ranked by frequency.
+
+        Columns: ``event_log_id``, ``variant_rank``, ``case_count``,
+        ``case_percentage``, ``activity_sequence``, ``step_count``.
+
+        Args:
+            event_log_id: UUID of the target event log.
+            limit: Maximum number of variant rows to return (1–10 000,
+                default 500).
+        """
+        return await self._request(
+            "GET",
+            "/bi/variants",
+            params={"event_log_id": event_log_id, "limit": limit},
+        )
+
+    async def bi_bottlenecks(
+        self, event_log_id: str, limit: int = 500
+    ) -> list[dict]:
+        """Return activities ranked by average waiting / execution duration.
+
+        Columns: ``event_log_id``, ``activity``, ``avg_duration_seconds``,
+        ``max_duration_seconds``, ``frequency``.
+
+        Args:
+            event_log_id: UUID of the target event log.
+            limit: Maximum number of activity rows (1–10 000, default 500).
+        """
+        return await self._request(
+            "GET",
+            "/bi/bottlenecks",
+            params={"event_log_id": event_log_id, "limit": limit},
+        )
+
+    async def bi_activities(self, event_log_id: str) -> list[dict]:
+        """Return one row per distinct activity with occurrence counts.
+
+        Columns: ``event_log_id``, ``activity``, ``occurrences``,
+        ``cases_touching``.
+        """
+        return await self._request(
+            "GET", "/bi/activities", params={"event_log_id": event_log_id}
+        )
+
+    async def bi_cases(
+        self,
+        event_log_id: str,
+        limit: int = 5000,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Return one row per case with per-case KPIs. Paginated.
+
+        Columns: ``event_log_id``, ``case_id``, ``event_count``,
+        ``duration_seconds``, ``start_timestamp``, ``end_timestamp``,
+        ``activity_count``.
+
+        Args:
+            event_log_id: UUID of the target event log.
+            limit: Page size (1–100 000, default 5 000).
+            offset: Row offset for pagination (default 0).
+        """
+        return await self._request(
+            "GET",
+            "/bi/cases",
+            params={
+                "event_log_id": event_log_id,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+
+    async def bi_events(
+        self,
+        event_log_id: str,
+        limit: int = 10000,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Return the flat event stream, one row per event. Paginated.
+
+        Columns: ``event_log_id``, ``case_id``, ``activity``,
+        ``timestamp``, ``resource``.
+
+        The endpoint sorts rows by (timestamp, case_id) before slicing, so
+        pagination is deterministic.
+
+        Args:
+            event_log_id: UUID of the target event log.
+            limit: Page size (1–500 000, default 10 000).
+            offset: Row offset for pagination (default 0).
+        """
+        return await self._request(
+            "GET",
+            "/bi/events",
+            params={
+                "event_log_id": event_log_id,
+                "limit": limit,
+                "offset": offset,
+            },
+        )

@@ -29,5 +29,14 @@ export * from './logBuilder';
 export * from './predictive';
 export * from './stochasticConformance';
 export * from './timedDeclare';
+export * from './lineage';
+export * from './customKpis';
+export * from './journeys';
+export * from './scheduledReports';
+export * from './usage';
+export * from './scorecards';
+export * from './versions';
+export * from './changeRequests';
+export * from './bi';
 
 export { default } from './http';

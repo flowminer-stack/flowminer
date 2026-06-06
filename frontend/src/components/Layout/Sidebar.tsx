@@ -51,6 +51,7 @@ const navSections: NavSection[] = [
       { label: 'Dashboards', path: '/dashboards', icon: LayoutDashboard },
       { label: 'Benchmark', path: '/benchmark', icon: BarChart3 },
       { label: 'Initiatives', path: '/initiatives', icon: Target },
+      { label: 'KPIs', path: '/kpis', icon: Activity },
     ],
   },
   {

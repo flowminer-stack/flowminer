@@ -29,9 +29,59 @@ export type {
   AppTeamHeatmapResponse,
 } from '@/types';
 
+// ─── BPMN-Q structural path search (Apromore) ───────────────────────────
+
+export interface BpmnQMatch {
+  source: string;
+  target: string;
+  count: number;
+}
+
+export interface BpmnQResponse {
+  matches: BpmnQMatch[];
+  pattern: string;
+}
+
+// ─── Hierarchical activity grouping (IBM) ───────────────────────────────
+
+export interface HierarchyRule {
+  pattern: string; // regex
+  bucket: string;
+}
+
+export interface HierarchyBucket {
+  bucket: string;
+  activity_count: number;
+  total_events: number;
+  avg_duration_seconds: number;
+}
+
+export interface HierarchyResponse {
+  buckets: HierarchyBucket[];
+}
+
 // ─── Competitive-parity endpoints ───────────────────────────────────────
 
 export const competitive = {
+  bpmnQ: async (eventLogId: string, pattern: string): Promise<BpmnQResponse> =>
+    (
+      await api.post('/competitive/bpmn-q', {
+        event_log_id: eventLogId,
+        pattern,
+      })
+    ).data,
+
+  hierarchy: async (
+    eventLogId: string,
+    rules: HierarchyRule[],
+  ): Promise<HierarchyResponse> =>
+    (
+      await api.post('/competitive/hierarchy', {
+        event_log_id: eventLogId,
+        rules,
+      })
+    ).data,
+
   whatIfBottleneck: async (
     eventLogId: string,
     activity: string,

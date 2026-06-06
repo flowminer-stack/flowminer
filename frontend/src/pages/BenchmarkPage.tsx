@@ -19,6 +19,7 @@ import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
 import PageHeader from '@/components/common/PageHeader';
 import { useUIStore } from '@/store';
+import DpBenchmarkPanel from '@/components/Scorecards/DpBenchmarkPanel';
 
 type FlattenKey = string; // `${ocelId}:${objectType}`
 
@@ -298,6 +299,7 @@ export default function BenchmarkPage() {
           </div>
         </>
       )}
+      {projectId && <DpBenchmarkPanel projectId={projectId} />}
     </div>
   );
 }

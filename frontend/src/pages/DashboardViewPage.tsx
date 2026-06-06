@@ -15,6 +15,8 @@ import {
   Table2,
   Gauge,
   Save,
+  History,
+  Sparkles,
 } from 'lucide-react';
 import { useDashboard } from '@/hooks/useProcessMining';
 import { useDashboardCollab } from '@/hooks/useDashboardCollab';
@@ -22,6 +24,8 @@ import LoadingSpinner from '@/components/common/LoadingSpinner';
 import Modal from '@/components/common/Modal';
 import EventLogPicker from '@/components/common/EventLogPicker';
 import WidgetGrid from '@/components/Dashboard/WidgetGrid';
+import DashboardVersionsPanel from '@/components/Versions/DashboardVersionsPanel';
+import { analytics } from '@/api/analytics';
 import { useUIStore, useEventLogsStore } from '@/store';
 import type { WidgetConfig } from '@/types';
 
@@ -44,6 +48,63 @@ const KPI_METRICS = [
   { value: 'median_case_duration', label: 'Median case duration' },
   { value: 'avg_events_per_case', label: 'Avg events per case' },
 ];
+
+// Shape returned by POST /analytics/text-to-widget — a keyword router that
+// picks the best analysis "kind" + chart type for a natural-language question.
+interface TextToWidgetResponse {
+  question: string;
+  kind: string;
+  title?: string;
+  chart_type?: string;
+  value?: number;
+  metric?: string;
+}
+
+// Dashboard widgets render from a fixed set of live `type`s (each pulls its
+// own data from /mining/* via config.eventLogId). Translate the AI router's
+// answer into the closest renderable widget type + KPI metric. We prefer the
+// semantic `kind`, then fall back to the chart_type.
+function aiResponseToWidgetType(
+  res: TextToWidgetResponse,
+): { type: string; metric?: string } {
+  switch (res.kind) {
+    case 'bottleneck':
+      return { type: 'bottleneck_table' };
+    case 'variants':
+      return { type: 'variant_list' };
+    case 'conformance':
+      return { type: 'conformance_gauge' };
+    case 'case_count':
+      return { type: 'kpi', metric: 'total_cases' };
+    case 'case_duration':
+      return { type: 'kpi', metric: 'avg_case_duration' };
+    case 'trend':
+      return { type: 'line_chart' };
+    case 'agent_mining':
+      return { type: 'pie_chart' };
+    case 'resource_top':
+    case 'activity_frequency':
+    case 'rework':
+    case 'sustainability':
+      return { type: 'bar_chart' };
+    default:
+      break;
+  }
+  switch (res.chart_type) {
+    case 'line':
+      return { type: 'line_chart' };
+    case 'pie':
+      return { type: 'pie_chart' };
+    case 'gauge':
+      return { type: 'conformance_gauge' };
+    case 'kpi':
+      return { type: 'kpi', metric: 'total_cases' };
+    case 'bar':
+    case 'histogram':
+    default:
+      return { type: 'bar_chart' };
+  }
+}
 
 export default function DashboardViewPage() {
   const { dashboardId } = useParams<{ dashboardId: string }>();
@@ -68,6 +129,15 @@ export default function DashboardViewPage() {
   const [newWidgetTarget, setNewWidgetTarget] = useState<string>('');
   const [newWidgetBestInClass, setNewWidgetBestInClass] = useState<string>('');
   const [settingsWidget, setSettingsWidget] = useState<WidgetConfig | null>(null);
+
+  // Version history (collapsible sidebar section).
+  const [showVersions, setShowVersions] = useState(false);
+
+  // Add-widget mode: 'manual' (the classic picker) or 'ai' (text-to-widget).
+  const [addMode, setAddMode] = useState<'manual' | 'ai'>('manual');
+  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   // Load the project's event logs so widgets can be bound to a source.
   useEffect(() => {
@@ -142,6 +212,9 @@ export default function DashboardViewPage() {
     setNewWidgetMetric('total_cases');
     setNewWidgetTarget('');
     setNewWidgetBestInClass('');
+    setAddMode('manual');
+    setAiQuestion('');
+    setAiError(null);
   };
 
   // 2D bin-packer: place a new widget on the highest row where it doesn't
@@ -195,6 +268,44 @@ export default function DashboardViewPage() {
     return packed;
   };
 
+  // Shared commit path for both the manual picker and the AI flow: positions
+  // the widget, persists it, broadcasts to peers, notifies, and closes the
+  // modal. Returns true on success so callers can branch.
+  const commitWidget = async (
+    type: string,
+    title: string,
+    config: Record<string, unknown>,
+  ): Promise<boolean> => {
+    const existingWidgets = dashboard.widgets || [];
+    const w = type === 'kpi' ? 3 : 6;
+    const h = type === 'kpi' ? 2 : 3;
+    const slot = findSlot(existingWidgets, w, h);
+
+    const newWidget: WidgetConfig = {
+      id: `widget-${Date.now()}`,
+      type,
+      title,
+      config,
+      position: { x: slot.x, y: slot.y, w, h },
+    };
+
+    try {
+      await updateDashboard({ widgets: [...existingWidgets, newWidget] });
+      broadcast({ type: 'widget_added', widget: newWidget });
+      setShowAddWidgetModal(false);
+      resetAddWidgetForm();
+      addNotification({
+        type: 'success',
+        title: 'Widget added',
+        message: `"${newWidget.title}" has been added to the dashboard.`,
+      });
+      return true;
+    } catch {
+      addNotification({ type: 'error', title: 'Failed to add widget' });
+      return false;
+    }
+  };
+
   const handleAddWidget = async () => {
     if (!newWidgetTitle.trim()) {
       addNotification({
@@ -213,11 +324,6 @@ export default function DashboardViewPage() {
       return;
     }
 
-    const existingWidgets = dashboard.widgets || [];
-    const w = newWidgetType === 'kpi' ? 3 : 6;
-    const h = newWidgetType === 'kpi' ? 2 : 3;
-    const slot = findSlot(existingWidgets, w, h);
-
     const config: Record<string, unknown> = { eventLogId: newWidgetEventLog };
     if (newWidgetType === 'kpi') {
       config.metric = newWidgetMetric;
@@ -227,31 +333,42 @@ export default function DashboardViewPage() {
       if (!Number.isNaN(b) && newWidgetBestInClass.trim() !== '') config.bestInClass = b;
     }
 
-    const newWidget: WidgetConfig = {
-      id: `widget-${Date.now()}`,
-      type: newWidgetType,
-      title: newWidgetTitle.trim(),
-      config,
-      position: { x: slot.x, y: slot.y, w, h },
-    };
+    await commitWidget(newWidgetType, newWidgetTitle.trim(), config);
+  };
 
+  // Text-to-widget: ask the backend's NL router which analysis answers the
+  // question, then translate its response into a live dashboard widget bound
+  // to the selected (or first) event log.
+  const handleAskAI = async () => {
+    const question = aiQuestion.trim();
+    if (!question) {
+      setAiError('Enter a question first.');
+      return;
+    }
+    const eventLogId = newWidgetEventLog || eventLogs[0]?.id || '';
+    if (!eventLogId) {
+      setAiError('This project has no event logs yet. Upload one first.');
+      return;
+    }
+
+    setAiLoading(true);
+    setAiError(null);
     try {
-      await updateDashboard({
-        widgets: [...existingWidgets, newWidget],
-      });
-      broadcast({ type: 'widget_added', widget: newWidget });
-      setShowAddWidgetModal(false);
-      resetAddWidgetForm();
-      addNotification({
-        type: 'success',
-        title: 'Widget added',
-        message: `"${newWidget.title}" has been added to the dashboard.`,
-      });
-    } catch {
-      addNotification({
-        type: 'error',
-        title: 'Failed to add widget',
-      });
+      const res: TextToWidgetResponse = await analytics.textToWidget(
+        eventLogId,
+        question,
+      );
+      const { type, metric } = aiResponseToWidgetType(res);
+      const config: Record<string, unknown> = { eventLogId };
+      if (type === 'kpi') config.metric = metric ?? res.metric ?? 'total_cases';
+      const title = (res.title && res.title.trim()) || question;
+      await commitWidget(type, title, config);
+    } catch (err) {
+      setAiError(
+        err instanceof Error ? err.message : 'Could not build a widget from that question.',
+      );
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -362,6 +479,14 @@ export default function DashboardViewPage() {
             Share
           </button>
           <button
+            onClick={() => setShowVersions((v) => !v)}
+            className={showVersions ? 'btn-primary' : 'btn-secondary'}
+            title="Version history"
+          >
+            <History size={16} />
+            History
+          </button>
+          <button
             onClick={handleConfigure}
             className={editMode ? 'btn-primary' : 'btn-secondary'}
           >
@@ -377,6 +502,22 @@ export default function DashboardViewPage() {
           </button>
         </div>
       </div>
+
+      {/* Version history — collapsible section toggled from the header */}
+      {showVersions && (
+        <div className="mt-6 rounded-xl border border-line bg-surface-0 p-4">
+          <DashboardVersionsPanel
+            dashboardId={dashboard.id}
+            currentSnapshot={{
+              name: dashboard.name,
+              description: dashboard.description,
+              layout: dashboard.layout,
+              widgets: dashboard.widgets,
+            }}
+            onRestored={() => window.location.reload()}
+          />
+        </div>
+      )}
 
       {/* Dashboard grid */}
       {dashboard.widgets.length === 0 ? (
@@ -430,17 +571,98 @@ export default function DashboardViewPage() {
             >
               Cancel
             </button>
-            <button
-              onClick={handleAddWidget}
-              disabled={!newWidgetTitle.trim() || !newWidgetEventLog}
-              className="btn-primary"
-            >
-              <Save size={16} />
-              Add Widget
-            </button>
+            {addMode === 'ai' ? (
+              <button
+                onClick={handleAskAI}
+                disabled={aiLoading || !aiQuestion.trim()}
+                className="btn-primary"
+              >
+                {aiLoading ? <LoadingSpinner size="sm" /> : <Sparkles size={16} />}
+                {aiLoading ? 'Building…' : 'Generate Widget'}
+              </button>
+            ) : (
+              <button
+                onClick={handleAddWidget}
+                disabled={!newWidgetTitle.trim() || !newWidgetEventLog}
+                className="btn-primary"
+              >
+                <Save size={16} />
+                Add Widget
+              </button>
+            )}
           </div>
         }
       >
+        {/* Mode switch: build manually or describe it to the AI */}
+        <div className="mb-5 flex gap-1 rounded-lg border border-line bg-surface-1 p-1">
+          <button
+            onClick={() => setAddMode('manual')}
+            className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
+              addMode === 'manual'
+                ? 'bg-surface-0 text-fg shadow-sm'
+                : 'text-fg-muted hover:text-fg'
+            }`}
+          >
+            <Plus size={14} />
+            Build manually
+          </button>
+          <button
+            onClick={() => setAddMode('ai')}
+            className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors ${
+              addMode === 'ai'
+                ? 'bg-surface-0 text-accent shadow-sm'
+                : 'text-fg-muted hover:text-fg'
+            }`}
+          >
+            <Sparkles size={14} />
+            Ask AI
+          </button>
+        </div>
+
+        {addMode === 'ai' ? (
+          <div className="space-y-5">
+            <div>
+              <label className="block text-[12px] font-medium text-fg-muted mb-1.5">
+                Event log source
+              </label>
+              <EventLogPicker
+                logs={eventLogs}
+                value={newWidgetEventLog}
+                onChange={(id) => setNewWidgetEventLog(id)}
+                emptyHint="This project has no event logs yet. Upload one first."
+              />
+              <p className="mt-1.5 text-[11px] text-fg-faint">
+                Leave unselected to use the first event log in this project.
+              </p>
+            </div>
+            <div>
+              <label className="block text-[12px] font-medium text-fg-muted mb-1.5">
+                Ask a question
+              </label>
+              <textarea
+                value={aiQuestion}
+                onChange={(e) => {
+                  setAiQuestion(e.target.value);
+                  if (aiError) setAiError(null);
+                }}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') handleAskAI();
+                }}
+                placeholder="e.g. Which activities are the biggest bottlenecks?"
+                rows={3}
+                className="input w-full resize-none"
+              />
+              <p className="mt-1.5 text-[11px] text-fg-faint">
+                We translate your question into the best chart or KPI for it.
+              </p>
+            </div>
+            {aiError && (
+              <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
+                {aiError}
+              </div>
+            )}
+          </div>
+        ) : (
         <div className="space-y-5">
           <div>
             <label className="block text-[12px] font-medium text-fg-muted mb-1.5">
@@ -557,6 +779,7 @@ export default function DashboardViewPage() {
             </>
           )}
         </div>
+        )}
       </Modal>
 
       {/* Widget Settings Modal */}

@@ -21,6 +21,7 @@ import {
   Building2,
   HeartPulse,
   ShieldAlert,
+  Share2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
@@ -76,6 +77,7 @@ const analysisGroups: AnalysisGroup[] = [
     items: [
       { label: 'Process Health', description: 'One composite health score', icon: HeartPulse, path: 'health' },
       { label: 'Cases at Risk', description: 'Predicted SLA breaches, live', icon: ShieldAlert, path: 'cases-at-risk' },
+      { label: 'Data Lineage', description: 'What depends on this log', icon: Share2, path: 'lineage' },
       { label: 'Automation ROI', description: 'Where automation pays off, in $', icon: Bot, path: 'automation-roi' },
       { label: 'Causal Map', description: 'What actually causes slowdowns', icon: Workflow, path: 'causal-map' },
       { label: 'Live Pulse', description: 'Watch cases flow through the map', icon: Radio, path: 'pulse' },

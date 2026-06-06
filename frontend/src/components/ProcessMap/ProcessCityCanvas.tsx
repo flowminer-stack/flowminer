@@ -39,6 +39,12 @@ interface Placed {
 const SP_X = 15;
 const SP_Z = 16;
 
+interface SelectedInfo {
+  node: ProcessNode;
+  inN: ProcessNode[];
+  outN: ProcessNode[];
+}
+
 function layout(
   nodes: ProcessNode[],
   edges: ProcessEdge[],
@@ -155,6 +161,11 @@ export default function ProcessCityCanvas({
   const resetRef = useRef<() => void>(() => {});
   const [metric, setMetric] = useState<Metric>('duration');
   const [hover, setHover] = useState<{ x: number; y: number; node: ProcessNode } | null>(null);
+  // Click-to-focus: selecting a tower highlights it + its directly-connected
+  // towers/streets and dims the rest, and opens a detail panel. selectRef lets
+  // the React panel (e.g. clicking a neighbour chip) drive the 3D selection.
+  const [selected, setSelected] = useState<SelectedInfo | null>(null);
+  const selectRef = useRef<(id: string | null) => void>(() => {});
 
   // Layout uses the FULL edge set for accurate BFS ranks; only the drawn
   // streets are simplified to the dominant traffic.
@@ -245,7 +256,17 @@ export default function ProcessCityCanvas({
     (grid.material as THREE.Material).opacity = 0.35;
     scene.add(grid);
 
-    // Towers with crisp edge outlines.
+    // Clear any stale selection from a previous data/metric render.
+    setSelected(null);
+
+    // Towers with crisp edge outlines. Track each by id so selection can
+    // recolor / dim them individually.
+    interface BuildingObj {
+      mesh: THREE.Mesh;
+      mat: THREE.MeshStandardMaterial;
+      edgeMat: THREE.LineBasicMaterial;
+    }
+    const buildingById = new Map<string, BuildingObj>();
     const buildings: THREE.Mesh[] = [];
     for (const p of placed) {
       const geo = track(new THREE.BoxGeometry(p.foot, p.height, p.foot));
@@ -256,11 +277,13 @@ export default function ProcessCityCanvas({
           emissiveIntensity: 0.34,
           roughness: 0.4,
           metalness: 0.15,
+          transparent: true,
+          opacity: 1,
         }),
       );
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(p.x, p.height / 2, p.z);
-      mesh.userData = { id: p.id };
+      mesh.userData = { id: p.id, hover: false };
       scene.add(mesh);
       buildings.push(mesh);
 
@@ -269,47 +292,57 @@ export default function ProcessCityCanvas({
       const outline = new THREE.LineSegments(edgeGeo, edgeMat);
       outline.position.copy(mesh.position);
       scene.add(outline);
+      buildingById.set(p.id, { mesh, mat, edgeMat });
     }
 
-    // Streets — glowing lines just above the ground between towers (simplified
-    // to the dominant traffic so the city stays legible on dense logs).
+    // Streets — one flat ground ribbon per edge (not 1px lines, whose width
+    // WebGL ignores, and not one merged mesh, so each can be dimmed/highlighted
+    // on selection). Width scales with traffic.
     const maxFreq = Math.max(...streetEdges.map((e) => e.frequency), 1);
-    const streets: Array<{ a: THREE.Vector3; b: THREE.Vector3; freq: number }> = [];
-    // Streets are flat ground ribbons (not 1px lines, whose width WebGL ignores)
-    // so heavier traffic reads as a wider road and the city looks built, not wired.
-    const ribbonPos: number[] = [];
+    interface StreetObj {
+      mat: THREE.MeshBasicMaterial;
+      source: string;
+      target: string;
+      a: THREE.Vector3;
+      b: THREE.Vector3;
+      freq: number;
+    }
+    const streetObjs: StreetObj[] = [];
+    // Directed adjacency for the selection neighbourhood + detail panel.
+    const neighbors = new Map<string, { in: Set<string>; out: Set<string> }>();
+    const ensureN = (id: string) => {
+      let n = neighbors.get(id);
+      if (!n) { n = { in: new Set(), out: new Set() }; neighbors.set(id, n); }
+      return n;
+    };
     const perp = new THREE.Vector3();
     const up = new THREE.Vector3(0, 1, 0);
     for (const e of streetEdges) {
       const a = byId.get(e.source);
       const b = byId.get(e.target);
       if (!a || !b || a === b) continue;
+      ensureN(e.source).out.add(e.target);
+      ensureN(e.target).in.add(e.source);
       const va = new THREE.Vector3(a.x, 0.18, a.z);
       const vb = new THREE.Vector3(b.x, 0.18, b.z);
-      streets.push({ a: va, b: vb, freq: e.frequency });
-      // half-width scales with traffic share (slender roads → bold arterials)
       const hw = 0.5 + (e.frequency / maxFreq) * 2.6;
       perp.subVectors(vb, va).cross(up).normalize().multiplyScalar(hw);
-      const a1x = va.x + perp.x, a1z = va.z + perp.z;
-      const a2x = va.x - perp.x, a2z = va.z - perp.z;
-      const b1x = vb.x + perp.x, b1z = vb.z + perp.z;
-      const b2x = vb.x - perp.x, b2z = vb.z - perp.z;
       const y = 0.18;
-      // two triangles (a1,a2,b1) (a2,b2,b1)
-      ribbonPos.push(a1x, y, a1z, a2x, y, a2z, b1x, y, b1z);
-      ribbonPos.push(a2x, y, a2z, b2x, y, b2z, b1x, y, b1z);
+      const geo = track(new THREE.BufferGeometry());
+      geo.setAttribute('position', new THREE.Float32BufferAttribute([
+        va.x + perp.x, y, va.z + perp.z, va.x - perp.x, y, va.z - perp.z, vb.x + perp.x, y, vb.z + perp.z,
+        va.x - perp.x, y, va.z - perp.z, vb.x - perp.x, y, vb.z - perp.z, vb.x + perp.x, y, vb.z + perp.z,
+      ], 3));
+      const mat = track(new THREE.MeshBasicMaterial({
+        color: 0x2dd4bf, transparent: true, opacity: 0.4,
+        side: THREE.DoubleSide, depthWrite: false,
+      }));
+      scene.add(new THREE.Mesh(geo, mat));
+      streetObjs.push({ mat, source: e.source, target: e.target, a: va, b: vb, freq: e.frequency });
     }
-    const ribbonGeo = track(new THREE.BufferGeometry());
-    ribbonGeo.setAttribute('position', new THREE.Float32BufferAttribute(ribbonPos, 3));
-    ribbonGeo.computeVertexNormals();
-    const ribbonMat = track(new THREE.MeshBasicMaterial({
-      color: 0x2dd4bf, transparent: true, opacity: 0.4,
-      side: THREE.DoubleSide, depthWrite: false,
-    }));
-    scene.add(new THREE.Mesh(ribbonGeo, ribbonMat));
 
     // Traffic — glowing dots travelling the busiest streets.
-    const busy = [...streets].sort((s1, s2) => s2.freq - s1.freq).slice(0, 60);
+    const busy = [...streetObjs].sort((s1, s2) => s2.freq - s1.freq).slice(0, 60);
     const trafficGeo = track(new THREE.SphereGeometry(0.65, 10, 10));
     const trafficMat = track(new THREE.MeshBasicMaterial({ color: 0x67e8f9 }));
     const cars = busy.map((s, i) => ({
@@ -320,28 +353,94 @@ export default function ProcessCityCanvas({
       speed: 0.12 + (s.freq / maxFreq) * 0.4,
     }));
 
-    // Hover picking.
+    // ── Selection / focus ──────────────────────────────────────────────
+    let selId: string | null = null;
+    const applyVisual = () => {
+      const sel = selId;
+      buildingById.forEach((bo, id) => {
+        let state: 'selected' | 'neighbor' | 'normal' | 'dimmed';
+        if (!sel) state = 'normal';
+        else if (id === sel) state = 'selected';
+        else {
+          const n = neighbors.get(sel);
+          state = n && (n.in.has(id) || n.out.has(id)) ? 'neighbor' : 'dimmed';
+        }
+        let emissive: number, opacity: number, edge: number;
+        if (state === 'selected') { emissive = 1.05; opacity = 1; edge = 0.95; }
+        else if (state === 'neighbor') { emissive = 0.62; opacity = 1; edge = 0.5; }
+        else if (state === 'dimmed') { emissive = 0.04; opacity = 0.14; edge = 0.04; }
+        else { emissive = 0.34; opacity = 1; edge = 0.22; }
+        if (bo.mesh.userData.hover && state !== 'selected') emissive = Math.max(emissive, 0.85);
+        bo.mat.emissiveIntensity = emissive;
+        bo.mat.opacity = opacity;
+        bo.edgeMat.opacity = edge;
+      });
+      streetObjs.forEach((so) => {
+        if (!sel) { so.mat.opacity = 0.4; so.mat.color.setHex(0x2dd4bf); }
+        else if (so.source === sel || so.target === sel) { so.mat.opacity = 0.95; so.mat.color.setHex(0x5eead4); }
+        else { so.mat.opacity = 0.04; so.mat.color.setHex(0x2dd4bf); }
+      });
+      cars.forEach((c) => { c.mesh.visible = !sel || c.s.source === sel || c.s.target === sel; });
+    };
+
+    const select = (id: string | null) => {
+      selId = id;
+      applyVisual();
+      const p = id ? byId.get(id) : null;
+      if (!p) { setSelected(null); return; }
+      const n = neighbors.get(id!) ?? { in: new Set<string>(), out: new Set<string>() };
+      const toNodes = (ids: Set<string>) =>
+        ([...ids].map((x) => byId.get(x)?.node).filter(Boolean) as ProcessNode[])
+          .sort((x, y) => y.frequency - x.frequency);
+      setSelected({ node: p.node, inN: toNodes(n.in), outN: toNodes(n.out) });
+    };
+    selectRef.current = select;
+
+    // Hover picking + click-to-select. A "tap" (little movement) selects;
+    // a drag orbits the camera (so selection never fights OrbitControls).
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
-    let hovered: THREE.Mesh | null = null;
-    const onPointerMove = (ev: PointerEvent) => {
+    const pick = (ev: PointerEvent): string | null => {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
       const hit = raycaster.intersectObjects(buildings, false)[0]?.object as THREE.Mesh | undefined;
-      if (hit !== hovered) {
-        if (hovered) (hovered.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.34;
-        hovered = hit ?? null;
-        if (hovered) (hovered.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.85;
-      }
-      if (hit) {
-        const p = byId.get(hit.userData.id as string);
+      return hit ? (hit.userData.id as string) : null;
+    };
+    let hoveredId: string | null = null;
+    const setHoverId = (id: string | null) => {
+      if (id === hoveredId) return;
+      if (hoveredId) { const b = buildingById.get(hoveredId); if (b) b.mesh.userData.hover = false; }
+      hoveredId = id;
+      if (hoveredId) { const b = buildingById.get(hoveredId); if (b) b.mesh.userData.hover = true; }
+      applyVisual();
+    };
+    const onPointerMove = (ev: PointerEvent) => {
+      const id = pick(ev);
+      setHoverId(id);
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (id) {
+        const p = byId.get(id);
         if (p) setHover({ x: ev.clientX - rect.left, y: ev.clientY - rect.top, node: p.node });
       } else setHover(null);
+      renderer.domElement.style.cursor = id ? 'pointer' : 'default';
     };
+    const onPointerLeave = () => { setHoverId(null); setHover(null); };
+    let downX = 0, downY = 0, downT = 0;
+    const onPointerDown = (ev: PointerEvent) => { downX = ev.clientX; downY = ev.clientY; downT = performance.now(); };
+    const onPointerUp = (ev: PointerEvent) => {
+      // Ignore drags (orbit) and long presses — only a quick tap selects.
+      if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > 6) return;
+      if (performance.now() - downT > 500) return;
+      select(pick(ev));
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') select(null); };
     renderer.domElement.addEventListener('pointermove', onPointerMove);
-    renderer.domElement.addEventListener('pointerleave', () => setHover(null));
+    renderer.domElement.addEventListener('pointerleave', onPointerLeave);
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('keydown', onKey);
 
     let raf = 0;
     let last = performance.now();
@@ -372,7 +471,12 @@ export default function ProcessCityCanvas({
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('keydown', onKey);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
+      renderer.domElement.removeEventListener('pointerleave', onPointerLeave);
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointerup', onPointerUp);
+      selectRef.current = () => {};
       controls.dispose();
       disposables.forEach((d) => d.dispose());
       renderer.dispose();
@@ -413,7 +517,7 @@ export default function ProcessCityCanvas({
 
       <div className={`relative mt-4 w-full overflow-hidden rounded-xl border border-line bg-[#0a0c10] ${heightClass}`}>
         <div ref={mountRef} className="absolute inset-0" />
-        {hover && (
+        {hover && !selected && (
           <div
             className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-md border border-white/10 bg-black/80 px-2.5 py-1.5 text-[11px] text-slate-100 shadow-lg"
             style={{ left: hover.x, top: hover.y - 10 }}
@@ -427,6 +531,82 @@ export default function ProcessCityCanvas({
             </div>
           </div>
         )}
+
+        {!selected && (
+          <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-white/10 bg-black/50 px-3 py-1 text-[11px] text-slate-300 backdrop-blur-sm">
+            Click a tower to focus its connections · drag to orbit
+          </div>
+        )}
+
+        {selected && (
+          <div
+            data-testid="city-detail-panel"
+            className="absolute right-3 top-3 z-20 max-h-[calc(100%-1.5rem)] w-72 overflow-y-auto rounded-xl border border-white/10 bg-[#0d1018]/95 p-4 text-slate-100 shadow-2xl backdrop-blur-sm"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[10px] font-medium uppercase tracking-wide text-accent">Focused activity</div>
+                <div className="mt-0.5 break-words text-sm font-semibold leading-snug">{selected.node.label}</div>
+              </div>
+              <button
+                onClick={() => selectRef.current(null)}
+                className="shrink-0 rounded-md border border-white/10 px-2 py-0.5 text-[11px] text-slate-300 transition-colors hover:bg-white/10"
+                aria-label="Clear selection"
+              >
+                Esc
+              </button>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="rounded-lg border border-white/5 bg-white/5 px-2.5 py-1.5">
+                <div className="text-[10px] text-slate-400">Runs</div>
+                <div className="tabular-nums text-sm font-semibold">{formatNumber(selected.node.frequency)}</div>
+              </div>
+              <div className="rounded-lg border border-white/5 bg-white/5 px-2.5 py-1.5">
+                <div className="text-[10px] text-slate-400">Avg time</div>
+                <div className="tabular-nums text-sm font-semibold">
+                  {selected.node.avg_duration == null ? '—' : formatDuration(selected.node.avg_duration)}
+                </div>
+              </div>
+            </div>
+
+            <NeighborList title={`Comes from (${selected.inN.length})`} nodes={selected.inN} onPick={(id) => selectRef.current(id)} />
+            <NeighborList title={`Goes to (${selected.outN.length})`} nodes={selected.outN} onPick={(id) => selectRef.current(id)} />
+
+            {selected.inN.length === 0 && selected.outN.length === 0 && (
+              <div className="mt-3 text-[11px] text-slate-400">No dominant connections in the shown traffic.</div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NeighborList({
+  title,
+  nodes,
+  onPick,
+}: {
+  title: string;
+  nodes: ProcessNode[];
+  onPick: (id: string) => void;
+}) {
+  if (nodes.length === 0) return null;
+  return (
+    <div className="mt-3">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-slate-400">{title}</div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {nodes.map((n) => (
+          <button
+            key={n.id}
+            onClick={() => onPick(n.id)}
+            title={`${n.label} · ${formatNumber(n.frequency)} runs`}
+            className="max-w-full truncate rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-slate-200 transition-colors hover:border-accent/50 hover:bg-accent/10"
+          >
+            {n.label}
+          </button>
+        ))}
       </div>
     </div>
   );

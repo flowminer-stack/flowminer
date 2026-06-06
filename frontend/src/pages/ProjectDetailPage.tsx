@@ -20,6 +20,7 @@ import {
   Lock,
   CalendarRange,
   TrendingUp,
+  Map as MapIcon,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import clsx from 'clsx';
@@ -78,9 +79,12 @@ function DisabledUploadButton({
 const analyzeTools = [
   { label: 'Benchmark', icon: GitCompareArrows, path: (id: string) => `/benchmark/${id}`, desc: 'Compare processes' },
   { label: 'Task Mining', icon: Cpu, path: (id: string) => `/task-mining/${id}`, desc: 'Discover tasks' },
+  { label: 'KPIs', icon: Target, path: (id: string) => `/kpis/${id}`, desc: 'Track custom KPIs' },
+  { label: 'Journey Maps', icon: MapIcon, path: (id: string) => `/journeys/${id}`, desc: 'Customer/employee journeys' },
 ];
 const configureTools = [
   { label: 'Log Builder', icon: Wand2, path: (id: string) => `/builder/${id}`, desc: 'Build & transform' },
+  { label: 'Scheduled Reports', icon: CalendarRange, path: (id: string) => `/scheduled-reports/${id}`, desc: 'Recurring report emails' },
 ];
 
 // Shell skeleton rendered while the project and event-logs are fetching.

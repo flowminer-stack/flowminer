@@ -9,6 +9,7 @@ import {
   Users,
   ChevronRight,
   ScrollText,
+  BarChart2,
 } from 'lucide-react';
 import api from '@/api/client';
 import { useAuthStore, useUIStore } from '@/store';
@@ -245,6 +246,23 @@ export default function SecurityTab() {
                 <p className="text-[12px] font-semibold text-fg">Audit Log</p>
                 <p className="text-[11px] text-fg-muted">
                   Review admin actions and access history
+                </p>
+              </div>
+            </div>
+            <ChevronRight size={14} className="text-fg-faint" />
+          </button>
+          <button
+            onClick={() => navigate('/admin/usage')}
+            className="mt-2 flex w-full items-center justify-between rounded-lg border border-line bg-surface-1 px-4 py-3 text-left transition-colors hover:border-line-strong hover:bg-tint"
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-accent/10">
+                <BarChart2 size={15} className="text-accent" />
+              </div>
+              <div>
+                <p className="text-[12px] font-semibold text-fg">Usage Metering</p>
+                <p className="text-[11px] text-fg-muted">
+                  LLM tokens, connector syncs, and mining consumption
                 </p>
               </div>
             </div>
