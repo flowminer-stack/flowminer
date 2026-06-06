@@ -211,17 +211,23 @@ const BPMNViewer: React.FC<BPMNViewerProps> = ({ eventLogId }) => {
         </div>
       )}
 
-      {/* bpmn-js canvas — must have explicit height */}
+      {/* bpmn-js canvas — must have explicit height. bpmn-js renders a
+          black-on-white diagram; render it on a light "paper" surface so the
+          edges/strokes/labels stay visible in dark mode (otherwise black
+          strokes vanish on the dark app background) and it reads as an
+          intentional diagram canvas in both themes. */}
       <div
         ref={containerRef}
-        className="w-full h-full"
-        style={{ minHeight: '500px' }}
+        className="w-full h-full rounded-lg overflow-hidden"
+        style={{ minHeight: '500px', background: '#ffffff' }}
       />
 
       {/* Style overrides for bpmn-js */}
       <style>{`
         .bjs-powered-by { display: none !important; }
-        .bjs-container { overflow: hidden !important; }
+        .bjs-container { overflow: hidden !important; background: #ffffff; }
+        /* Subtle grid so the white canvas reads as a diagram surface */
+        .bjs-container .viewport { }
       `}</style>
     </div>
   );

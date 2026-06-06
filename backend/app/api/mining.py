@@ -768,13 +768,21 @@ async def export_bpmn(
 
         import pm4py
         from pm4py.objects.bpmn.exporter import exporter as bpmn_exporter
+        from app.services.rust_accel import discover_inductive_net as _rs_inductive_net
 
-        net, im, fm = pm4py.discover_petri_net_inductive(
-            df,
-            case_id_key="case:concept:name",
-            activity_key="concept:name",
-            timestamp_key="time:timestamp",
-        )
+        # Prefer the Rust Inductive Miner (verified byte-identical net to pm4py,
+        # ~65x faster on large logs). The pm4py path took ~40s on BPIC2019,
+        # which is why this endpoint appeared to hang. Falls back to pm4py.
+        rs_net = _rs_inductive_net(df)
+        if rs_net is not None:
+            net, im, fm = rs_net
+        else:
+            net, im, fm = pm4py.discover_petri_net_inductive(
+                df,
+                case_id_key="case:concept:name",
+                activity_key="concept:name",
+                timestamp_key="time:timestamp",
+            )
         bpmn_model = pm4py.convert_to_bpmn(net, im, fm)
 
         # Apply graphviz layout so shapes get proper x/y coordinates

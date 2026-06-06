@@ -98,22 +98,40 @@ function layout(
   const placed: Placed[] = [];
   const byId = new Map<string, Placed>();
   const sortedRanks = [...byRank.keys()].sort((a, b) => a - b);
+
+  // Bound the footprint: wrap wide ranks into a compact grid block instead of
+  // one ever-widening avenue. Dense logs (e.g. BPIC2019) have ranks with a
+  // dozen+ activities, which previously stretched the city into a thin, very
+  // wide strip with long diagonal streets. Capping columns (~sqrt of the node
+  // count) keeps the city roughly square; ranks still advance in depth so the
+  // overall front-to-back reading of process progress is preserved.
+  const maxCols = Math.max(4, Math.round(Math.sqrt(nodes.length * 1.3)));
+
+  let zRow = 0; // running depth in grid-rows across all ranks
   for (const r of sortedRanks) {
     const arr = byRank.get(r)!;
-    const offset = ((arr.length - 1) * SP_X) / 2;
+    const cols = Math.min(arr.length, maxCols);
+    const rows = Math.ceil(arr.length / cols);
+    const xOffset = ((cols - 1) * SP_X) / 2;
     arr.forEach((n, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
       const d = n.avg_duration ?? 0;
       const tier = d <= dq1 ? 0 : d <= dq2 ? 1 : 2;
       const h = 3 + (metricVal(n) / vmax) * 30;
       const foot = 2.4 + (n.frequency / fmax) * 2.6; // slender towers
-      const pl: Placed = { id: n.id, label: n.label, x: i * SP_X - offset, z: r * SP_Z, height: h, foot, tier, node: n };
+      const pl: Placed = {
+        id: n.id, label: n.label,
+        x: col * SP_X - xOffset, z: (zRow + row) * SP_Z,
+        height: h, foot, tier, node: n,
+      };
       placed.push(pl);
       byId.set(n.id, pl);
     });
+    zRow += rows;
   }
   // Centre on Z.
-  const maxRank = Math.max(...sortedRanks, 0);
-  const zShift = (maxRank * SP_Z) / 2;
+  const zShift = ((zRow - 1) * SP_Z) / 2;
   placed.forEach((p) => (p.z -= zShift));
   return { placed, byId };
 }
@@ -257,20 +275,38 @@ export default function ProcessCityCanvas({
     // to the dominant traffic so the city stays legible on dense logs).
     const maxFreq = Math.max(...streetEdges.map((e) => e.frequency), 1);
     const streets: Array<{ a: THREE.Vector3; b: THREE.Vector3; freq: number }> = [];
-    const linePositions: number[] = [];
+    // Streets are flat ground ribbons (not 1px lines, whose width WebGL ignores)
+    // so heavier traffic reads as a wider road and the city looks built, not wired.
+    const ribbonPos: number[] = [];
+    const perp = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
     for (const e of streetEdges) {
       const a = byId.get(e.source);
       const b = byId.get(e.target);
       if (!a || !b || a === b) continue;
-      const va = new THREE.Vector3(a.x, 0.4, a.z);
-      const vb = new THREE.Vector3(b.x, 0.4, b.z);
-      linePositions.push(va.x, va.y, va.z, vb.x, vb.y, vb.z);
+      const va = new THREE.Vector3(a.x, 0.18, a.z);
+      const vb = new THREE.Vector3(b.x, 0.18, b.z);
       streets.push({ a: va, b: vb, freq: e.frequency });
+      // half-width scales with traffic share (slender roads → bold arterials)
+      const hw = 0.5 + (e.frequency / maxFreq) * 2.6;
+      perp.subVectors(vb, va).cross(up).normalize().multiplyScalar(hw);
+      const a1x = va.x + perp.x, a1z = va.z + perp.z;
+      const a2x = va.x - perp.x, a2z = va.z - perp.z;
+      const b1x = vb.x + perp.x, b1z = vb.z + perp.z;
+      const b2x = vb.x - perp.x, b2z = vb.z - perp.z;
+      const y = 0.18;
+      // two triangles (a1,a2,b1) (a2,b2,b1)
+      ribbonPos.push(a1x, y, a1z, a2x, y, a2z, b1x, y, b1z);
+      ribbonPos.push(a2x, y, a2z, b2x, y, b2z, b1x, y, b1z);
     }
-    const lineGeo = track(new THREE.BufferGeometry());
-    lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
-    const lineMat = track(new THREE.LineBasicMaterial({ color: 0x2dd4bf, transparent: true, opacity: 0.45 }));
-    scene.add(new THREE.LineSegments(lineGeo, lineMat));
+    const ribbonGeo = track(new THREE.BufferGeometry());
+    ribbonGeo.setAttribute('position', new THREE.Float32BufferAttribute(ribbonPos, 3));
+    ribbonGeo.computeVertexNormals();
+    const ribbonMat = track(new THREE.MeshBasicMaterial({
+      color: 0x2dd4bf, transparent: true, opacity: 0.4,
+      side: THREE.DoubleSide, depthWrite: false,
+    }));
+    scene.add(new THREE.Mesh(ribbonGeo, ribbonMat));
 
     // Traffic — glowing dots travelling the busiest streets.
     const busy = [...streets].sort((s1, s2) => s2.freq - s1.freq).slice(0, 60);

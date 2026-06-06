@@ -386,8 +386,11 @@ export default function ProcessViewPage() {
       </div>
 
       {/* ── Data Quality panel ──────────────────────────────────────────── */}
+      {/* Capped height with internal scroll so it never squeezes the graph
+          below to nothing (without max-h, overflow-y-auto is a no-op and the
+          panel grows to its full content height, compressing the diagram). */}
       {qualityOpen && eventLogId && (
-        <div className="mt-3 overflow-y-auto rounded-lg border border-line bg-surface-2 p-4">
+        <div className="mt-3 max-h-[45vh] shrink-0 overflow-y-auto rounded-lg border border-line bg-surface-2 p-4">
           <div className="flex items-center justify-between">
             <span className="text-[13px] font-semibold text-fg">Data Quality</span>
             <button
