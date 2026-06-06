@@ -575,7 +575,27 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
             });
           }
         }
-        if (fit) {
+        // Fit when the caller asked (first load / layout-type switch) OR when
+        // the freshly-laid-out graph is poorly framed by the current viewport.
+        // The latter catches an ALGORITHM switch: it re-lays-out with fit=false
+        // to preserve the user's pan/zoom, but a much smaller model (e.g. DFG's
+        // 42 nodes → Heuristic's 9) left at the previous zoom renders as a tiny
+        // cramped cluster that reads as "all nodes on top of each other". A
+        // small filter/slider tweak keeps a similar-sized graph, so it stays
+        // put as intended.
+        let shouldFit = fit;
+        if (!shouldFit && cy.nodes().nonempty()) {
+          const bb = cy.elements().boundingBox();
+          const z = cy.zoom();
+          const rw = bb.w * z;
+          const rh = bb.h * z;
+          const vw = cy.width();
+          const vh = cy.height();
+          const tooSmall = rw < vw * 0.3 && rh < vh * 0.3;
+          const tooBig = rw > vw * 1.6 || rh > vh * 1.6;
+          if (tooSmall || tooBig) shouldFit = true;
+        }
+        if (shouldFit) {
           // After the auto-fit (now including any re-arranged isolated nodes),
           // don't leave the graph at an unreadable zoom — a wide/dense map fits
           // at ~0.25-0.4 where labels are too small. Raise to a floor so
