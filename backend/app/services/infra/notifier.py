@@ -58,9 +58,24 @@ class Notifier:
         elif channel == "teams":
             self._send_teams(alert, evaluation_result)
         elif channel == "in_app":
-            # In-app notifications are rendered from the alert table itself
-            # when the frontend polls — no outbound send.
-            pass
+            # In-app delivery is intentionally a no-op here.
+            #
+            # Two distinct in-app surfaces exist and each owns its own write:
+            #   * Alerts  — rendered directly from the alerts table when the
+            #               frontend polls (last_triggered / last_value), so no
+            #               outbound send is needed; the row IS the notification.
+            #   * Action rules — delivered as Task rows (the inbox) by the
+            #               action engine (services/action_engine.dispatch_action
+            #               -> notify_in_app/create_task/escalate), which owns the
+            #               DB session + project_id required to insert a Task.
+            #
+            # The Notifier only receives (alert, result) and holds no session, so
+            # it deliberately does not write here — doing so would duplicate the
+            # action-engine Task logic without the project_id/session it needs.
+            logger.debug(
+                "Alert %s in_app channel: no outbound send (rendered from table)",
+                alert.id,
+            )
         else:
             logger.warning(
                 "Alert %s has unknown notification channel: %s", alert.id, channel
@@ -158,6 +173,15 @@ class Notifier:
             "threshold": alert.threshold,
             "message": result["message"],
         }
+
+        # Action-rule deliveries pass a duck-typed adapter carrying an
+        # ``extra_payload`` dict (rule_id, case_id, event_log_id, case
+        # metrics). Merge it so the receiver gets the full rule/case context
+        # rather than just the alert-shaped fields. Real Alert ORM objects
+        # have no ``extra_payload`` attribute, so getattr leaves them untouched.
+        extra = getattr(alert, "extra_payload", None)
+        if isinstance(extra, dict) and extra:
+            payload.update(extra)
 
         try:
             with httpx.Client(timeout=10, follow_redirects=False) as client:

@@ -2,6 +2,7 @@
 Alert management router: CRUD operations and manual alert testing.
 """
 
+import asyncio
 import logging
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from app.models import Alert, AlertCondition, EventLog, NotificationChannel, Use
 from app.schemas.alert import AlertCreate, AlertResponse, AlertUpdate
 from app.api.deps import get_current_active_user, assert_project_access, assert_event_log_access
 from app.services.alert_evaluator import AlertEvaluator
+from app.services.infra.notifier import Notifier
 from app.services.mining_engine import mining_engine
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,46 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 alert_evaluator = AlertEvaluator()
+notifier = Notifier()
+
+
+def _channel_value(alert) -> str:
+    """Normalise the alert's notification channel to its string value."""
+    ch = alert.notification_channel
+    return ch.value if hasattr(ch, "value") else str(ch)
+
+
+def _check_channel_ready(alert) -> tuple[bool, str | None]:
+    """Verify the alert's channel is configured well enough to deliver.
+
+    Returns ``(ready, reason)``. ``reason`` is a human message explaining why
+    delivery cannot succeed when ``ready`` is ``False`` — used so the /test
+    endpoint can report an honest failure instead of a silent no-op (the
+    Notifier transports swallow their own exceptions and return ``None``).
+    """
+    from app.config import settings
+
+    channel = _channel_value(alert)
+
+    if channel == "email":
+        smtp_host = (getattr(settings, "SMTP_HOST", "") or "").strip()
+        if not smtp_host:
+            return False, "SMTP is not configured on this server, so the email could not be sent."
+        if not (alert.email_recipients or []):
+            return False, "No email recipients are configured for this alert."
+        return True, None
+
+    if channel in ("webhook", "slack", "teams"):
+        if not (alert.webhook_url or "").strip():
+            return False, f"No {channel} URL is configured for this alert."
+        return True, None
+
+    if channel == "in_app":
+        # In-app alerts have no outbound transport — the alert row itself is
+        # the notification, so a test is always deliverable.
+        return True, None
+
+    return False, f"Unknown notification channel: {channel}."
 
 
 @router.get("", response_model=list[AlertResponse])
@@ -206,9 +248,13 @@ async def test_alert(
     current_user: User = Depends(get_current_active_user),
 ):
     """
-    Manually trigger alert evaluation. Loads the associated event log,
-    runs the alert engine, and returns the evaluation result without
-    persisting any state changes.
+    Send a test notification through the alert's configured channel.
+
+    Loads the associated event log, evaluates the metric so the test payload
+    carries a realistic value, then attempts to *deliver* a test notification.
+    The response reports whether the notification delivery succeeded
+    (``success``) along with a human-readable ``message`` — it does NOT report
+    whether the alert condition would currently trigger. No state is persisted.
     """
     result = await db.execute(select(Alert).where(Alert.id == alert_id))
     alert = result.scalar_one_or_none()
@@ -262,11 +308,45 @@ async def test_alert(
             detail=f"Alert evaluation failed: {str(e)}",
         )
 
-    # Return evaluation result — notifications are NOT sent for manual tests
-    return {
-        "alert_id": str(alert_id),
-        "alert_name": alert.name,
-        "metric": alert.metric,
-        "threshold": alert.threshold,
-        **evaluation,
+    channel = _channel_value(alert)
+
+    # Decide whether the channel can actually deliver before attempting a send;
+    # the Notifier transports swallow their own exceptions and return None, so
+    # we gate on configuration to report an honest success/failure to the user.
+    ready, reason = _check_channel_ready(alert)
+    if not ready:
+        return {
+            "success": False,
+            "message": reason or "Notification could not be delivered.",
+        }
+
+    # Build a clearly-marked test payload so the recipient knows this is a drill.
+    test_result = {
+        "triggered": True,
+        "current_value": evaluation.get("current_value", 0.0),
+        "message": (
+            f"This is a TEST notification from FlowMiner for alert "
+            f"\"{alert.name}\". {evaluation.get('message', '')}"
+        ).strip(),
     }
+
+    try:
+        # Notifier transports are synchronous & blocking (smtplib / httpx);
+        # run them off the event loop so the request doesn't stall.
+        await asyncio.to_thread(notifier.send, alert, test_result)
+    except Exception as e:
+        logger.error("Alert test delivery failed for %s: %s", alert_id, e, exc_info=True)
+        return {
+            "success": False,
+            "message": f"Test notification delivery failed: {e}",
+        }
+
+    if channel == "in_app":
+        message = (
+            f"Test ready: the in-app alert \"{alert.name}\" will surface here "
+            f"when its condition is met."
+        )
+    else:
+        message = f"Test notification sent via {channel} for \"{alert.name}\"."
+
+    return {"success": True, "message": message}

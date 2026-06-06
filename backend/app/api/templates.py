@@ -566,6 +566,321 @@ async def seed_templates(
                  "activities": ["Randomized", "Consent Obtained"]},
             ],
         },
+        # ── E-Commerce content pack ───────────────────────────────────────────
+        {
+            "name": "E-Commerce Order-to-Fulfillment",
+            "category": "ecommerce",
+            "description": "End-to-end order lifecycle from payment capture through last-mile delivery. Covers pick, pack, ship, and delivery milestones. Pairs with the ecommerce_order_fulfillment recipe for multi-table ETL.",
+            "expected_activities": [
+                "Order Paid",
+                "Pick Started",
+                "Pack Completed",
+                "Shipped",
+                "Delivered",
+            ],
+            "kpis": [
+                {
+                    "name": "Order Cycle Time (Paid to Delivered)",
+                    "metric": "avg_cycle_time",
+                    "target": 96,
+                    "unit": "hours",
+                },
+                {
+                    "name": "OTIF Compliance",
+                    "metric": "sla_compliance",
+                    "target": 95,
+                    "unit": "percent",
+                },
+                {
+                    "name": "Rework / Re-pick Rate",
+                    "metric": "rework_rate",
+                    "target": 3,
+                    "unit": "percent",
+                },
+            ],
+            "anti_patterns": [
+                {
+                    "name": "Shipped Without Pack",
+                    "pattern": "missing_activity",
+                    "activity": "Pack Completed",
+                    "description": "Order marked shipped before pack step was recorded — possible WMS data gap or process bypass.",
+                },
+                {
+                    "name": "Stuck Order — No Ship After 4 Days",
+                    "pattern": "long_wait_time",
+                    "description": "More than 96 hours elapsed between Order Paid and Shipped without delivery.",
+                },
+                {
+                    "name": "Re-pick Loop",
+                    "pattern": "repeated_activity",
+                    "description": "Pick Started appears more than once per order — indicates pick error or split fulfillment without separate case.",
+                },
+            ],
+        },
+        {
+            "name": "E-Commerce Returns & Reverse Logistics",
+            "category": "ecommerce",
+            "description": "Reverse supply chain from return request through refund or restock. Surfaces return-to-refund cycle time, re-inspection rework, and refund-without-inspection control violations. Pairs with the ecommerce_returns_reverse_logistics recipe.",
+            "expected_activities": [
+                "Return Requested",
+                "Return Approved",
+                "Item Received",
+                "Inspection Completed",
+                "Restocked",
+                "Refund Issued",
+            ],
+            "kpis": [
+                {
+                    "name": "Return-to-Refund Cycle Time",
+                    "metric": "avg_cycle_time",
+                    "target": 168,
+                    "unit": "hours",
+                },
+                {
+                    "name": "Rework Rate (Re-inspections)",
+                    "metric": "rework_rate",
+                    "target": 5,
+                    "unit": "percent",
+                },
+                {
+                    "name": "Process Conformance",
+                    "metric": "conformance_fitness",
+                    "target": 0.90,
+                    "unit": "ratio",
+                },
+            ],
+            "anti_patterns": [
+                {
+                    "name": "Refund Without Inspection",
+                    "pattern": "wrong_order",
+                    "activities": ["Refund Issued", "Inspection Completed"],
+                    "description": "Refund issued before the returned item was inspected — financial control bypass.",
+                },
+                {
+                    "name": "Unapproved Return Received",
+                    "pattern": "wrong_order",
+                    "activities": ["Item Received", "Return Approved"],
+                    "description": "Item received in warehouse before the return request was formally approved.",
+                },
+                {
+                    "name": "Re-inspection Loop",
+                    "pattern": "repeated_activity",
+                    "description": "Inspection Completed appears more than once — item failed quality check and was re-inspected.",
+                },
+            ],
+        },
+        {
+            "name": "E-Commerce Subscription Dunning",
+            "category": "ecommerce",
+            "description": "Payment recovery lifecycle for failed subscription charges. Tracks invoice failure through retry cadence to recovery or cancellation. Pairs with the ecommerce_subscription_dunning recipe.",
+            "expected_activities": [
+                "Invoice Generated",
+                "Payment Failed",
+                "Retry Attempted",
+                "Payment Recovered",
+                "Subscription Cancelled",
+            ],
+            "kpis": [
+                {
+                    "name": "Dunning Cycle Time",
+                    "metric": "avg_cycle_time",
+                    "target": 168,
+                    "unit": "hours",
+                },
+                {
+                    "name": "Retry Rework Rate",
+                    "metric": "rework_rate",
+                    "target": 60,
+                    "unit": "percent",
+                },
+            ],
+            "anti_patterns": [
+                {
+                    "name": "Cancelled Without Retry",
+                    "pattern": "missing_activity",
+                    "activity": "Retry Attempted",
+                    "description": "Subscription cancelled after first payment failure without any retry attempt — potential revenue loss.",
+                },
+                {
+                    "name": "Excessive Retry Depth",
+                    "pattern": "repeated_activity",
+                    "description": "More than three retry attempts before resolution — billing system may be retrying on a blocked card.",
+                },
+            ],
+        },
+        # ── Logistics content pack ────────────────────────────────────────────
+        {
+            "name": "Logistics P2P Three-Way Match",
+            "category": "logistics",
+            "description": "Purchase Order / Goods Receipt / Invoice matching for logistics procurement spend. Surfaces three-way-match exceptions (invoice before GR, price variance), P2P cycle time, and payment cycle. Pairs with the logistics_p2p_three_way_match recipe.",
+            "expected_activities": [
+                "PO Created",
+                "Goods Receipt Posted",
+                "Invoice Received",
+                "Three-Way Match Completed",
+                "Payment Released",
+            ],
+            "kpis": [
+                {
+                    "name": "P2P Cycle Time (PO to Payment)",
+                    "metric": "avg_cycle_time",
+                    "target": 336,
+                    "unit": "hours",
+                },
+                {
+                    "name": "Three-Way Match Conformance",
+                    "metric": "conformance_fitness",
+                    "target": 0.92,
+                    "unit": "ratio",
+                },
+                {
+                    "name": "Rework Rate (Re-matching / Disputes)",
+                    "metric": "rework_rate",
+                    "target": 5,
+                    "unit": "percent",
+                },
+            ],
+            "anti_patterns": [
+                {
+                    "name": "Invoice Before Goods Receipt",
+                    "pattern": "wrong_order",
+                    "activities": ["Invoice Received", "Goods Receipt Posted"],
+                    "description": "Invoice arrived before goods were received — three-way-match exception and potential fraud indicator.",
+                },
+                {
+                    "name": "Payment Without Match",
+                    "pattern": "wrong_order",
+                    "activities": ["Payment Released", "Three-Way Match Completed"],
+                    "description": "Payment released before the three-way match was completed — financial control bypass.",
+                },
+                {
+                    "name": "Re-match Loop",
+                    "pattern": "repeated_activity",
+                    "description": "Three-Way Match Completed appears more than once — invoice was disputed and re-matched after correction.",
+                },
+                {
+                    "name": "Missing Goods Receipt",
+                    "pattern": "missing_activity",
+                    "activity": "Goods Receipt Posted",
+                    "description": "PO reached payment without a goods receipt — GR-less PO or missing data.",
+                },
+            ],
+        },
+        {
+            "name": "Logistics OTIF Root-Cause Analysis",
+            "category": "logistics",
+            "description": "Identifies where OTIF failures originate across the shipment lifecycle. Tags each late case's first deviation — carrier tender rejection, origin dwell, transit delay, or last-mile failure. Slice by carrier, lane, and warehouse. Pairs with the logistics_otif_root_cause recipe.",
+            "expected_activities": [
+                "Order Released to Carrier",
+                "Carrier Tendered",
+                "Tender Accepted",
+                "Picked Up",
+                "In Transit",
+                "Delivered",
+            ],
+            "kpis": [
+                {
+                    "name": "End-to-End Shipment Cycle Time",
+                    "metric": "avg_cycle_time",
+                    "target": 72,
+                    "unit": "hours",
+                },
+                {
+                    "name": "OTIF Process Conformance",
+                    "metric": "conformance_fitness",
+                    "target": 0.92,
+                    "unit": "ratio",
+                },
+                {
+                    "name": "Tender Rework Rate",
+                    "metric": "rework_rate",
+                    "target": 8,
+                    "unit": "percent",
+                },
+            ],
+            "anti_patterns": [
+                {
+                    "name": "Tender Rejected — Re-tender Required",
+                    "pattern": "repeated_activity",
+                    "description": "Carrier Tendered appears more than once — first tender was rejected and shipment had to be re-tendered to another carrier.",
+                },
+                {
+                    "name": "Pickup Before Tender Acceptance",
+                    "pattern": "wrong_order",
+                    "activities": ["Picked Up", "Tender Accepted"],
+                    "description": "Carrier picked up shipment before tender acceptance was recorded — data gap or out-of-sequence event.",
+                },
+                {
+                    "name": "Missing Pickup Scan",
+                    "pattern": "missing_activity",
+                    "activity": "Picked Up",
+                    "description": "Shipment moved directly from Released to Delivered with no pickup scan — tracking data gap.",
+                },
+                {
+                    "name": "Long Origin Dwell",
+                    "pattern": "long_wait_time",
+                    "description": "More than 24 hours elapsed between Tender Accepted and Picked Up — origin dwell is the top OTIF failure cause.",
+                },
+            ],
+        },
+        {
+            "name": "Logistics Carrier Performance Scorecard",
+            "category": "logistics",
+            "description": "Measures carrier SLA adherence across tender acceptance, on-time pickup, on-time delivery, and POD confirmation. Use case attributes (carrier_id, lane_id, service_level) as slice dimensions. Pairs with the logistics_carrier_scorecard recipe.",
+            "expected_activities": [
+                "Shipment Created",
+                "Tender Sent",
+                "Tender Accepted",
+                "Picked Up",
+                "Delivered",
+                "Proof of Delivery Confirmed",
+            ],
+            "kpis": [
+                {
+                    "name": "End-to-End Carrier Cycle Time",
+                    "metric": "avg_cycle_time",
+                    "target": 48,
+                    "unit": "hours",
+                },
+                {
+                    "name": "Carrier SLA Conformance",
+                    "metric": "conformance_fitness",
+                    "target": 0.95,
+                    "unit": "ratio",
+                },
+                {
+                    "name": "Tender Rework Rate",
+                    "metric": "rework_rate",
+                    "target": 5,
+                    "unit": "percent",
+                },
+            ],
+            "anti_patterns": [
+                {
+                    "name": "SLA Breach — Delivery After Commitment Date",
+                    "pattern": "sla_violation",
+                    "description": "Delivered timestamp falls after committed_delivery_date — direct SLA breach.",
+                },
+                {
+                    "name": "Tender Accepted But Never Picked Up",
+                    "pattern": "missing_activity",
+                    "activity": "Picked Up",
+                    "description": "Carrier accepted tender but no pickup scan recorded — ghost acceptance or equipment failure.",
+                },
+                {
+                    "name": "Missing POD",
+                    "pattern": "missing_activity",
+                    "activity": "Proof of Delivery Confirmed",
+                    "description": "Shipment marked Delivered but no POD recorded — payment / dispute risk.",
+                },
+                {
+                    "name": "Delivery Before Pickup",
+                    "pattern": "wrong_order",
+                    "activities": ["Delivered", "Picked Up"],
+                    "description": "Delivery scan precedes pickup scan — out-of-sequence carrier event, data quality issue.",
+                },
+            ],
+        },
     ]
 
     created_count = 0

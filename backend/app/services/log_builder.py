@@ -240,3 +240,127 @@ def build_event_log(
         "output_path": output_path,
         "columns": out_df.columns.tolist(),
     }
+
+
+def build_ocel(
+    file_path: str,
+    object_type_columns: list[str],
+    events: list[dict],
+    output_path: str,
+    additional_sources: list[str] | None = None,
+    joins: list[dict] | None = None,
+    path_validator: Callable[[str], str] | None = None,
+) -> dict:
+    """Assemble a wide table (single or multi-table) and emit an OCEL 2.0 log.
+
+    This is the object-centric sibling of :func:`build_event_log`. Instead of
+    one *case id* column it takes ``object_type_columns`` — a list of columns
+    on the assembled wide table, each of which designates an OBJECT TYPE whose
+    id lives in that column. The same wide table is unpivoted (one row per
+    event using the ``events`` activity/timestamp mapping) and then handed to
+    pm4py's ``convert_log_to_ocel`` so every event is related to one object of
+    each designated type.
+
+    The reuse story matches ``build_event_log`` exactly: the join assembly goes
+    through :func:`_assemble_wide_table` (so multi-table ERP shapes — header +
+    line + status — work identically), then we pivot wide->long, then convert.
+
+    Args:
+        file_path: Primary source table path (CSV/Parquet/Excel).
+        object_type_columns: Wide-table columns, each = one OCEL object type.
+        events: List of ``{activity_name, timestamp_column}`` event mappings.
+        output_path: Where to write the resulting ``.jsonocel`` file (OCEL 2.0).
+        additional_sources / joins / path_validator: See
+            :func:`_assemble_wide_table`.
+
+    Returns:
+        dict with ``object_types``, ``event_count``, ``object_count``,
+        ``activities`` and ``output_path``.
+    """
+    import pm4py
+
+    df = _assemble_wide_table(file_path, additional_sources, joins, path_validator)
+
+    if not object_type_columns:
+        raise ValueError("At least one object type column is required for an OCEL build")
+    missing_ot = [c for c in object_type_columns if c not in df.columns]
+    if missing_ot:
+        raise ValueError(f"Object type columns not found on the assembled table: {missing_ot}")
+
+    if not events:
+        raise ValueError("At least one event mapping is required")
+
+    # Unpivot the wide table into a long event table, carrying every object-id
+    # column onto each event row. The activity/timestamp columns are renamed to
+    # pm4py's canonical names so convert_log_to_ocel can pick them up directly.
+    rows: list[pd.DataFrame] = []
+    for ev in events:
+        activity = ev.get("activity_name")
+        ts_col = ev.get("timestamp_column")
+        if not activity or not ts_col:
+            raise ValueError("Each event needs activity_name and timestamp_column")
+        if ts_col not in df.columns:
+            raise ValueError(f"Timestamp column '{ts_col}' not found")
+
+        sub = df[object_type_columns + [ts_col]].copy()
+        sub[ts_col] = pd.to_datetime(sub[ts_col], errors="coerce")
+        sub = sub.dropna(subset=[ts_col])
+        # Drop rows where every object id is null — they relate no objects.
+        sub = sub.dropna(subset=object_type_columns, how="all")
+        sub = sub.rename(columns={ts_col: "time:timestamp"})
+        sub["concept:name"] = activity
+        rows.append(sub)
+
+    if not rows:
+        raise ValueError("No valid events produced — check timestamp columns have data")
+
+    long_df = pd.concat(rows, ignore_index=True)
+    if long_df.empty:
+        raise ValueError("No valid events produced after parsing timestamps")
+
+    # Object ids must be strings for pm4py (it keys objects by id value).
+    for col in object_type_columns:
+        long_df[col] = long_df[col].astype("string")
+
+    long_df = long_df.sort_values("time:timestamp").reset_index(drop=True)
+
+    try:
+        ocel = pm4py.convert_log_to_ocel(
+            long_df,
+            activity_column="concept:name",
+            timestamp_column="time:timestamp",
+            object_types=object_type_columns,
+        )
+    except Exception as e:
+        raise ValueError(f"OCEL conversion failed: {e}") from e
+
+    # Persist as OCEL 2.0 JSON so it is reloadable after a worker restart.
+    writer = getattr(pm4py, "write_ocel2_json", None) or getattr(pm4py, "write_ocel_json", None)
+    if writer is None:  # pragma: no cover - pinned pm4py always has these
+        raise ValueError("Installed pm4py exposes no OCEL JSON writer")
+    writer(ocel, output_path)
+
+    try:
+        object_types = list(pm4py.ocel_get_object_types(ocel))
+    except Exception:
+        object_types = list(object_type_columns)
+
+    try:
+        event_count = int(len(ocel.events))
+    except Exception:
+        event_count = int(len(long_df))
+    try:
+        object_count = int(len(ocel.objects))
+    except Exception:
+        object_count = 0
+
+    activities = sorted({str(a) for a in long_df["concept:name"].unique().tolist()})
+
+    return {
+        "object_types": object_types,
+        "event_count": event_count,
+        "object_count": object_count,
+        "activities": activities,
+        "output_path": output_path,
+        "ocel": ocel,
+    }

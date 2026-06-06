@@ -3,11 +3,12 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Target, Plus, Trash2, RefreshCw, TrendingUp, DollarSign } from 'lucide-react';
+import { Target, Plus, Trash2, RefreshCw, TrendingUp, DollarSign, Calculator } from 'lucide-react';
 import { initiatives as initiativesApi, eventLogs as eventLogsApi } from '@/api/client';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import Modal from '@/components/common/Modal';
 import { useUIStore } from '@/store';
+import type { ValueCalculator } from '@/types/analytics';
 
 // Zod schema — validation runs on submit and on blur, with field-level
 // error messages rendered inline. We keep the number fields as plain
@@ -23,6 +24,8 @@ const initiativeSchema = z.object({
   target_value: z.number(),
   value_per_unit_improvement: z.number().optional(),
   event_log_id: z.string().optional(),
+  // calculator_id + calculator_inputs are persisted in scope JSON — no migration needed.
+  calculator_id: z.string().optional(),
 });
 
 type InitiativeFormValues = z.infer<typeof initiativeSchema>;
@@ -73,11 +76,17 @@ export default function InitiativesPage() {
   const [loading, setLoading] = useState(true);
   const [eventLogOptions, setEventLogOptions] = useState<{ id: string; name: string }[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  // Value calculator picker state
+  const [calculators, setCalculators] = useState<ValueCalculator[]>([]);
+  const [selectedCalc, setSelectedCalc] = useState<ValueCalculator | null>(null);
+  // Dynamic inputs for the chosen calculator (key → value)
+  const [calcInputs, setCalcInputs] = useState<Record<string, number>>({});
 
   const {
     register,
     handleSubmit,
     reset,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<InitiativeFormValues>({
     resolver: zodResolver(initiativeSchema),
@@ -90,6 +99,7 @@ export default function InitiativesPage() {
       target_value: 0,
       value_per_unit_improvement: 0,
       event_log_id: '',
+      calculator_id: '',
     },
   });
 
@@ -118,10 +128,40 @@ export default function InitiativesPage() {
     } catch {}
   };
 
+  const loadCalculators = async () => {
+    try {
+      const res = await initiativesApi.listValueCalculators();
+      setCalculators(res.calculators);
+    } catch {}
+  };
+
   useEffect(() => {
     load();
     loadEventLogs();
+    loadCalculators();
   }, [projectId]);
+
+  // When user picks a calculator, pre-populate default inputs and
+  // auto-fill value_per_unit_improvement from the first input's default.
+  const handleCalcChange = (calcId: string) => {
+    const calc = calculators.find((c) => c.id === calcId) ?? null;
+    setSelectedCalc(calc);
+    setValue('calculator_id', calcId);
+    if (calc) {
+      const defaults: Record<string, number> = {};
+      calc.inputs.forEach((inp) => {
+        defaults[inp.key] = inp.default;
+      });
+      setCalcInputs(defaults);
+      // Use the first input's default as a starting value_per_unit_improvement
+      // hint — the user can override it manually.
+      if (calc.inputs.length > 0) {
+        setValue('value_per_unit_improvement', calc.inputs[0].default);
+      }
+    } else {
+      setCalcInputs({});
+    }
+  };
 
   // If we were navigated here with a prefill payload (from Bottlenecks /
   // Rework / Conformance "Track as Initiative" buttons), auto-open the
@@ -148,6 +188,15 @@ export default function InitiativesPage() {
   const onSubmit = handleSubmit(async (values) => {
     if (!projectId) return;
     try {
+      // Persist calculator_id + captured input values in the initiative scope
+      // JSON so the frontend can reconstruct the formula context later.
+      // No DB migration is needed — scope is already a JSONB column.
+      const scope: Record<string, unknown> = {};
+      if (values.calculator_id) {
+        scope.calculator_id = values.calculator_id;
+        scope.calculator_inputs = calcInputs;
+      }
+
       await initiativesApi.create({
         project_id: projectId,
         event_log_id: values.event_log_id || null,
@@ -158,10 +207,13 @@ export default function InitiativesPage() {
         baseline_value: values.baseline_value,
         target_value: values.target_value,
         value_per_unit_improvement: values.value_per_unit_improvement || null,
+        scope: Object.keys(scope).length > 0 ? scope : null,
       });
       addNotification({ type: 'success', title: 'Initiative created' });
       setShowCreate(false);
       reset();
+      setSelectedCalc(null);
+      setCalcInputs({});
       await load();
     } catch (e) {
       addNotification({ type: 'error', title: 'Failed to create initiative' });
@@ -337,6 +389,59 @@ export default function InitiativesPage() {
               <input type="number" step="any" className="input w-full" {...register('target_value', { valueAsNumber: true })} />
             </Field>
           </div>
+          {/* ── Value Calculator picker ──────────────────────────────── */}
+          <div className="rounded-md border border-line bg-surface-2 p-3">
+            <div className="flex items-center gap-1.5 mb-2">
+              <Calculator size={12} className="text-accent" />
+              <span className="text-[11px] font-semibold text-fg-muted uppercase tracking-wider">
+                Value Calculator (optional)
+              </span>
+            </div>
+            <Field label="Choose a ROI formula">
+              <select
+                className="input w-full"
+                value={selectedCalc?.id ?? ''}
+                onChange={(e) => handleCalcChange(e.target.value)}
+              >
+                <option value="">— None: enter manually below —</option>
+                {calculators.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    [{c.category}] {c.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            {selectedCalc && (
+              <div className="mt-2 space-y-2">
+                <p className="text-[10px] text-fg-faint">{selectedCalc.description}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {selectedCalc.inputs.map((inp) => (
+                    <label key={inp.key} className="block">
+                      <span className="text-[10px] text-fg-muted">
+                        {inp.label} ({inp.unit})
+                      </span>
+                      <input
+                        type="number"
+                        step="any"
+                        className="input mt-0.5 w-full"
+                        value={calcInputs[inp.key] ?? inp.default}
+                        onChange={(e) =>
+                          setCalcInputs((prev) => ({
+                            ...prev,
+                            [inp.key]: Number(e.target.value),
+                          }))
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+                <p className="text-[10px] text-fg-faint font-mono bg-tint px-2 py-1 rounded">
+                  {selectedCalc.formula}
+                </p>
+              </div>
+            )}
+          </div>
+
           <Field label="$ per unit improvement (optional)">
             <input type="number" step="any" className="input w-full" {...register('value_per_unit_improvement', { valueAsNumber: true })} />
           </Field>

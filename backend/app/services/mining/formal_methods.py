@@ -604,3 +604,310 @@ def get_declare(df: pd.DataFrame, support_threshold: float = 0.7) -> dict:
             merged.append(r)
 
     return {"rules": merged}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# SLA-aware Timed-Declare conformance
+# ─────────────────────────────────────────────────────────────────────────
+
+# Unit → seconds, used to (a) convert an SLA bound to seconds and (b)
+# convert a measured duration back into the bound's unit for reporting.
+_UNIT_SECONDS = {
+    "minutes": 60.0,
+    "hours": 3600.0,
+    "days": 86400.0,
+}
+
+# Sample cap for violating_case_ids so a 1M-case log can't return a list
+# that dwarfs the rest of the payload.
+_VIOLATION_SAMPLE = 200
+
+
+def _tt_stats(values: list[float], unit: str) -> dict:
+    """Build a time-to-violation stats dict (values already in *unit*)."""
+    if not values:
+        return {"count": 0, "mean": None, "median": None,
+                "p95": None, "max": None, "unit": unit}
+    arr = np.asarray(values, dtype="float64")
+    return {
+        "count": int(arr.size),
+        "mean": round(float(arr.mean()), 3),
+        "median": round(float(np.median(arr)), 3),
+        "p95": round(float(np.percentile(arr, 95)), 3),
+        "max": round(float(arr.max()), 3),
+        "unit": unit,
+    }
+
+
+def _timed_narrative(c: dict, bound_value: float, unit: str) -> str:
+    a = c.get("activity_a") or ""
+    b = c.get("activity_b") or ""
+    win = f"{bound_value:g} {unit}" + (" (business days)" if c.get("business_days") else "")
+    t = c.get("type")
+    if t == "response":
+        return f"After '{a}', '{b}' must follow within {win}."
+    if t == "precedence":
+        return f"'{b}' must be preceded by '{a}' within {win}."
+    if t == "existence":
+        return f"'{a}' must occur within {win} of the case starting."
+    if t == "absence":
+        return f"'{a}' must NOT occur within {win} of the case starting."
+    return f"{t}: {a}" + (f" / {b}" if b else "")
+
+
+def check_timed_declare(df: pd.DataFrame, constraints: list[dict]) -> dict:
+    """Evaluate time-bounded (SLA-aware) DECLARE-style constraints over a log.
+
+    Each constraint is a dict with keys:
+        type:          one of 'response', 'precedence', 'existence', 'absence'
+        activity_a:    str (the trigger / target activity)
+        activity_b:    str | None (required for response/precedence)
+        bound_value:   float > 0 — the SLA window magnitude T
+        bound_unit:    'minutes' | 'hours' | 'days'
+        business_days: bool — measure T over Mon–Fri working time
+        label:         str | None — optional display name
+
+    Semantics (per case):
+        response(A,B,T):   for every occurrence of A, some B must occur
+                           strictly after it within T. Each A occurrence is
+                           an obligation; a case violates if ANY A obligation
+                           is unmet. Time-to-violation = the smallest A→(next
+                           reachable B) gap that exceeds T (or, if no B at
+                           all, the A→case-end elapsed).
+        precedence(A,B,T): for every occurrence of B, some A must occur
+                           strictly before it within T. A case violates if
+                           ANY B lacks a qualifying A. TtV = the offending
+                           A→B gap (or B's distance from case start when no
+                           prior A).
+        existence(A,_,T):  A must occur within T of the case's first event.
+                           Cases with no A, or whose first A is later than T,
+                           violate. TtV = elapsed-to-first-A (or whole case
+                           span when A is absent).
+        absence(A,_,T):    A must NOT occur within T of the case start. A
+                           case with an A inside the window violates. TtV =
+                           elapsed-to-first-A inside the window.
+
+    Only cases that *activate* a constraint count toward its denominator:
+      - response: cases containing ≥1 A
+      - precedence: cases containing ≥1 B
+      - existence / absence: all cases (the window always applies)
+
+    Returns a dict matching TimedDeclareResponse: total_cases + a per-
+    constraint result carrying violation_rate, a bounded sample of
+    violating_case_ids, and time-to-violation stats.
+    """
+    if df.empty:
+        return {"total_cases": 0, "results": []}
+
+    # Sort once; group preserves order within each case.
+    sdf = df.sort_values([CASE_COL, TIMESTAMP_COL])
+    total_cases = int(sdf[CASE_COL].nunique())
+
+    # Pre-materialize per-case ordered (activity, timestamp) sequences once so
+    # every constraint reuses them instead of re-grouping the frame N times.
+    # ts stored as numpy datetime64 for cheap business/wall-clock math.
+    case_seqs: dict = {}
+    for case_id, grp in sdf.groupby(CASE_COL, sort=False):
+        acts = grp[ACTIVITY_COL].astype(str).tolist()
+        ts = grp[TIMESTAMP_COL]
+        case_seqs[str(case_id)] = (acts, ts)
+
+    results: list[dict] = []
+
+    for c in constraints:
+        ctype = str(c.get("type", "")).lower()
+        a = str(c.get("activity_a", ""))
+        b = c.get("activity_b")
+        b = str(b) if b is not None else None
+        bound_value = float(c.get("bound_value", 0) or 0)
+        unit = str(c.get("bound_unit", "hours")).lower()
+        if unit not in _UNIT_SECONDS:
+            unit = "hours"
+        business_days = bool(c.get("business_days", False))
+        bound_seconds = bound_value * _UNIT_SECONDS[unit]
+
+        evaluated = 0
+        violating = 0
+        violating_ids: list[str] = []
+        ttv_values: list[float] = []  # in the constraint's unit
+
+        for case_id, (acts, ts) in case_seqs.items():
+            # Build aligned arrays for this case.
+            ts_list = list(ts)
+            n = len(acts)
+
+            if ctype in ("response", "precedence") and b is None:
+                # Binary constraint missing its B — cannot evaluate; skip.
+                continue
+
+            if ctype == "response":
+                a_idx = [i for i, x in enumerate(acts) if x == a]
+                if not a_idx:
+                    continue  # not activated
+                evaluated += 1
+                b_idx = [i for i, x in enumerate(acts) if x == b]
+                worst_gap = None  # seconds, only set on violation
+                case_violates = False
+                # last B timestamp for the "no later B" check
+                for ai in a_idx:
+                    a_ts = ts_list[ai]
+                    # earliest B strictly after this A
+                    next_b = None
+                    for bi in b_idx:
+                        if bi > ai:
+                            next_b = ts_list[bi]
+                            break
+                    if next_b is None:
+                        # No B follows: obligation unmet. Gap = A→case end.
+                        gap = _pair_elapsed(a_ts, ts_list[-1], business_days)
+                        case_violates = True
+                        if worst_gap is None or gap > worst_gap:
+                            worst_gap = gap
+                    else:
+                        gap = _pair_elapsed(a_ts, next_b, business_days)
+                        if gap > bound_seconds:
+                            case_violates = True
+                            if worst_gap is None or gap > worst_gap:
+                                worst_gap = gap
+                if case_violates:
+                    violating += 1
+                    if len(violating_ids) < _VIOLATION_SAMPLE:
+                        violating_ids.append(case_id)
+                    if worst_gap is not None:
+                        ttv_values.append(worst_gap / _UNIT_SECONDS[unit])
+
+            elif ctype == "precedence":
+                b_idx = [i for i, x in enumerate(acts) if x == b]
+                if not b_idx:
+                    continue  # not activated
+                evaluated += 1
+                a_idx = [i for i, x in enumerate(acts) if x == a]
+                worst_gap = None
+                case_violates = False
+                for bi in b_idx:
+                    b_ts = ts_list[bi]
+                    # latest A strictly before this B
+                    prev_a = None
+                    for ai in reversed(a_idx):
+                        if ai < bi:
+                            prev_a = ts_list[ai]
+                            break
+                    if prev_a is None:
+                        # No prior A: gap = case start → B.
+                        gap = _pair_elapsed(ts_list[0], b_ts, business_days)
+                        case_violates = True
+                        if worst_gap is None or gap > worst_gap:
+                            worst_gap = gap
+                    else:
+                        gap = _pair_elapsed(prev_a, b_ts, business_days)
+                        if gap > bound_seconds:
+                            case_violates = True
+                            if worst_gap is None or gap > worst_gap:
+                                worst_gap = gap
+                if case_violates:
+                    violating += 1
+                    if len(violating_ids) < _VIOLATION_SAMPLE:
+                        violating_ids.append(case_id)
+                    if worst_gap is not None:
+                        ttv_values.append(worst_gap / _UNIT_SECONDS[unit])
+
+            elif ctype in ("existence", "absence"):
+                evaluated += 1  # window always applies to every case
+                case_start = ts_list[0]
+                first_a_ts = None
+                for i, x in enumerate(acts):
+                    if x == a:
+                        first_a_ts = ts_list[i]
+                        break
+                if ctype == "existence":
+                    if first_a_ts is None:
+                        # A absent → violation; gap = whole case span.
+                        gap = _pair_elapsed(case_start, ts_list[-1], business_days)
+                        violating += 1
+                        if len(violating_ids) < _VIOLATION_SAMPLE:
+                            violating_ids.append(case_id)
+                        ttv_values.append(gap / _UNIT_SECONDS[unit])
+                    else:
+                        gap = _pair_elapsed(case_start, first_a_ts, business_days)
+                        if gap > bound_seconds:
+                            violating += 1
+                            if len(violating_ids) < _VIOLATION_SAMPLE:
+                                violating_ids.append(case_id)
+                            ttv_values.append(gap / _UNIT_SECONDS[unit])
+                else:  # absence
+                    if first_a_ts is not None:
+                        gap = _pair_elapsed(case_start, first_a_ts, business_days)
+                        if gap <= bound_seconds:
+                            # A occurred inside the forbidden window → violation
+                            violating += 1
+                            if len(violating_ids) < _VIOLATION_SAMPLE:
+                                violating_ids.append(case_id)
+                            ttv_values.append(gap / _UNIT_SECONDS[unit])
+            else:
+                # Unknown type: emit an empty (non-evaluated) result so the
+                # caller still sees the constraint echoed back.
+                continue
+
+        violation_rate = round(violating / evaluated, 4) if evaluated else 0.0
+        results.append({
+            "type": ctype,
+            "activity_a": a,
+            "activity_b": b,
+            "bound_value": bound_value,
+            "bound_unit": unit,
+            "business_days": business_days,
+            "label": c.get("label"),
+            "narrative": _timed_narrative(c, bound_value, unit),
+            "evaluated_cases": evaluated,
+            "satisfied_cases": evaluated - violating,
+            "violating_cases": violating,
+            "violation_rate": violation_rate,
+            "violating_case_ids": violating_ids,
+            "time_to_violation": _tt_stats(ttv_values, unit),
+        })
+
+    return {"total_cases": total_cases, "results": results}
+
+
+def _pair_elapsed(start, end, business_days: bool) -> float:
+    """Elapsed seconds between two scalar pandas Timestamps, wall-clock or
+    Mon–Fri business time. Negative spans clamp to 0."""
+    if start is None or end is None:
+        return 0.0
+    try:
+        raw = (end - start).total_seconds()
+    except Exception:
+        return 0.0
+    if raw <= 0:
+        return 0.0
+    if not business_days:
+        return raw
+    return _business_seconds_scalar(start, end)
+
+
+def _business_seconds_scalar(start, end) -> float:
+    """Mon–Fri working-time seconds between two scalar Timestamps.
+
+    Scalar twin of ``_business_seconds_between`` (the vectorized version is
+    kept for any future bulk path). Counts the full 24h of each weekday and
+    zero for Sat/Sun, so a 1-business-day SLA = 24 weekday-hours.
+    """
+    day = 86400.0
+    s = start.value / 1e9  # ns → s since epoch (UTC instant)
+    e = end.value / 1e9
+
+    def weekend_seconds_before(t: float) -> float:
+        d = t // day
+        dow = (d + 3.0) % 7.0           # epoch (1970-01-01) is Thursday
+        dm = d - 4.0                    # shift so each 7-day block starts Monday
+        full_weeks = dm // 7.0
+        rem_days = dm - full_weeks * 7.0
+        leading_weekend = max(0.0, min(2.0, rem_days - 5.0))
+        whole = (full_weeks * 2.0 + leading_weekend) * day
+        intraday = t - d * day
+        today_is_weekend = 1.0 if dow >= 5.0 else 0.0
+        return whole + today_is_weekend * intraday
+
+    raw = e - s
+    business = raw - (weekend_seconds_before(e) - weekend_seconds_before(s))
+    return max(0.0, business)

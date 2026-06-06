@@ -6,6 +6,8 @@ import {
   Mail,
   Globe,
   Hash,
+  Users,
+  Inbox,
   X,
   Plus,
   Save,
@@ -73,8 +75,10 @@ const conditions = [
 
 const channels = [
   { value: 'email', label: 'Email', icon: Mail },
-  { value: 'webhook', label: 'Webhook', icon: Globe },
   { value: 'slack', label: 'Slack', icon: Hash },
+  { value: 'teams', label: 'Teams', icon: Users },
+  { value: 'webhook', label: 'Webhook', icon: Globe },
+  { value: 'in_app', label: 'In-app', icon: Inbox },
 ];
 
 const AlertConfig: React.FC<AlertConfigProps> = ({
@@ -102,6 +106,9 @@ const AlertConfig: React.FC<AlertConfigProps> = ({
   const [slackWebhookUrl, setSlackWebhookUrl] = useState(
     alert?.channel_config?.slack_webhook_url || ''
   );
+  const [teamsWebhookUrl, setTeamsWebhookUrl] = useState(
+    alert?.channel_config?.teams_webhook_url || alert?.channel_config?.url || ''
+  );
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -121,6 +128,10 @@ const AlertConfig: React.FC<AlertConfigProps> = ({
     if (channel === 'slack' && !slackWebhookUrl.trim()) {
       newErrors.channel = 'Slack webhook URL is required';
     }
+    if (channel === 'teams' && !teamsWebhookUrl.trim()) {
+      newErrors.channel = 'Teams webhook URL is required';
+    }
+    // in_app needs no channel-specific config.
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -133,6 +144,14 @@ const AlertConfig: React.FC<AlertConfigProps> = ({
     if (channel === 'email') channelConfig.recipients = emailRecipients;
     if (channel === 'webhook') channelConfig.url = webhookUrl;
     if (channel === 'slack') channelConfig.slack_webhook_url = slackWebhookUrl;
+    if (channel === 'teams') {
+      // Teams uses the same webhook_url backend column; expose it under `url`
+      // so the parent's create mapping (channel_config.url -> webhook_url) picks
+      // it up, and keep a typed alias for round-tripping in edit mode.
+      channelConfig.url = teamsWebhookUrl;
+      channelConfig.teams_webhook_url = teamsWebhookUrl;
+    }
+    // in_app: no channel_config payload required.
 
     onSave({
       name,
@@ -414,6 +433,35 @@ const AlertConfig: React.FC<AlertConfigProps> = ({
                 />
                 <p className="mt-1.5 text-[11px] text-fg-faint">
                   Create an incoming webhook in your Slack workspace settings
+                </p>
+              </div>
+            )}
+
+            {channel === 'teams' && (
+              <div>
+                <label className="block text-[11px] font-medium text-fg-faint mb-2">
+                  Teams Webhook URL
+                </label>
+                <input
+                  type="url"
+                  value={teamsWebhookUrl}
+                  onChange={(e) => setTeamsWebhookUrl(e.target.value)}
+                  placeholder="https://outlook.office.com/webhook/..."
+                  className="input w-full"
+                />
+                <p className="mt-1.5 text-[11px] text-fg-faint">
+                  Add an Incoming Webhook connector to your Teams channel and
+                  paste its URL. Alerts post as an Adaptive Card.
+                </p>
+              </div>
+            )}
+
+            {channel === 'in_app' && (
+              <div className="flex items-start gap-2">
+                <Inbox className="mt-0.5 w-4 h-4 text-fg-faint" />
+                <p className="text-[11px] text-fg-muted">
+                  No setup required. In-app alerts surface inside FlowMiner when
+                  the condition is met — nothing is sent externally.
                 </p>
               </div>
             )}

@@ -17,6 +17,7 @@ import {
   Inbox,
   ShieldCheck,
   Network,
+  Workflow,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore, useUIStore } from '@/store';
@@ -40,6 +41,7 @@ const navSections: NavSection[] = [
       { label: 'Overview', path: '/overview', icon: Home },
       { label: 'Inbox', path: '/inbox', icon: Inbox },
       { label: 'Alerts', path: '/alerts', icon: Bell },
+      { label: 'Action Rules', path: '/action-rules', icon: Workflow },
     ],
   },
   {

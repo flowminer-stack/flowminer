@@ -55,12 +55,30 @@ class RecipeEvent(BaseModel):
     filter: str | None = None  # advisory note; not executed by the builder
 
 
+class RecipeKPI(BaseModel):
+    """A default KPI definition that mirrors the ProcessTemplate kpis shape."""
+
+    name: str
+    metric: str  # one of the metrics known to AlertEngine / AlertEvaluator
+    target: float
+    unit: str  # "hours" | "percent" | "ratio" | …
+
+
+class RecipeAlertRule(BaseModel):
+    """A default alert rule expressed in the Alert model / AlertEngine shape."""
+
+    name: str
+    metric: str
+    condition: str  # gt | lt | eq | gte | lte
+    threshold: float
+
+
 class ProcessRecipe(BaseModel):
     id: str
     process_name: str
     description: str
     connector_type: str | None = None  # which system this typically comes from
-    category: str = "other"  # p2p | o2c | itsm | crm | ...
+    category: str = "other"  # p2p | o2c | itsm | crm | ecommerce | logistics | …
     required_tables: list[RecipeTable]
     joins: list[RecipeJoin] = Field(default_factory=list)
     case_id_column: str
@@ -70,6 +88,18 @@ class ProcessRecipe(BaseModel):
     additional_columns: dict[str, str] = Field(default_factory=dict)
     sample_kpis: list[str] = Field(default_factory=list)
     notes: str | None = None
+
+    # ── Optional enrichment fields (additive, backward-compatible) ──────────
+    # Structured KPIs — mirrors ProcessTemplate.kpis, used to pre-fill
+    # the conformance/KPI dashboard when a recipe is applied.
+    default_kpis: list[RecipeKPI] = Field(default_factory=list)
+    # Reference happy-path Petri net — passed directly to
+    # ConformanceService._reference_model_to_petri_net (transitions/places/arcs
+    # /initial_marking/final_marking). Empty dict means "discover from data".
+    reference_model: dict = Field(default_factory=dict)
+    # Default alert rules that should be created when the recipe is applied.
+    # Each entry maps onto the Alert model: {name, metric, condition, threshold}.
+    default_alert_rules: list[RecipeAlertRule] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_refs(self) -> "ProcessRecipe":
@@ -147,3 +177,51 @@ def list_recipes(
 
 def get_recipe(recipe_id: str) -> Optional[ProcessRecipe]:
     return load_recipes().get(recipe_id)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Reference-model persistence (recipe → conformance)
+#
+# A recipe's ``reference_model`` is the happy-path Petri net the conformance
+# checker should replay traces against. The conformance endpoint loads an
+# EventLog by id and only receives a reference model when the *caller* passes
+# one as a query string — it has no server-side store. Rather than add a DB
+# column + migration (and touch the EventLog model), we persist the model as a
+# small sidecar JSON file next to the built log's ``file_path``. The conformance
+# endpoint already has ``event_log.file_path`` in hand, so it can read this
+# sidecar and prefer it when the caller did not supply an explicit model.
+# ──────────────────────────────────────────────────────────────────────────
+
+REFERENCE_MODEL_SIDECAR_SUFFIX = ".refmodel.json"
+
+
+def reference_model_sidecar_path(log_file_path: str) -> str:
+    """Path of the reference-model sidecar for a built log's ``file_path``."""
+    return f"{log_file_path}{REFERENCE_MODEL_SIDECAR_SUFFIX}"
+
+
+def write_reference_model_sidecar(log_file_path: str, reference_model: dict) -> bool:
+    """Persist ``reference_model`` next to the log so conformance can load it.
+
+    Returns True if a (non-empty) model was written, False if there was nothing
+    to write. Raises on I/O errors so the caller can decide how to handle them.
+    """
+    if not reference_model:
+        return False
+    sidecar = reference_model_sidecar_path(log_file_path)
+    with open(sidecar, "w", encoding="utf-8") as fh:
+        json.dump(reference_model, fh)
+    return True
+
+
+def read_reference_model_sidecar(log_file_path: str | None) -> Optional[dict]:
+    """Load a previously-persisted reference model, or None if absent/invalid."""
+    if not log_file_path:
+        return None
+    sidecar = reference_model_sidecar_path(log_file_path)
+    try:
+        with open(sidecar, encoding="utf-8") as fh:
+            model = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    return model if isinstance(model, dict) and model else None

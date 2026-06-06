@@ -13,7 +13,19 @@ from app.services.log_builder_recipes import (
     load_recipes,
 )
 
-EXPECTED_IDS = {"sap_p2p", "servicenow_incident", "salesforce_opportunity"}
+EXPECTED_IDS = {
+    "sap_p2p",
+    "servicenow_incident",
+    "salesforce_opportunity",
+    # e-commerce content packs
+    "ecommerce_order_fulfillment",
+    "ecommerce_returns_reverse_logistics",
+    "ecommerce_subscription_dunning",
+    # logistics content packs
+    "logistics_p2p_three_way_match",
+    "logistics_otif_root_cause",
+    "logistics_carrier_scorecard",
+}
 
 
 def test_all_recipes_load_and_validate():

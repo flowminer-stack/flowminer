@@ -174,6 +174,26 @@ CHAT_TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "show_conformance",
+            "description": (
+                "Show the stochastic conformance (Earth Mover's Distance) "
+                "between the event log's variant frequency distribution and "
+                "the discovered process model. Returns headline fitness scores, "
+                "a severity breakdown, and the top deviating variants as a "
+                "comparison chart. Use this whenever the user asks about "
+                "conformance, fitness, how well cases follow the model, "
+                "EMD, or stochastic fitness."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "propose_filters",
             "description": (
                 "Propose a set of filters that narrow the analysis to "
@@ -498,6 +518,85 @@ def _run_get_summary(df: pd.DataFrame, args: dict) -> dict:
     return {"data": data, "render": render, "summary": summary}
 
 
+def _run_show_conformance(df: pd.DataFrame, args: dict) -> dict:
+    """Return stochastic conformance (EMD) data for the inline chat chart.
+
+    Calls the same underlying engine method as the dedicated endpoint so the
+    chat surface always shows fresh data for the current filtered DataFrame.
+    The result is lightweight — we send only the top-5 deviating variants to
+    keep the NDJSON chunk small.
+    """
+    result = mining_engine.compute_stochastic_conformance(df)
+
+    emd = result.get("emd_distance", 1.0)
+    fitness = result.get("stochastic_fitness", 0.0)
+    top_variants = result.get("top_deviating_variants", [])[:5]
+    severity = result.get("severity_breakdown", {"minor": 0, "moderate": 0, "severe": 0})
+    log_variants_count = result.get("log_variants_count", 0)
+
+    # Build chart data: log frequency vs model probability for top variants.
+    chart_data = []
+    for v in top_variants:
+        acts = v.get("variant") or []
+        if len(acts) <= 3:
+            label = " → ".join(acts)
+        else:
+            label = f"{acts[0]} → … ({len(acts)} steps) → {acts[-1]}"
+        if len(label) > 40:
+            label = label[:37] + "…"
+        chart_data.append({
+            "label": label,
+            "log_pct": round(v.get("log_frequency", 0) * 100, 2),
+            "model_pct": round(v.get("model_probability", 0) * 100, 2),
+            "contribution_pct": round(v.get("contribution", 0) * 100, 2),
+        })
+
+    data = {
+        "emd_distance": round(emd, 4),
+        "stochastic_fitness": round(fitness, 4),
+        "severity_breakdown": severity,
+        "log_variants_count": log_variants_count,
+        "top_deviating_variants": chart_data,
+    }
+
+    render = {
+        "type": "conformance_chart",
+        "title": "Stochastic Conformance (EMD)",
+        "emd_distance": round(emd, 4),
+        "stochastic_fitness": round(fitness, 4),
+        "severity_breakdown": severity,
+        "data": chart_data,
+    }
+
+    severity_label = (
+        "excellent" if fitness >= 0.90
+        else "good" if fitness >= 0.75
+        else "moderate" if fitness >= 0.55
+        else "poor"
+    )
+    n_severe = severity.get("severe", 0)
+    n_moderate = severity.get("moderate", 0)
+    summary = (
+        f"Stochastic fitness: {fitness * 100:.1f}% ({severity_label}). "
+        f"EMD distance: {emd:.4f}. "
+        f"{log_variants_count} distinct variants in the log; "
+        f"{n_severe} severe and {n_moderate} moderate deviating variants."
+    )
+    if top_variants:
+        worst = top_variants[0]
+        worst_acts = worst.get("variant") or []
+        worst_label = " → ".join(worst_acts[:3])
+        if len(worst_acts) > 3:
+            worst_label += " …"
+        summary += (
+            f" Biggest deviation: '{worst_label}' "
+            f"(log {worst.get('log_frequency', 0) * 100:.1f}% vs "
+            f"model {worst.get('model_probability', 0) * 100:.1f}%)."
+        )
+
+    return {"data": data, "render": render, "summary": summary}
+
+
 def _run_propose_filters(df: pd.DataFrame, args: dict) -> dict:
     """Sanity-check chips the model proposed, then hand them to the
     frontend to render with an 'Apply' button.
@@ -563,6 +662,7 @@ _RUNNERS = {
     "show_variants": _run_show_variants,
     "show_events_over_time": _run_show_events_over_time,
     "get_summary": _run_get_summary,
+    "show_conformance": _run_show_conformance,
     "propose_filters": _run_propose_filters,
 }
 

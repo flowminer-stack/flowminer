@@ -1,0 +1,163 @@
+{
+  "id": "ecommerce_returns_reverse_logistics",
+  "process_name": "E-Commerce Returns & Reverse Logistics",
+  "description": "Tracks the reverse supply chain from return request through refund or restock. Built for return management system (RMS) / OMS exports. The happy path is: Return Requested → Return Approved → Item Received → Inspection Passed → Restocked or Refund Issued. Bifurcation at Inspection is expected — filter by inspection_outcome to separate the restock and refund branches.",
+  "connector_type": null,
+  "category": "ecommerce",
+  "required_tables": [
+    {
+      "name": "returns",
+      "role": "primary",
+      "description": "Return request records (return_id, order_id, sku, customer_id, requested_at, reason_code, status)",
+      "source_hint": "RMS / OMS returns table or Shopify refunds export"
+    },
+    {
+      "name": "return_logistics",
+      "role": "additional",
+      "description": "Physical movement of the returned item (return_id, approved_at, received_at, carrier_return, warehouse_id)",
+      "source_hint": "3PL inbound receipt or WMS putaway log"
+    },
+    {
+      "name": "return_outcomes",
+      "role": "additional",
+      "description": "Inspection result and resolution (return_id, inspected_at, inspection_outcome, restocked_at, refund_issued_at, refund_amount, sku)",
+      "source_hint": "QC inspection table joined to finance refund ledger"
+    }
+  ],
+  "joins": [
+    {
+      "left_table": "returns",
+      "right_table": "return_logistics",
+      "left_on": ["return_id"],
+      "right_on": ["return_id"],
+      "how": "left"
+    },
+    {
+      "left_table": "returns",
+      "right_table": "return_outcomes",
+      "left_on": ["return_id"],
+      "right_on": ["return_id"],
+      "how": "left"
+    }
+  ],
+  "case_id_column": "return_id",
+  "events": [
+    {
+      "activity_name": "Return Requested",
+      "source_table": "returns",
+      "timestamp_column": "requested_at",
+      "resource_column": "customer_id"
+    },
+    {
+      "activity_name": "Return Approved",
+      "source_table": "return_logistics",
+      "timestamp_column": "approved_at"
+    },
+    {
+      "activity_name": "Item Received",
+      "source_table": "return_logistics",
+      "timestamp_column": "received_at",
+      "resource_column": "warehouse_id"
+    },
+    {
+      "activity_name": "Inspection Completed",
+      "source_table": "return_outcomes",
+      "timestamp_column": "inspected_at"
+    },
+    {
+      "activity_name": "Restocked",
+      "source_table": "return_outcomes",
+      "timestamp_column": "restocked_at",
+      "filter": "inspection_outcome = 'pass'"
+    },
+    {
+      "activity_name": "Refund Issued",
+      "source_table": "return_outcomes",
+      "timestamp_column": "refund_issued_at",
+      "filter": "inspection_outcome = 'fail' OR always_refund = true"
+    }
+  ],
+  "additional_columns": {
+    "order_id": "returns.order_id",
+    "sku": "returns.sku",
+    "reason_code": "returns.reason_code",
+    "inspection_outcome": "return_outcomes.inspection_outcome",
+    "refund_amount": "return_outcomes.refund_amount",
+    "carrier_return": "return_logistics.carrier_return"
+  },
+  "sample_kpis": [
+    "Return-to-refund cycle time by SKU",
+    "Return-to-restock cycle time",
+    "First-time inspection pass rate",
+    "Refund-without-inspection rate"
+  ],
+  "default_kpis": [
+    {
+      "name": "Return-to-Refund Cycle Time",
+      "metric": "avg_cycle_time",
+      "target": 168,
+      "unit": "hours"
+    },
+    {
+      "name": "Rework Rate (re-inspections)",
+      "metric": "rework_rate",
+      "target": 5,
+      "unit": "percent"
+    },
+    {
+      "name": "Process Conformance",
+      "metric": "conformance_fitness",
+      "target": 0.90,
+      "unit": "ratio"
+    }
+  ],
+  "reference_model": {
+    "places": [
+      {"name": "p_start"},
+      {"name": "p_requested"},
+      {"name": "p_approved"},
+      {"name": "p_received"},
+      {"name": "p_inspected"},
+      {"name": "p_end"}
+    ],
+    "transitions": [
+      {"name": "t_request",  "label": "Return Requested"},
+      {"name": "t_approve",  "label": "Return Approved"},
+      {"name": "t_receive",  "label": "Item Received"},
+      {"name": "t_inspect",  "label": "Inspection Completed"},
+      {"name": "t_restock",  "label": "Restocked"},
+      {"name": "t_refund",   "label": "Refund Issued"}
+    ],
+    "arcs": [
+      {"source": "p_start",     "target": "t_request"},
+      {"source": "t_request",   "target": "p_requested"},
+      {"source": "p_requested", "target": "t_approve"},
+      {"source": "t_approve",   "target": "p_approved"},
+      {"source": "p_approved",  "target": "t_receive"},
+      {"source": "t_receive",   "target": "p_received"},
+      {"source": "p_received",  "target": "t_inspect"},
+      {"source": "t_inspect",   "target": "p_inspected"},
+      {"source": "p_inspected", "target": "t_restock"},
+      {"source": "t_restock",   "target": "p_end"},
+      {"source": "p_inspected", "target": "t_refund"},
+      {"source": "t_refund",    "target": "p_end"}
+    ],
+    "initial_marking": ["p_start"],
+    "final_marking": ["p_end"]
+  },
+  "default_alert_rules": [
+    {
+      "name": "Return-to-refund avg > 10 days",
+      "metric": "avg_cycle_time",
+      "condition": "gt",
+      "threshold": 240
+    },
+    {
+      "name": "Refund-without-inspection conformance drop",
+      "metric": "conformance_fitness",
+      "condition": "lt",
+      "threshold": 0.85
+    }
+  ],
+  "notes": "The filter fields on 'Restocked' and 'Refund Issued' are advisory — the builder's fixed-activity model applies both events to all cases where the timestamp is non-null. Use the Extraction Copilot or a WHERE clause in your SQL connector to split the log into restock and refund branches before mining if you need per-branch conformance. Slice by sku and reason_code to identify product lines driving high return rates."
+}

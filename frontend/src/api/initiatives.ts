@@ -1,4 +1,5 @@
 import api from './http';
+import type { ValueCalculatorsResponse } from '@/types/analytics';
 
 // ─── Initiatives (Value/ROI Tracker) ─────────────────────────────────────────
 
@@ -25,5 +26,12 @@ export const initiatives = {
   summary: async (projectId: string): Promise<any> => {
     const r = await api.get(`/initiatives/summary/${projectId}`);
     return r.data;
+  },
+  /** Fetch the pre-built ROI value calculator library. */
+  listValueCalculators: async (category?: string): Promise<ValueCalculatorsResponse> => {
+    const r = await api.get('/initiatives/value-calculators', {
+      params: category ? { category } : undefined,
+    });
+    return r.data as ValueCalculatorsResponse;
   },
 };

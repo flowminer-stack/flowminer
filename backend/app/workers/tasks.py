@@ -75,6 +75,93 @@ def _run_async(coro):
         asyncio.set_event_loop(None)
 
 
+def _render_report(df, report) -> dict:
+    """Render a minimal HTML report for a scheduled-report email.
+
+    There is no ``mining_engine.generate_report``; the engine exposes
+    ``generate_summary`` (statistics + variants + bottlenecks) and
+    ``generate_insights`` (plain-language insight dicts). This helper composes
+    the two into a small self-contained HTML document: a heading, a key-metrics
+    table, and the insights list. Returns ``{"html": ...}`` so the caller keeps
+    the same ``.get("html")`` access pattern it used for the old call.
+    """
+    from app.services.mining_engine import mining_engine
+    from html import escape
+
+    report_name = getattr(report, "name", None) or "FlowMiner Report"
+
+    try:
+        summary = mining_engine.generate_summary(df)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("report: generate_summary failed: %s", exc)
+        summary = {}
+    try:
+        insights_result = mining_engine.generate_insights(df)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("report: generate_insights failed: %s", exc)
+        insights_result = {}
+
+    stats = summary.get("statistics", {}) if isinstance(summary, dict) else {}
+
+    def _fmt_duration(seconds) -> str:
+        try:
+            secs = float(seconds or 0)
+        except (TypeError, ValueError):
+            return "—"
+        if secs <= 0:
+            return "0s"
+        hours = secs / 3600.0
+        if hours >= 24:
+            return f"{hours / 24:.1f} days"
+        if hours >= 1:
+            return f"{hours:.1f} hours"
+        return f"{secs / 60:.0f} min"
+
+    metric_rows = [
+        ("Total cases", str(stats.get("total_cases", 0))),
+        ("Total events", str(stats.get("total_events", 0))),
+        ("Distinct activities", str(stats.get("total_activities", 0))),
+        ("Avg case duration", _fmt_duration(stats.get("avg_case_duration", 0))),
+        ("Median case duration", _fmt_duration(stats.get("median_case_duration", 0))),
+        ("Avg events / case", str(stats.get("avg_events_per_case", 0))),
+    ]
+    metrics_html = "".join(
+        f"<tr><td style='padding:4px 12px 4px 0;color:#475569'>{escape(label)}</td>"
+        f"<td style='padding:4px 0;font-weight:600'>{escape(str(value))}</td></tr>"
+        for label, value in metric_rows
+    )
+
+    insights = insights_result.get("insights", []) if isinstance(insights_result, dict) else []
+    if insights:
+        items = "".join(
+            "<li style='margin-bottom:8px'>"
+            f"<strong>{escape(str(ins.get('title', 'Insight')))}</strong>"
+            f" <span style='color:#64748b'>({escape(str(ins.get('severity', 'info')))})</span><br/>"
+            f"<span style='color:#334155'>{escape(str(ins.get('description', '')))}</span>"
+            "</li>"
+            for ins in insights[:10]
+        )
+        insights_html = f"<ul style='padding-left:18px;margin:8px 0'>{items}</ul>"
+    else:
+        insights_html = "<p style='color:#64748b'>No notable insights for this period.</p>"
+
+    summary_line = insights_result.get("summary", "") if isinstance(insights_result, dict) else ""
+
+    html = (
+        "<div style='font-family:system-ui,Segoe UI,Arial,sans-serif;color:#0f172a;max-width:680px'>"
+        f"<h2 style='margin-bottom:4px'>{escape(report_name)}</h2>"
+        f"<p style='color:#64748b;margin-top:0'>{escape(str(summary_line))}</p>"
+        "<h3 style='margin-bottom:6px'>Key metrics</h3>"
+        f"<table style='border-collapse:collapse;font-size:14px'>{metrics_html}</table>"
+        "<h3 style='margin-bottom:6px'>Insights</h3>"
+        f"{insights_html}"
+        "<hr style='border:none;border-top:1px solid #e2e8f0;margin:16px 0'/>"
+        "<p style='color:#94a3b8;font-size:12px'>— FlowMiner Process Mining Platform</p>"
+        "</div>"
+    )
+    return {"html": html}
+
+
 @celery_app.task(bind=True, name="app.workers.tasks.process_uploaded_file", max_retries=3)
 def process_uploaded_file(self, event_log_id: str, file_path: str):
     """
@@ -551,7 +638,7 @@ def send_scheduled_report(report_id: str):
             cost_col=event_log.cost_column,
         )
 
-        report_result = mining_engine.generate_report(df)
+        report_result = _render_report(df, report)
         html_content = report_result.get("html", "<p>Report generation failed.</p>")
 
         recipients = report.email_recipients or []
@@ -663,6 +750,349 @@ def evaluate_all_alerts():
         session.close()
 
 
+@celery_app.task(name="app.workers.tasks.evaluate_action_rules")
+def evaluate_action_rules(project_id: str):
+    """Evaluate every enabled ActionRule for a project and dispatch its action
+    against each matched case, inserting real Task rows / firing notifications.
+
+    Mirrors the synchronous ``/action-rules/{id}/evaluate`` endpoint: it loads
+    the rule's linked event log, builds the case snapshots via
+    ``evaluate_rule``, and calls ``dispatch_action`` for every match — but with
+    cooldown enforcement so the beat schedule doesn't re-fire a rule that has
+    triggered within its ``cooldown_seconds`` window.
+
+    ``dispatch_action`` is ``async`` and writes Task rows inside a SAVEPOINT on
+    an ``AsyncSession``, so the whole per-project rule loop runs on a single
+    async session via ONE ``_run_async`` call. This is deliberate: ``_run_async``
+    creates and *closes* a fresh event loop per invocation, and asyncpg
+    connections from the shared ``AsyncAdaptedQueuePool`` are bound to the loop
+    that created them. Calling ``_run_async`` once per rule (the previous
+    implementation) closed the loop after rule #1, then rule #2 reused a pooled
+    connection on a brand-new loop → "Future attached to a different loop" /
+    "Event loop is closed", silently failing every rule after the first. By
+    running the entire loop inside one coroutine on one loop, every pooled
+    connection lives and dies on the same loop.
+
+    The rule-metadata bookkeeping (last_triggered_at, trigger_count,
+    ActionRuleExecution rows) is committed on the same async session so it stays
+    consistent with the inserted Tasks. Each rule is wrapped in its own
+    try/except + per-rule commit so one rule's failure can't abort the others.
+    """
+    from app.models import EventLog
+    from app.models.action_rule import ActionRule, ActionRuleExecution
+    from app.services.action_engine import dispatch_action, evaluate_rule
+    from app.services.infra.notifier import Notifier
+    from app.services.mining_engine import mining_engine
+    from app.database import async_session
+
+    notifier = Notifier()
+
+    # Snapshot the enabled rule ids on a sync session so the async dispatch
+    # session below only does writes it owns. The async coroutine re-loads each
+    # rule fresh on its own session.
+    session = _get_sync_session()
+    try:
+        rule_ids = [
+            row[0]
+            for row in session.execute(
+                select(ActionRule.id).where(
+                    ActionRule.project_id == uuid.UUID(project_id),
+                    ActionRule.enabled == True,  # noqa: E712
+                )
+            ).all()
+        ]
+    finally:
+        session.close()
+
+    if not rule_ids:
+        logger.info("No enabled action rules for project %s", project_id)
+        return {"status": "success", "evaluated": 0, "triggered": 0}
+
+    now = datetime.now(timezone.utc)
+
+    async def _process_all_rules() -> tuple[int, int]:
+        """Run the ENTIRE per-rule loop inside one coroutine on one event loop.
+
+        Opens a single ``async_session`` shared across all rules; each rule has
+        its own try/except so one failure doesn't abort the rest, and commits
+        per rule so a later rule's failure can't roll back an earlier rule's
+        Tasks/executions. Returns ``(matched_cases, triggered_rules)``.
+        """
+        matched_total = 0
+        triggered_rules = 0
+        async with async_session() as db:
+            for rule_id in rule_ids:
+                try:
+                    rule = await db.get(ActionRule, rule_id)
+                    if rule is None or not rule.enabled:
+                        continue
+
+                    # Cooldown: skip if it triggered within the cooldown window.
+                    last = rule.last_triggered_at
+                    if last is not None:
+                        if last.tzinfo is None:
+                            last = last.replace(tzinfo=timezone.utc)
+                        if (now - last).total_seconds() < (rule.cooldown_seconds or 0):
+                            logger.debug("Rule %s skipped — within cooldown", rule.id)
+                            continue
+
+                    if not rule.event_log_id:
+                        logger.debug("Rule %s has no linked event log — skipping", rule.id)
+                        continue
+
+                    event_log = await db.get(EventLog, rule.event_log_id)
+                    if (
+                        not event_log
+                        or not event_log.file_path
+                        or not event_log.case_id_column
+                        or not os.path.exists(event_log.file_path)
+                    ):
+                        logger.debug("Rule %s: event log not ready — skipping", rule.id)
+                        continue
+
+                    # load_event_log is synchronous CPU work; running it inline
+                    # on the event loop is fine (the API endpoint does the same).
+                    df = mining_engine.load_event_log(
+                        file_path=event_log.file_path,
+                        case_id_col=event_log.case_id_column,
+                        activity_col=event_log.activity_column,
+                        timestamp_col=event_log.timestamp_column,
+                        resource_col=event_log.resource_column,
+                        cost_col=event_log.cost_column,
+                    )
+
+                    matches = evaluate_rule(df, rule.condition)
+
+                    # Inject the firing rule's id into the action params so the
+                    # downstream Task gets source_rule_id and the webhook payload
+                    # gets rule_id (params alone are user-authored and carry no
+                    # rule id). dispatch_action / _insert_task read params['rule_id'].
+                    action = {
+                        **rule.action,
+                        "params": {
+                            **(rule.action.get("params") or {}),
+                            "rule_id": str(rule.id),
+                        },
+                    }
+
+                    for case in matches:
+                        detail = await dispatch_action(
+                            action,
+                            case,
+                            dry_run=False,
+                            notifier=notifier,
+                            db=db,
+                            event_log_id=rule.event_log_id,
+                            created_by=rule.created_by,
+                            project_id=rule.project_id,
+                        )
+                        db.add(
+                            ActionRuleExecution(
+                                rule_id=rule.id,
+                                case_id=case["case_id"],
+                                success=bool(detail.get("success", False)),
+                                details=detail,
+                            )
+                        )
+
+                    if matches:
+                        rule.trigger_count = (rule.trigger_count or 0) + len(matches)
+                        rule.last_triggered_at = now
+                        triggered_rules += 1
+
+                    matched_total += len(matches)
+                    # Commit per rule so one rule's later failure can't roll back
+                    # an earlier rule's Tasks/executions.
+                    await db.commit()
+                except Exception as e:  # noqa: BLE001
+                    logger.error(
+                        "Error evaluating action rule %s: %s", rule_id, e, exc_info=True
+                    )
+                    # Roll back this rule's partial work so the shared session is
+                    # usable for the next rule.
+                    try:
+                        await db.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
+        return matched_total, triggered_rules
+
+    # ONE _run_async call for the whole project — one event loop owns every
+    # pooled asyncpg connection for the duration of the loop.
+    try:
+        evaluated, triggered = _run_async(_process_all_rules())
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "Action-rule evaluation for project %s failed: %s", project_id, e,
+            exc_info=True,
+        )
+        return {"status": "error", "message": str(e)}
+
+    logger.info(
+        "Action-rule evaluation for project %s: %d matched cases, %d rules triggered "
+        "across %d rules",
+        project_id, evaluated, triggered, len(rule_ids),
+    )
+    return {
+        "status": "success",
+        "project_id": project_id,
+        "rules": len(rule_ids),
+        "matched_cases": evaluated,
+        "triggered": triggered,
+    }
+
+
+@celery_app.task(name="app.workers.tasks.dispatch_all_action_rules")
+def dispatch_all_action_rules():
+    """Periodic fan-out: enqueue ``evaluate_action_rules`` for every project
+    that has at least one enabled ActionRule. Mirrors ``evaluate_all_alerts`` /
+    ``scheduled_alert_check`` — one ``.delay`` per project so each project's
+    evaluation runs in its own isolated worker task.
+    """
+    from app.models.action_rule import ActionRule
+
+    session = _get_sync_session()
+    try:
+        project_ids = [
+            row[0]
+            for row in session.execute(
+                select(ActionRule.project_id)
+                .where(ActionRule.enabled == True)  # noqa: E712
+                .distinct()
+            ).all()
+        ]
+
+        if not project_ids:
+            logger.info("No projects with enabled action rules found")
+            return {"status": "success", "projects_fanned_out": 0}
+
+        for project_id in project_ids:
+            try:
+                evaluate_action_rules.delay(str(project_id))
+            except Exception as e:
+                logger.error(
+                    "Error dispatching action-rule evaluation for project %s: %s",
+                    project_id, e,
+                )
+
+        return {"status": "success", "projects_fanned_out": len(project_ids)}
+    except Exception as e:
+        logger.error("dispatch_all_action_rules failed: %s", e, exc_info=True)
+        return {"status": "error", "message": str(e)}
+    finally:
+        session.close()
+
+
+def _connector_schedule_due(schedule: str, last_sync, now: datetime) -> bool:
+    """Decide whether a connector with the given stored ``schedule`` string is
+    due for a sync.
+
+    The ``schedule`` column is a free-form string. Parsing order:
+
+    1. If it looks like a cron expression and ``croniter`` is importable, use
+       croniter against ``last_sync`` (or ``now`` on first run) — due when the
+       next scheduled fire time is <= now.
+    2. Otherwise interpret a simple interval: a bare integer = seconds, or the
+       keywords ``hourly`` / ``daily`` / ``weekly`` (and ``"<N>m"`` minutes).
+       Due when ``now - last_sync >= interval`` (or always on first run).
+
+    First run (``last_sync is None``) is always due so a freshly scheduled
+    connector starts syncing without waiting a full interval.
+    """
+    spec = (schedule or "").strip().lower()
+    if not spec:
+        return False
+
+    # First run — always due.
+    if last_sync is None:
+        return True
+    if last_sync.tzinfo is None:
+        last_sync = last_sync.replace(tzinfo=timezone.utc)
+
+    # 1. Cron expression (5 whitespace-separated fields) via croniter if present.
+    if len(spec.split()) == 5:
+        try:
+            from croniter import croniter  # type: ignore
+
+            itr = croniter(spec, last_sync)
+            next_fire = itr.get_next(datetime)
+            if next_fire.tzinfo is None:
+                next_fire = next_fire.replace(tzinfo=timezone.utc)
+            return next_fire <= now
+        except ImportError:
+            logger.debug(
+                "croniter not installed — cannot evaluate cron schedule '%s'", spec
+            )
+            return False
+        except Exception as e:  # malformed cron, etc.
+            logger.warning("Invalid cron schedule '%s': %s", spec, e)
+            return False
+
+    # 2. Simple interval parsing.
+    interval_seconds: float | None = None
+    keyword_map = {"hourly": 3600.0, "daily": 86400.0, "weekly": 604800.0}
+    if spec in keyword_map:
+        interval_seconds = keyword_map[spec]
+    elif spec.isdigit():
+        interval_seconds = float(spec)
+    elif spec.endswith("m") and spec[:-1].isdigit():
+        interval_seconds = float(spec[:-1]) * 60.0
+    elif spec.endswith("s") and spec[:-1].isdigit():
+        interval_seconds = float(spec[:-1])
+    elif spec.endswith("h") and spec[:-1].isdigit():
+        interval_seconds = float(spec[:-1]) * 3600.0
+
+    if interval_seconds is None:
+        logger.warning("Unparseable connector schedule '%s' — not syncing", spec)
+        return False
+
+    return (now - last_sync).total_seconds() >= interval_seconds
+
+
+@celery_app.task(name="app.workers.tasks.scan_connector_schedules")
+def scan_connector_schedules():
+    """Periodic task: find connectors with a non-null ``schedule`` and a healthy
+    (non-error) status, and enqueue the existing ``sync_connector`` task for any
+    that are due. Due-ness is computed from ``Connector.last_sync`` via
+    ``_connector_schedule_due`` (cron via croniter when available, else a simple
+    interval); first runs are always due.
+    """
+    from app.models import Connector, ConnectorStatus
+
+    session = _get_sync_session()
+    try:
+        connectors = session.execute(
+            select(Connector).where(
+                Connector.schedule.is_not(None),
+                Connector.status != ConnectorStatus.error,
+            )
+        ).scalars().all()
+
+        now = datetime.now(timezone.utc)
+        dispatched = 0
+        for connector in connectors:
+            try:
+                if _connector_schedule_due(connector.schedule, connector.last_sync, now):
+                    sync_connector.delay(str(connector.id))
+                    dispatched += 1
+            except Exception as e:
+                logger.error(
+                    "Error scheduling connector %s: %s", connector.id, e
+                )
+                continue
+
+        return {
+            "status": "success",
+            "scanned": len(connectors),
+            "dispatched": dispatched,
+        }
+    except Exception as e:
+        logger.error("scan_connector_schedules failed: %s", e, exc_info=True)
+        return {"status": "error", "message": str(e)}
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.workers.tasks.stream_audit_to_siem")
 def stream_audit_to_siem():
     """Push new audit rows to a SIEM HEC. Set SIEM_HEC_URL to enable.
@@ -751,25 +1181,36 @@ def stream_audit_to_siem():
 
 @celery_app.task(name="app.workers.tasks.check_anomaly_subscriptions")
 def check_anomaly_subscriptions():
-    """Walk active alerts whose description is tagged ``streaming_anomaly``
+    """Walk active alerts whose name is tagged ``streaming_anomaly``
     and fire them when conformance fitness drops below threshold.
     """
     session = _get_sync_session()
+    notifier = None
     try:
-        from app.models import Alert, AlertCondition, EventLog, EventLogStatus
+        from app.models import Alert, EventLog, EventLogStatus
+        from app.services.infra.notifier import Notifier
         from app.services.mining_engine import mining_engine
         from sqlalchemy import select
 
+        notifier = Notifier()
+
+        # Anomaly subscriptions are ordinary active alerts tagged
+        # ``streaming_anomaly``. The Alert model has no ``description`` column
+        # (referencing it raised AttributeError and aborted the whole sweep on
+        # the first active alert), so the tag lives in ``name``. There is also
+        # no AlertCondition.custom — the enum is only gt/lt/eq/gte/lte — so
+        # filter on is_active and the tag.
         alerts = session.execute(
-            select(Alert)
-            .where(Alert.condition == AlertCondition.custom, Alert.is_active == True)  # noqa: E712
+            select(Alert).where(Alert.is_active == True)  # noqa: E712
         ).scalars().all()
 
         fired = 0
         for alert in alerts:
-            if "streaming_anomaly" not in (alert.description or ""):
-                continue
             try:
+                # Tag check is inside the per-alert try so one bad row can't
+                # kill the entire sweep.
+                if "streaming_anomaly" not in (getattr(alert, "name", "") or ""):
+                    continue
                 log = session.execute(
                     select(EventLog)
                     .where(EventLog.project_id == alert.project_id, EventLog.status == EventLogStatus.ready)
@@ -787,10 +1228,27 @@ def check_anomaly_subscriptions():
                 )
                 result = mining_engine.run_conformance(df)
                 fitness = float(result.get("fitness", 0))
-                threshold = float(getattr(alert, "threshold_value", None) or 0.85)
+                # Alert.threshold (Float) holds the fitness floor; default 0.85
+                # when unset. There is no .threshold_value column.
+                threshold = float(alert.threshold if alert.threshold is not None else 0.85)
+                alert.last_value = fitness
                 if fitness < threshold:
-                    alert.last_triggered_at = datetime.now(timezone.utc)
+                    alert.last_triggered = datetime.now(timezone.utc)
                     fired += 1
+                    evaluation = {
+                        "triggered": True,
+                        "current_value": fitness,
+                        "message": (
+                            f"Conformance fitness {fitness:.2f} dropped below "
+                            f"the anomaly threshold {threshold:.2f} on '{log.name}'."
+                        ),
+                    }
+                    try:
+                        notifier.send(alert, evaluation)
+                    except Exception as send_exc:
+                        logger.warning(
+                            "anomaly notify failed for alert %s: %s", alert.id, send_exc
+                        )
             except Exception as e:
                 logger.warning("anomaly check failed for alert %s: %s", alert.id, e)
                 continue
@@ -880,22 +1338,20 @@ def backup_database():
 
 @celery_app.task(name="app.workers.tasks.check_conformance_drift")
 def check_conformance_drift():
-    """Nightly job: for every ready event log with mapping, run conformance
-    and emit an Alert if the fitness score dropped notably compared to the
-    previous run. Fitness history is stored in Redis for simplicity —
-    eventually this should live in a proper table.
+    """Nightly job: for every ready event log with mapping, run the JSD-based
+    DriftDetector over the log and, when a behavioral drift is detected, drop a
+    high-priority Task into the project inbox describing the change.
+
+    Drift DETECTION is delegated to ``DriftDetector.detect_drifts`` (the
+    transition-frequency / Jensen-Shannon signal) rather than a raw
+    fitness-delta heuristic. Delivery is an inbox Task (the same surface the
+    action engine writes to) — simpler and correct here, since the sync Celery
+    session can insert a Task directly, and an Alert would need a non-null
+    event_log_id + a valid AlertCondition anyway.
     """
-    import json
-    import redis as _redis
-
-    from app.models import Alert, AlertCondition, EventLog, EventLogStatus, NotificationChannel
+    from app.models import EventLog, EventLogStatus
+    from app.models.task import Task
     from app.services.mining_engine import mining_engine
-
-    try:
-        rc = _redis.from_url(settings.REDIS_URL, decode_responses=True)
-    except Exception as e:
-        logger.warning("conformance-drift: Redis unreachable (%s), skipping", e)
-        return {"status": "skipped"}
 
     session = _get_sync_session()
     try:
@@ -921,44 +1377,40 @@ def check_conformance_drift():
                     resource_col=event_log.resource_column,
                     cost_col=event_log.cost_column,
                 )
-                result = mining_engine.run_conformance(df)
-                fitness = float(result.get("fitness", 0))
+                drift_result = mining_engine.detect_drifts(df)
             except Exception as e:
-                logger.warning("conformance check failed for %s: %s", event_log.id, e)
+                logger.warning("drift check failed for %s: %s", event_log.id, e)
                 continue
 
             checked += 1
-            hist_key = f"flowminer:conformance_history:{event_log.id}"
-            try:
-                prev_raw = rc.get(hist_key)
-                prev = json.loads(prev_raw) if prev_raw else None
-            except Exception:
-                prev = None
+            detected = drift_result.get("drifts", []) if isinstance(drift_result, dict) else []
+            if not detected:
+                continue
 
-            if prev is not None and isinstance(prev, dict) and "fitness" in prev:
-                drop = prev["fitness"] - fitness
-                # Flag a drift if fitness falls by >5 percentage points
-                if drop > 0.05:
-                    drifts += 1
-                    alert = Alert(
-                        project_id=event_log.project_id,
-                        name=f"Conformance drift on {event_log.name}",
-                        description=(
-                            f"Fitness dropped from {prev['fitness']:.2f} to {fitness:.2f} "
-                            f"(−{drop:.2f}) since last nightly check."
-                        ),
-                        condition=AlertCondition.custom,
-                        threshold_value=0.05,
-                        notification_channel=NotificationChannel.in_app,
-                        is_active=True,
-                        last_triggered_at=datetime.now(timezone.utc),
-                    )
-                    session.add(alert)
-
-            try:
-                rc.set(hist_key, json.dumps({"fitness": fitness, "checked_at": datetime.now(timezone.utc).isoformat()}))
-            except Exception:
-                pass
+            drifts += 1
+            # Most significant drift first (detect_drifts sorts by JSD desc).
+            top = detected[0]
+            summary = drift_result.get("summary", {}) if isinstance(drift_result, dict) else {}
+            description = (
+                f"Behavioral drift detected on '{event_log.name}': "
+                f"{summary.get('total_drifts', len(detected))} drift point(s), "
+                f"max JSD {summary.get('max_jsd', top.get('jsd', 0)):.3f}. "
+                f"First/strongest shift around {top.get('timestamp', 'unknown')}."
+            )
+            task = Task(
+                project_id=event_log.project_id,
+                event_log_id=event_log.id,
+                title=f"Conformance drift detected on {event_log.name}",
+                description=description,
+                priority="high",
+                status="open",
+                context={
+                    "source": "conformance_drift",
+                    "summary": summary,
+                    "top_drift": top,
+                },
+            )
+            session.add(task)
 
         session.commit()
         return {"status": "success", "checked": checked, "drifts": drifts}

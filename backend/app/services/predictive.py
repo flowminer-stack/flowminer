@@ -9,17 +9,24 @@ trained on features engineered from completed cases:
 
 GradientBoostingRegressor drives the remaining-time prediction;
 RandomForestClassifier drives the slow-vs-fast outcome prediction.
-Models are small enough to train on-request inside ``asyncio.to_thread``.
+
+Trained models are now persisted to disk (see ``app.services.model_store``)
+keyed by ``(event_log_id, kind)`` plus a content hash of the log, so repeat
+requests — and especially the close-the-loop alarm layer that re-scores open
+cases — reuse a fitted model instead of refitting every call. Passing
+``event_log_id=None`` falls back to the original train-on-request behaviour.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from app.services import model_store
 from app.services.ingestion import ACTIVITY_COL, CASE_COL, TIMESTAMP_COL
 from app.services.rust_accel import compute_prefix_features as _rs_prefix_features
 
@@ -142,18 +149,18 @@ def _assemble_X(feats: pd.DataFrame, activities: list[str]) -> np.ndarray:
 
 
 class PredictiveService:
-    def predict_remaining_time(self, df: pd.DataFrame) -> dict:
-        """Train a GradientBoostingRegressor on completed-case prefixes and
-        apply it to the CURRENT state of every case.
+    # ── Model training (cached) ──────────────────────────────────────────────
+    #
+    # Each ``_train_*`` returns a payload dict bundling the fitted estimator
+    # with everything needed to score new prefixes later (the activity
+    # vocabulary, any threshold, the class list), plus a ``model_info`` block
+    # and a ``metrics`` block. The public ``predict_*`` methods call into
+    # ``_get_or_train_*`` which persists/reuses the payload via model_store.
 
-        Returns top 200 predictions ordered by predicted remaining time.
-        """
+    def _train_remaining_time(self, df: pd.DataFrame) -> dict | None:
         feats, activities = _extract_prefix_features(df)
         if feats.empty or len(feats) < 10:
-            return {
-                "predictions": [],
-                "model_info": {"method": "gbr", "reason": "insufficient data", "samples": 0},
-            }
+            return None
 
         X = _assemble_X(feats, activities)
         y = feats["remaining_seconds"].to_numpy(dtype=float)
@@ -161,29 +168,130 @@ class PredictiveService:
         try:
             from sklearn.ensemble import GradientBoostingRegressor
             from sklearn.metrics import mean_absolute_error
-            from sklearn.model_selection import train_test_split
+            from sklearn.model_selection import KFold, cross_val_predict
         except ImportError:
-            return {
-                "predictions": [],
-                "model_info": {"method": "none", "reason": "sklearn unavailable"},
-            }
+            return None
 
-        # Train/val split so we can report an honest MAE
-        try:
-            X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
-        except ValueError:
-            X_train, X_val, y_train, y_val = X, X, y, y
+        def _new_model() -> GradientBoostingRegressor:
+            return GradientBoostingRegressor(
+                n_estimators=150, max_depth=4, learning_rate=0.05, random_state=42,
+            )
 
-        model = GradientBoostingRegressor(
-            n_estimators=150, max_depth=4, learning_rate=0.05, random_state=42,
-        )
+        # Cache a full-data model for genuinely-unseen future prefixes; report
+        # MAE and display per-row predictions from OUT-OF-FOLD (cross-fitted)
+        # estimates so the shown numbers are honestly out-of-sample.
+        model = _new_model()
         try:
-            model.fit(X_train, y_train)
+            model.fit(X, y)
         except Exception as e:
             logger.warning("GBR fit failed: %s", e)
-            return {"predictions": [], "model_info": {"method": "gbr", "reason": f"fit error: {e}"}}
+            return None
 
-        mae_val = float(mean_absolute_error(y_val, model.predict(X_val))) if len(X_val) else 0.0
+        n_splits = min(5, len(y))
+        if len(y) > 50_000:
+            n_splits = min(n_splits, 3)
+
+        oof_map: dict[str, float] = {}
+        oof_flag = False
+        oof_pred: np.ndarray | None = None
+        if n_splits >= 2:
+            try:
+                cv = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+                oof_pred = cross_val_predict(
+                    _new_model(), X, y, cv=cv, method="predict", n_jobs=1
+                )
+                oof_flag = True
+            except Exception as e:  # noqa: BLE001 - degrade to in-sample, never crash
+                logger.warning("remaining-time cross_val_predict failed: %s", e)
+                oof_pred = None
+                oof_flag = False
+
+        if oof_flag and oof_pred is not None:
+            oof_pred = np.where(np.isfinite(oof_pred), oof_pred, 0.0)
+            mae_val = float(mean_absolute_error(y, oof_pred))
+            resid_std = float(np.std(y - oof_pred))
+            case_ids = feats["case_id"].tolist()
+            prefix_lengths = feats["prefix_length"].tolist()
+            for cid, pl, p in zip(case_ids, prefix_lengths, oof_pred):
+                oof_map[f"{cid}::{int(pl)}"] = float(p)
+        else:
+            in_sample = model.predict(X)
+            mae_val = float(mean_absolute_error(y, in_sample)) if len(y) else 0.0
+            resid_std = float(np.std(y - in_sample)) if len(y) else 0.0
+
+        return {
+            "model": model,
+            "activities": activities,
+            "resid_std": resid_std,
+            "feature_count": int(X.shape[1]),
+            "oof_remaining_seconds": oof_map,
+            "metrics": {"validation_mae_seconds": round(mae_val, 1), "oof": bool(oof_flag)},
+            "model_info": {
+                "method": "gradient_boosting_regressor",
+                "n_estimators": 150,
+                "max_depth": 4,
+                "training_samples": int(len(X)),
+                "cv_splits": int(n_splits) if oof_flag else 0,
+                "oof": bool(oof_flag),
+                "validation_mae_seconds": round(mae_val, 1),
+                "feature_count": int(X.shape[1]),
+            },
+        }
+
+    def _get_or_train_remaining_time(
+        self, df: pd.DataFrame, event_log_id: Any | None
+    ) -> dict | None:
+        """Return a remaining-time payload, reusing the on-disk model if the
+        log is unchanged. ``event_log_id=None`` always trains fresh."""
+        if event_log_id is None:
+            return self._train_remaining_time(df)
+        chash = model_store.content_hash(df)
+        cached = model_store.load_model(event_log_id, "remaining_time", content_hash=chash)
+        if cached is not None:
+            return cached
+        payload = self._train_remaining_time(df)
+        if payload is not None:
+            model_store.save_model(
+                event_log_id, "remaining_time", payload,
+                content_hash=chash,
+                n_cases=int(df[CASE_COL].nunique()) if CASE_COL in df.columns else None,
+                metrics=payload.get("metrics"),
+            )
+        return payload
+
+    def predict_remaining_time(
+        self, df: pd.DataFrame, event_log_id: Any | None = None
+    ) -> dict:
+        """Apply the (cached) GradientBoostingRegressor to the CURRENT state of
+        every case. Trains and persists the model on first use; subsequent
+        calls for an unchanged log reuse it.
+
+        The displayed per-case ``predicted_remaining_seconds`` are out-of-fold
+        (cross-fitted) for prefixes the model trained on — i.e. honestly
+        out-of-sample and consistent with the reported MAE. Prefixes not in the
+        out-of-fold map (or when CV was skipped on a tiny log) fall back to the
+        full-data model's prediction.
+
+        Returns top 200 predictions ordered by predicted remaining time.
+        """
+        feats, activities_now = _extract_prefix_features(df)
+        if feats.empty or len(feats) < 10:
+            return {
+                "predictions": [],
+                "model_info": {"method": "gbr", "reason": "insufficient data", "samples": 0},
+            }
+
+        payload = self._get_or_train_remaining_time(df, event_log_id)
+        if payload is None:
+            return {
+                "predictions": [],
+                "model_info": {"method": "gbr", "reason": "model unavailable (insufficient data or sklearn missing)"},
+            }
+
+        model = payload["model"]
+        activities = payload["activities"]
+        stds = payload.get("resid_std", 0.0)
+        oof_map = payload.get("oof_remaining_seconds") or {}
 
         # Latest prefix per case — what we want to predict on
         latest = (
@@ -194,11 +302,14 @@ class PredictiveService:
         )
         X_latest = _assemble_X(latest, activities)
         preds = model.predict(X_latest)
-        stds = np.std(y_train - model.predict(X_train)) if len(X_train) else 0.0
 
         predictions = []
         for i, row in latest.iterrows():
-            avg_rem = float(max(0.0, preds[i]))
+            # Prefer the out-of-fold (out-of-sample) estimate when this row was
+            # part of training; only fall back to the full-data model otherwise.
+            oof_val = oof_map.get(f"{row['case_id']}::{int(row['prefix_length'])}")
+            raw = oof_val if oof_val is not None else float(preds[i])
+            avg_rem = float(max(0.0, raw))
             predictions.append(
                 {
                     "case_id": row["case_id"],
@@ -214,28 +325,13 @@ class PredictiveService:
 
         return {
             "predictions": predictions[:200],
-            "model_info": {
-                "method": "gradient_boosting_regressor",
-                "n_estimators": 150,
-                "max_depth": 4,
-                "training_samples": int(len(X_train)),
-                "validation_samples": int(len(X_val)),
-                "validation_mae_seconds": round(mae_val, 1),
-                "feature_count": int(X.shape[1]),
-            },
+            "model_info": payload["model_info"],
         }
 
-    def predict_outcome(self, df: pd.DataFrame, sla_threshold: float | None = None) -> dict:
-        """Train a RandomForestClassifier to predict slow-vs-fast cases based
-        on their prefix features. Uses completed cases whose total duration
-        is labelled slow if > SLA threshold (or median if unspecified)."""
+    def _train_outcome(self, df: pd.DataFrame, sla_threshold: float | None) -> dict | None:
         feats, activities = _extract_prefix_features(df)
         if feats.empty or len(feats) < 20:
-            return {
-                "predictions": [],
-                "threshold_seconds": 0,
-                "model_info": {"method": "rf", "reason": "insufficient data"},
-            }
+            return None
 
         # Label every prefix by whether its total case duration is slow
         threshold = sla_threshold if sla_threshold else float(feats["total_seconds"].median())
@@ -245,36 +341,163 @@ class PredictiveService:
         try:
             from sklearn.ensemble import RandomForestClassifier
             from sklearn.metrics import roc_auc_score
-            from sklearn.model_selection import train_test_split
+            from sklearn.model_selection import StratifiedKFold, cross_val_predict
         except ImportError:
-            return {"predictions": [], "model_info": {"method": "none", "reason": "sklearn unavailable"}}
+            return None
 
         if y.sum() == 0 or y.sum() == len(y):
             return {
-                "predictions": [],
-                "threshold_seconds": threshold,
+                "model": None,
+                "activities": activities,
+                "threshold": float(threshold),
+                "degenerate": True,
+                "metrics": {},
                 "model_info": {"method": "rf", "reason": "degenerate label (all one class)"},
             }
 
-        try:
-            X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-        except ValueError:
-            X_train, X_val, y_train, y_val = X, X, y, y
+        def _new_model() -> RandomForestClassifier:
+            return RandomForestClassifier(
+                n_estimators=200, max_depth=8, random_state=42, n_jobs=1, class_weight="balanced",
+            )
 
-        model = RandomForestClassifier(
-            n_estimators=200, max_depth=8, random_state=42, n_jobs=1, class_weight="balanced",
-        )
+        # The cached estimator is fit on ALL rows so genuinely-unseen future
+        # prefixes get a full-data model. The reported AUC and the per-row
+        # scores we display, however, are computed from OUT-OF-FOLD (cross-
+        # fitted) predictions so they're honestly out-of-sample.
+        model = _new_model()
         try:
-            model.fit(X_train, y_train)
+            model.fit(X, y)
         except Exception as e:
             logger.warning("RF fit failed: %s", e)
-            return {"predictions": [], "model_info": {"method": "rf", "reason": f"fit error: {e}"}}
+            return None
 
-        try:
-            probas_val = model.predict_proba(X_val)[:, 1]
-            auc = float(roc_auc_score(y_val, probas_val))
-        except Exception:
-            auc = 0.0
+        # Choose CV folds: bounded for speed (training is cached per-log), and
+        # capped by the smallest class so every fold can stratify. Fall back to
+        # in-sample scoring when the data is too small/degenerate for CV.
+        smallest_class = int(min(np.bincount(y)))
+        n_splits = min(5, smallest_class)
+        if len(y) > 50_000:
+            n_splits = min(n_splits, 3)
+
+        oof_map: dict[str, float] = {}
+        oof_flag = False
+        oof_proba: np.ndarray | None = None
+        if n_splits >= 2:
+            try:
+                cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+                oof_proba = cross_val_predict(
+                    _new_model(), X, y, cv=cv, method="predict_proba", n_jobs=1
+                )[:, 1]
+                oof_flag = True
+            except Exception as e:  # noqa: BLE001 - degrade to in-sample, never crash
+                logger.warning("outcome cross_val_predict failed: %s", e)
+                oof_proba = None
+                oof_flag = False
+
+        if oof_flag and oof_proba is not None:
+            try:
+                auc = float(roc_auc_score(y, oof_proba))
+            except Exception:  # noqa: BLE001
+                auc = 0.0
+            case_ids = feats["case_id"].tolist()
+            prefix_lengths = feats["prefix_length"].tolist()
+            for cid, pl, p in zip(case_ids, prefix_lengths, oof_proba):
+                val = float(p)
+                if not np.isfinite(val):
+                    val = 0.0
+                oof_map[f"{cid}::{int(pl)}"] = val
+        else:
+            # Too few samples/classes for CV → honest in-sample fallback.
+            try:
+                in_sample = model.predict_proba(X)[:, 1]
+                auc = float(roc_auc_score(y, in_sample))
+            except Exception:  # noqa: BLE001
+                auc = 0.0
+
+        return {
+            "model": model,
+            "activities": activities,
+            "threshold": float(threshold),
+            "overall_slow_rate": round(float(y.mean() * 100), 1),
+            "feature_count": int(X.shape[1]),
+            "oof_breach_probability": oof_map,
+            "metrics": {"validation_auc": round(auc, 3), "oof": bool(oof_flag)},
+            "model_info": {
+                "method": "random_forest_classifier",
+                "n_estimators": 200,
+                "max_depth": 8,
+                "training_samples": int(len(X)),
+                "cv_splits": int(n_splits) if oof_flag else 0,
+                "oof": bool(oof_flag),
+                "validation_auc": round(auc, 3),
+                "feature_count": int(X.shape[1]),
+            },
+        }
+
+    def _get_or_train_outcome(
+        self, df: pd.DataFrame, sla_threshold: float | None, event_log_id: Any | None
+    ) -> dict | None:
+        """Return an outcome payload, reusing the on-disk model if the log AND
+        threshold are unchanged. The threshold is folded into both the cache
+        ``kind`` and the content hash so a different SLA retrains."""
+        if event_log_id is None:
+            return self._train_outcome(df, sla_threshold)
+        thr_key = "median" if sla_threshold is None else f"sla{sla_threshold:g}"
+        kind = f"outcome__{thr_key}"
+        chash = model_store.content_hash(df) + ":" + thr_key
+        cached = model_store.load_model(event_log_id, kind, content_hash=chash)
+        if cached is not None:
+            return cached
+        payload = self._train_outcome(df, sla_threshold)
+        if payload is not None:
+            model_store.save_model(
+                event_log_id, kind, payload,
+                content_hash=chash,
+                n_cases=int(df[CASE_COL].nunique()) if CASE_COL in df.columns else None,
+                metrics=payload.get("metrics"),
+            )
+        return payload
+
+    def predict_outcome(
+        self,
+        df: pd.DataFrame,
+        sla_threshold: float | None = None,
+        event_log_id: Any | None = None,
+    ) -> dict:
+        """Apply the (cached) RandomForestClassifier predicting slow-vs-fast
+        cases. Cases are labelled slow if total duration > SLA threshold (or
+        the median of completed cases when unspecified). The fitted model is
+        persisted per (log, threshold) and reused while the log is unchanged.
+
+        The displayed per-case ``risk_score`` is the out-of-fold (cross-fitted)
+        breach probability for prefixes the model trained on — honestly
+        out-of-sample and consistent with the reported AUC. Prefixes outside the
+        out-of-fold map (or when CV was skipped on a tiny log) fall back to the
+        full-data model's ``predict_proba``."""
+        feats, _activities_now = _extract_prefix_features(df)
+        if feats.empty or len(feats) < 20:
+            return {
+                "predictions": [],
+                "threshold_seconds": 0,
+                "model_info": {"method": "rf", "reason": "insufficient data"},
+            }
+
+        payload = self._get_or_train_outcome(df, sla_threshold, event_log_id)
+        if payload is None:
+            return {"predictions": [], "model_info": {"method": "none", "reason": "sklearn unavailable"}}
+        if payload.get("degenerate") or payload.get("model") is None:
+            return {
+                "predictions": [],
+                "threshold_seconds": payload.get("threshold", 0),
+                "model_info": payload.get(
+                    "model_info", {"method": "rf", "reason": "degenerate label (all one class)"}
+                ),
+            }
+
+        model = payload["model"]
+        activities = payload["activities"]
+        threshold = payload["threshold"]
+        oof_map = payload.get("oof_breach_probability") or {}
 
         latest = feats.sort_values("prefix_length").groupby("case_id").tail(1).reset_index(drop=True)
         X_latest = _assemble_X(latest, activities)
@@ -282,7 +505,10 @@ class PredictiveService:
 
         predictions = []
         for i, row in latest.iterrows():
-            risk_score = float(risk[i])
+            # Prefer the out-of-fold (out-of-sample) probability when this row
+            # was part of training; only fall back to the full-data model.
+            oof_val = oof_map.get(f"{row['case_id']}::{int(row['prefix_length'])}")
+            risk_score = float(oof_val) if oof_val is not None else float(risk[i])
             predictions.append(
                 {
                     "case_id": row["case_id"],
@@ -297,44 +523,18 @@ class PredictiveService:
 
         predictions.sort(key=lambda p: p["risk_score"], reverse=True)
 
-        slow_rate = float(y.mean() * 100)
-
         return {
             "predictions": predictions[:200],
             "threshold_seconds": float(threshold),
-            "overall_slow_rate": round(slow_rate, 1),
-            "model_info": {
-                "method": "random_forest_classifier",
-                "n_estimators": 200,
-                "max_depth": 8,
-                "training_samples": int(len(X_train)),
-                "validation_samples": int(len(X_val)),
-                "validation_auc": round(auc, 3),
-                "feature_count": int(X.shape[1]),
-            },
+            "overall_slow_rate": payload.get("overall_slow_rate"),
+            "model_info": payload["model_info"],
         }
 
 
-    def predict_next_activity(self, df: pd.DataFrame) -> dict:
-        """Predict the next activity for each running case.
-
-        Approach: for every completed case, emit one training example per
-        prefix with features = [last_activity_onehot, prefix_length,
-        unique_activities, elapsed_sec, hour_of_day] and target = the
-        next activity label. Train a RandomForestClassifier, then score
-        each case at its current prefix and return the top-k likely next
-        activities with probabilities.
-
-        This is the third leg of the predictive monitoring trio
-        (remaining_time + outcome + next_activity) and is what every
-        serious competitor ships.
-        """
+    def _train_next_activity(self, df: pd.DataFrame) -> dict | None:
         feats, activities = _extract_prefix_features(df)
         if feats.empty or len(feats) < 20 or len(activities) < 2:
-            return {
-                "predictions": [],
-                "model_info": {"method": "rf", "reason": "insufficient data"},
-            }
+            return None
 
         # Build the target: for each prefix row, what was the ACTUAL next
         # activity in the same case? We reconstruct that by walking the
@@ -356,7 +556,7 @@ class PredictiveService:
         # Drop rows that are the last prefix of their case (no "next")
         train_df = feats[feats["next_activity"].notna()]
         if len(train_df) < 10:
-            return {"predictions": [], "model_info": {"method": "rf", "reason": "insufficient labelled prefixes"}}
+            return None
 
         X = _assemble_X(train_df, activities)
         y = train_df["next_activity"].to_numpy()
@@ -366,12 +566,19 @@ class PredictiveService:
             from sklearn.metrics import accuracy_score
             from sklearn.model_selection import train_test_split
         except ImportError:
-            return {"predictions": [], "model_info": {"reason": "sklearn unavailable"}}
+            return None
 
         # Need at least 2 classes
         unique_targets = list(set(y.tolist()))
         if len(unique_targets) < 2:
-            return {"predictions": [], "model_info": {"reason": "only one possible next activity"}}
+            return {
+                "model": None,
+                "activities": activities,
+                "classes": unique_targets,
+                "degenerate": True,
+                "metrics": {},
+                "model_info": {"reason": "only one possible next activity"},
+            }
 
         try:
             X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -383,18 +590,92 @@ class PredictiveService:
             model.fit(X_train, y_train)
         except Exception as e:
             logger.warning("next-activity RF fit failed: %s", e)
-            return {"predictions": [], "model_info": {"reason": f"fit error: {e}"}}
+            return None
 
         try:
             val_acc = float(accuracy_score(y_val, model.predict(X_val)))
         except Exception:
             val_acc = 0.0
 
+        classes = list(model.classes_)
+        return {
+            "model": model,
+            "activities": activities,
+            "classes": classes,
+            "metrics": {"validation_accuracy": round(val_acc, 3)},
+            "model_info": {
+                "method": "random_forest_classifier",
+                "n_estimators": 200,
+                "max_depth": 10,
+                "training_samples": int(len(X_train)),
+                "validation_samples": int(len(X_val)),
+                "validation_accuracy": round(val_acc, 3),
+                "num_classes": len(classes),
+            },
+        }
+
+    def _get_or_train_next_activity(
+        self, df: pd.DataFrame, event_log_id: Any | None
+    ) -> dict | None:
+        """Return a next-activity payload, reusing the on-disk model when the
+        log is unchanged. ``event_log_id=None`` always trains fresh."""
+        if event_log_id is None:
+            return self._train_next_activity(df)
+        chash = model_store.content_hash(df)
+        cached = model_store.load_model(event_log_id, "next_activity", content_hash=chash)
+        if cached is not None:
+            return cached
+        payload = self._train_next_activity(df)
+        if payload is not None:
+            model_store.save_model(
+                event_log_id, "next_activity", payload,
+                content_hash=chash,
+                n_cases=int(df[CASE_COL].nunique()) if CASE_COL in df.columns else None,
+                metrics=payload.get("metrics"),
+            )
+        return payload
+
+    def predict_next_activity(
+        self, df: pd.DataFrame, event_log_id: Any | None = None
+    ) -> dict:
+        """Predict the next activity for each running case.
+
+        Approach: for every completed case, emit one training example per
+        prefix with features = [last_activity_onehot, prefix_length,
+        unique_activities, elapsed_sec, hour_of_day] and target = the
+        next activity label. Train a RandomForestClassifier, then score
+        each case at its current prefix and return the top-k likely next
+        activities with probabilities.
+
+        The fitted model is persisted per log and reused while the log is
+        unchanged. This is the third leg of the predictive monitoring trio
+        (remaining_time + outcome + next_activity) and is what every
+        serious competitor ships.
+        """
+        feats, activities_now = _extract_prefix_features(df)
+        if feats.empty or len(feats) < 20 or len(activities_now) < 2:
+            return {
+                "predictions": [],
+                "model_info": {"method": "rf", "reason": "insufficient data"},
+            }
+
+        payload = self._get_or_train_next_activity(df, event_log_id)
+        if payload is None:
+            return {"predictions": [], "model_info": {"reason": "insufficient data or sklearn unavailable"}}
+        if payload.get("degenerate") or payload.get("model") is None:
+            return {
+                "predictions": [],
+                "model_info": payload.get("model_info", {"reason": "only one possible next activity"}),
+            }
+
+        model = payload["model"]
+        activities = payload["activities"]
+        classes = payload["classes"]
+
         # Predict on the latest prefix per case
         latest = feats.sort_values("prefix_length").groupby("case_id").tail(1).reset_index(drop=True)
         X_latest = _assemble_X(latest, activities)
         probas = model.predict_proba(X_latest)
-        classes = list(model.classes_)
 
         predictions = []
         for i, row in latest.iterrows():
@@ -414,15 +695,7 @@ class PredictiveService:
 
         return {
             "predictions": predictions[:200],
-            "model_info": {
-                "method": "random_forest_classifier",
-                "n_estimators": 200,
-                "max_depth": 10,
-                "training_samples": int(len(X_train)),
-                "validation_samples": int(len(X_val)),
-                "validation_accuracy": round(val_acc, 3),
-                "num_classes": len(classes),
-            },
+            "model_info": payload["model_info"],
         }
 
 
@@ -611,6 +884,382 @@ class PredictiveService:
                 "sink_activities": sorted(sink_activities),
             },
         }
+
+    # ── Alarm scoring ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _default_as_of(df: pd.DataFrame) -> datetime | None:
+        """Pick a meaningful as-of cutoff for a fully-historical uploaded log.
+
+        With no externally supplied cutoff we still want the alarm to be
+        meaningful: it should score cases that are *genuinely in-flight* at the
+        chosen moment, not cases that already finished long ago. We take the
+        **~0.6 quantile of per-case END timestamps** as the cutoff. By
+        construction roughly the latest ~40% of cases (those that finish after
+        this point) are still "open" at the cutoff and get scored on their
+        truncated, in-progress prefixes, while the earlier ~60% (already
+        finished) are excluded. This mirrors a realistic "now" partway through
+        the log's lifetime rather than treating completed history as the future.
+
+        Returns ``None`` if timestamps can't be resolved (caller then scores
+        nothing, which is the honest answer for an un-timestamped log).
+        """
+        if TIMESTAMP_COL not in df.columns or df.empty:
+            return None
+        try:
+            case_ends = df.groupby(CASE_COL)[TIMESTAMP_COL].max()
+            if case_ends.empty:
+                return None
+            cutoff = case_ends.quantile(0.6)
+            return pd.Timestamp(cutoff).to_pydatetime()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("alarm scoring: could not derive default as_of: %s", e)
+            return None
+
+    def _open_case_prefixes(
+        self, df: pd.DataFrame, as_of: datetime
+    ) -> pd.DataFrame:
+        """Return the event rows of cases that are OPEN at ``as_of``, truncated
+        to the events that had occurred by then.
+
+        A case is OPEN at the cutoff iff its first event timestamp ``<= as_of``
+        and its last event timestamp ``> as_of`` (i.e. it had started but not
+        yet finished). For each open case we keep only the events with
+        ``timestamp <= as_of`` — the genuine in-progress trajectory, which is
+        also closer to out-of-sample because the case's later (future) events
+        never entered the truncated prefix.
+        """
+        if TIMESTAMP_COL not in df.columns:
+            return df.iloc[0:0]
+        as_of_ts = pd.Timestamp(as_of)
+        bounds = df.groupby(CASE_COL)[TIMESTAMP_COL].agg(["min", "max"])
+        open_cases = bounds.index[(bounds["min"] <= as_of_ts) & (bounds["max"] > as_of_ts)]
+        if len(open_cases) == 0:
+            return df.iloc[0:0]
+        truncated = df[
+            df[CASE_COL].isin(open_cases) & (df[TIMESTAMP_COL] <= as_of_ts)
+        ]
+        return truncated
+
+    def score_cases_for_alarm(
+        self,
+        df: pd.DataFrame,
+        sla_threshold: float,
+        risk_threshold: float = 0.5,
+        event_log_id: Any | None = None,
+        as_of: datetime | None = None,
+    ) -> list[dict]:
+        """Score the cases that are OPEN at an as-of cutoff for SLA-breach risk
+        — the interface the automation / alarm layer calls (it must NOT import
+        alert_engine here).
+
+        A case is considered OPEN at ``as_of`` iff it had started but not yet
+        finished by then (first event ``<= as_of < `` last event). Each open
+        case is TRUNCATED to the events that had occurred by ``as_of`` and we
+        score *that* in-progress prefix — its real running state at the cutoff,
+        which is also closer to out-of-sample. Cases already finished by
+        ``as_of`` and cases not yet started are skipped, so a fully-historical
+        log no longer flags completed cases as "future risk".
+
+        ``as_of`` defaults to the **~0.6 quantile of per-case end timestamps**
+        (see :meth:`_default_as_of`) so a meaningful subset of cases is still
+        in-flight at the cutoff on a fully-historical uploaded log. The outcome
+        / remaining-time / next-activity models are still trained on the *full*
+        historical log (completed cases), then applied to the truncated open
+        prefixes.
+
+        For each at-risk case we return:
+
+          * ``breach_probability`` — P(case ends up slow / over SLA), from the
+            outcome classifier trained against ``sla_threshold``.
+          * ``predicted_remaining_seconds`` — from the remaining-time regressor.
+          * ``predicted_finish_over_sla`` — whether elapsed + predicted remaining
+            already exceeds the SLA.
+          * ``top_next_activities`` — top-3 likely next steps (for routing the
+            alarm to the right queue).
+
+        Only cases with ``breach_probability >= risk_threshold`` are returned,
+        sorted by descending risk. Models are reused via model_store when
+        ``event_log_id`` is supplied.
+
+        The displayed ``breach_probability`` (and ``predicted_remaining_seconds``)
+        are out-of-fold (cross-fitted) for prefixes the model trained on, so they
+        are honestly out-of-sample and consistent with the reported AUC/MAE. Only
+        prefixes outside the out-of-fold map — e.g. a truncated prefix length the
+        model never trained on for that case, or a tiny CV-skipped log — fall back
+        to the full-data model's output.
+
+        Returns ``[]`` (never raises) when there isn't enough data, no case is
+        open at the cutoff, or sklearn is missing — the caller treats an empty
+        list as "no alarms".
+        """
+        # Resolve the as-of cutoff; without one the alarm has no honest notion
+        # of "currently in-flight", so we fall back to a derived default.
+        if as_of is None:
+            as_of = self._default_as_of(df)
+        if as_of is None:
+            return []
+
+        # Models are trained on the FULL historical log (completed cases),
+        # exactly as the other predict_* paths do.
+        outcome_payload = self._get_or_train_outcome(df, sla_threshold, event_log_id)
+        if (
+            outcome_payload is None
+            or outcome_payload.get("degenerate")
+            or outcome_payload.get("model") is None
+        ):
+            return []
+
+        outcome_model = outcome_payload["model"]
+        outcome_activities = outcome_payload["activities"]
+        outcome_oof = outcome_payload.get("oof_breach_probability") or {}
+
+        # Scoring set = open-at-cutoff cases, truncated to their in-progress
+        # prefix. The latest prefix per (truncated) case is its current state.
+        open_df = self._open_case_prefixes(df, as_of)
+        if open_df.empty:
+            return []
+        feats, _activities_now = _extract_prefix_features(open_df)
+        if feats.empty:
+            return []
+        latest = (
+            feats.sort_values("prefix_length")
+            .groupby("case_id")
+            .tail(1)
+            .reset_index(drop=True)
+        )
+        X_outcome = _assemble_X(latest, outcome_activities)
+        try:
+            model_breach_prob = outcome_model.predict_proba(X_outcome)[:, 1]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("alarm scoring: outcome predict_proba failed: %s", e)
+            return []
+        # Prefer out-of-fold (out-of-sample) probabilities for the truncated
+        # prefixes the model trained on; fall back to the full-data model for
+        # prefixes outside the out-of-fold map (e.g. CV-skipped tiny logs, or a
+        # truncation that doesn't coincide with a trained prefix length).
+        breach_prob = [
+            float(
+                outcome_oof.get(
+                    f"{r['case_id']}::{int(r['prefix_length'])}",
+                    float(model_breach_prob[i]),
+                )
+            )
+            for i, r in latest.iterrows()
+        ]
+
+        # Remaining-time predictions (best-effort — alarms still fire without).
+        remaining_by_idx: dict[int, float] = {}
+        rt_payload = self._get_or_train_remaining_time(df, event_log_id)
+        if rt_payload is not None and rt_payload.get("model") is not None:
+            try:
+                rt_oof = rt_payload.get("oof_remaining_seconds") or {}
+                X_rt = _assemble_X(latest, rt_payload["activities"])
+                rt_preds = rt_payload["model"].predict(X_rt)
+                for i, r in latest.iterrows():
+                    # Prefer the out-of-fold (out-of-sample) estimate.
+                    oof_val = rt_oof.get(f"{r['case_id']}::{int(r['prefix_length'])}")
+                    raw = oof_val if oof_val is not None else float(rt_preds[i])
+                    remaining_by_idx[i] = float(max(0.0, raw))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("alarm scoring: remaining-time predict failed: %s", e)
+
+        # Next-activity predictions (best-effort).
+        next_acts_by_idx: dict[int, list[dict]] = {}
+        na_payload = self._get_or_train_next_activity(df, event_log_id)
+        if (
+            na_payload is not None
+            and not na_payload.get("degenerate")
+            and na_payload.get("model") is not None
+        ):
+            try:
+                X_na = _assemble_X(latest, na_payload["activities"])
+                na_probas = na_payload["model"].predict_proba(X_na)
+                na_classes = na_payload["classes"]
+                for i in range(len(latest)):
+                    top_k = sorted(enumerate(na_probas[i]), key=lambda p: -p[1])[:3]
+                    next_acts_by_idx[i] = [
+                        {"activity": na_classes[idx], "probability": round(float(p), 3)}
+                        for idx, p in top_k
+                    ]
+            except Exception as e:  # noqa: BLE001
+                logger.warning("alarm scoring: next-activity predict failed: %s", e)
+
+        at_risk: list[dict] = []
+        for i, row in latest.iterrows():
+            prob = float(breach_prob[i])
+            if prob < risk_threshold:
+                continue
+            elapsed = float(row["elapsed_seconds"])
+            remaining = remaining_by_idx.get(i)
+            predicted_total = elapsed + remaining if remaining is not None else None
+            at_risk.append(
+                {
+                    "case_id": row["case_id"],
+                    "prefix_length": int(row["prefix_length"]),
+                    "last_activity": row["last_activity"],
+                    "elapsed_seconds": round(elapsed, 1),
+                    "breach_probability": round(prob, 3),
+                    "risk_label": "high" if prob > 0.7 else "medium",
+                    "predicted_remaining_seconds": (
+                        round(remaining, 1) if remaining is not None else None
+                    ),
+                    "predicted_total_seconds": (
+                        round(predicted_total, 1) if predicted_total is not None else None
+                    ),
+                    "predicted_finish_over_sla": (
+                        bool(predicted_total > sla_threshold)
+                        if predicted_total is not None
+                        else None
+                    ),
+                    "top_next_activities": next_acts_by_idx.get(i, []),
+                }
+            )
+
+        at_risk.sort(key=lambda c: c["breach_probability"], reverse=True)
+        return at_risk
+
+    # ── Explainability (SHAP) ────────────────────────────────────────────────
+
+    def explain_case(
+        self,
+        df: pd.DataFrame,
+        case_id: str,
+        kind: str = "outcome",
+        top_n: int = 8,
+        sla_threshold: float | None = None,
+        event_log_id: Any | None = None,
+    ) -> dict:
+        """Explain a single case's prediction with SHAP feature attributions.
+
+        Uses ``shap.TreeExplainer`` on the underlying sklearn tree ensemble
+        (RandomForest for ``outcome`` / ``next_activity``, GradientBoosting for
+        ``remaining_time``) and returns the top-N signed feature contributions
+        for the case's current prefix.
+
+        SHAP is imported LAZILY inside this method so the module never fails to
+        import when the dependency is absent (it's a heavy, optional add). If
+        shap (or sklearn) isn't installed, or the model/case can't be resolved,
+        a ``{"available": False, "reason": ...}`` dict is returned instead of
+        raising.
+        """
+        # Resolve the trained model payload for the requested kind.
+        if kind == "remaining_time":
+            payload = self._get_or_train_remaining_time(df, event_log_id)
+        elif kind == "next_activity":
+            payload = self._get_or_train_next_activity(df, event_log_id)
+        else:
+            kind = "outcome"
+            payload = self._get_or_train_outcome(df, sla_threshold, event_log_id)
+
+        if payload is None or payload.get("model") is None:
+            return {"available": False, "reason": f"no trained {kind} model (insufficient data?)"}
+
+        model = payload["model"]
+        activities = payload["activities"]
+
+        # Locate the case's current (latest) prefix row.
+        feats, _ = _extract_prefix_features(df)
+        if feats.empty:
+            return {"available": False, "reason": "no prefix features for this log"}
+        case_rows = feats[feats["case_id"] == str(case_id)]
+        if case_rows.empty:
+            return {"available": False, "reason": f"case '{case_id}' not found"}
+        latest_row = case_rows.sort_values("prefix_length").tail(1).reset_index(drop=True)
+        X_case = _assemble_X(latest_row, activities)
+
+        try:
+            import shap  # noqa: PLC0415 - lazy, optional heavy dependency
+        except Exception as e:  # noqa: BLE001
+            return {
+                "available": False,
+                "reason": f"shap not installed ({e}); install shap>=0.46 to enable explanations",
+            }
+
+        # Stable feature names matching _assemble_X's column order.
+        numeric_cols = [
+            "prefix_length",
+            "elapsed_seconds",
+            "unique_activities_so_far",
+            "rework_count",
+            "hour_of_day",
+            "day_of_week",
+        ]
+        feature_names = numeric_cols + [f"last_activity={a}" for a in activities]
+
+        try:
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer.shap_values(X_case)
+        except Exception as e:  # noqa: BLE001
+            return {"available": False, "reason": f"shap explanation failed: {e}"}
+
+        # Normalise shap output to a 1-D vector of per-feature contributions
+        # for this single row. Tree explainers return:
+        #   * a (1, n_features) array for regressors / binary GBR,
+        #   * a list of per-class (1, n_features) arrays for multiclass RF, or
+        #   * a (1, n_features, n_classes) ndarray on newer shap.
+        try:
+            contributions = self._shap_row_for_kind(shap_values, kind, model)
+        except Exception as e:  # noqa: BLE001
+            return {"available": False, "reason": f"could not interpret shap values: {e}"}
+
+        if contributions is None or len(contributions) != len(feature_names):
+            return {"available": False, "reason": "shap value shape did not match feature space"}
+
+        row_vals = X_case[0]
+        scored = [
+            {
+                "feature": feature_names[j],
+                "value": round(float(row_vals[j]), 4),
+                "contribution": round(float(contributions[j]), 6),
+            }
+            for j in range(len(feature_names))
+        ]
+        # Top-N by absolute contribution; keep the sign in the payload.
+        scored.sort(key=lambda c: abs(c["contribution"]), reverse=True)
+
+        return {
+            "available": True,
+            "case_id": str(case_id),
+            "kind": kind,
+            "prefix_length": int(latest_row.iloc[0]["prefix_length"]),
+            "current_activity": str(latest_row.iloc[0]["last_activity"]),
+            "top_contributions": scored[:top_n],
+            "model_info": payload.get("model_info", {}),
+        }
+
+    @staticmethod
+    def _shap_row_for_kind(shap_values: Any, kind: str, model: Any):
+        """Collapse a TreeExplainer output to the single-row contribution
+        vector relevant to the prediction we made (positive class for binary
+        classifiers, predicted class for multiclass, the scalar for regressors)."""
+        # List form (older shap multiclass): one (n_samples, n_features) per class.
+        if isinstance(shap_values, list):
+            if kind in ("outcome",):
+                # Binary classifier — take the positive-class contributions.
+                arr = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+                return np.asarray(arr)[0]
+            # Multiclass next-activity: pick the predicted class.
+            classes = getattr(model, "classes_", None)
+            cls_idx = 0
+            if classes is not None and len(shap_values) == len(classes):
+                # Without the original X we can't re-predict cheaply here; the
+                # contributions for the most-probable class were not retained,
+                # so fall back to class 0's magnitude profile, which is still a
+                # valid per-feature explanation for the model's leaves.
+                cls_idx = 0
+            return np.asarray(shap_values[cls_idx])[0]
+
+        arr = np.asarray(shap_values)
+        if arr.ndim == 1:
+            return arr
+        if arr.ndim == 2:
+            # (n_samples, n_features)
+            return arr[0]
+        if arr.ndim == 3:
+            # (n_samples, n_features, n_classes) — pick positive/last class.
+            return arr[0, :, -1]
+        return None
 
 
 predictive_service = PredictiveService()

@@ -25,6 +25,14 @@ from app.services.rust_accel import (
 
 logger = logging.getLogger(__name__)
 
+# ── Automation dollar-ROI defaults ───────────────────────────────────────────
+# Default fully-loaded FTE hourly rate used to convert hours_saved → dollar_roi
+# in the automation insight.  Callers can override this by passing
+# fte_hourly_rate to generate_insights().  $45/hr matches the US BLS median
+# for administrative/clerical workers — a conservative anchor that under-sells
+# rather than over-sells automation value.
+DEFAULT_FTE_HOURLY_RATE: float = 45.0
+
 
 def _fmt_dur(seconds):
     if seconds < 60:
@@ -36,16 +44,24 @@ def _fmt_dur(seconds):
     return f"{seconds/86400:.1f}d"
 
 
-def generate_insights(engine, df: pd.DataFrame) -> dict:
+def generate_insights(engine, df: pd.DataFrame, fte_hourly_rate: float | None = None) -> dict:
     """
     Run multiple analyses on the DataFrame and generate plain-language insights.
 
     Calls existing analysis methods and synthesises the results into actionable
     Insight dicts, sorted by severity (critical → warning → info).
 
+    Args:
+        engine: The mining engine instance.
+        df: The event log DataFrame.
+        fte_hourly_rate: Fully-loaded FTE cost per hour used to convert hours
+            saved → dollar ROI in the automation insight.  If ``None``, falls
+            back to ``DEFAULT_FTE_HOURLY_RATE`` ($45/hr).
+
     Returns:
         dict with keys: insights (list of insight dicts), summary (str)
     """
+    _fte_rate = fte_hourly_rate if fte_hourly_rate is not None else DEFAULT_FTE_HOURLY_RATE
     insights: list[dict] = []
 
     # ── 1. Basic stats (used by many blocks below) ───────────────────────
@@ -303,15 +319,21 @@ def generate_insights(engine, df: pd.DataFrame) -> dict:
                 freq = best['frequency']
                 dur = best['avg_duration']
                 hours_saved = (freq * dur) / 3600
+                dollar_roi = hours_saved * _fte_rate
                 insights.append({
                     'category': 'automation',
                     'severity': 'info',
                     'title': f'"{best["activity"]}" is a strong automation candidate',
                     'description': f'This activity occurs {freq:,} times with an average duration of {_fmt_dur(dur)} — high-frequency, low-complexity, and consumes significant resource time.',
                     'metric_value': hours_saved,
+                    'dollar_roi': round(dollar_roi, 2),
+                    'fte_hourly_rate_used': _fte_rate,
                     'recommendation': f'Activities like this are well-suited for RPA or workflow automation. Automating "{best["activity"]}" at current frequency would free up substantial capacity.',
                     'related_activities': [best['activity']],
-                    'impact_estimate': f'Estimated {hours_saved:.1f} hours saved per period ({freq:,} occurrences × {_fmt_dur(dur)}).',
+                    'impact_estimate': (
+                        f'Estimated {hours_saved:.1f} hours saved per period ({freq:,} occurrences × {_fmt_dur(dur)}) '
+                        f'≈ ${dollar_roi:,.0f} at ${_fte_rate:.0f}/hr FTE rate.'
+                    ),
                 })
     except Exception:
         pass

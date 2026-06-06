@@ -13,6 +13,7 @@ export type {
   ChatToolRenderLineChart,
   ChatToolRenderMetricCard,
   ChatToolRenderFilterProposal,
+  ChatToolRenderConformanceChart,
   ChatToolRender,
   ChatToolResult,
   ChatToolStartEvent,

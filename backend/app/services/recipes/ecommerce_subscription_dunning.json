@@ -1,0 +1,157 @@
+{
+  "id": "ecommerce_subscription_dunning",
+  "process_name": "E-Commerce Subscription Dunning",
+  "description": "Tracks the payment recovery lifecycle for failed subscription charges: Invoice Generated → Payment Failed → Retry Attempt(s) → Recovered or Cancelled. Designed for SaaS / subscription-box platforms using Stripe, Recurly, or Chargebee billing exports. Each retry attempt produces a separate event row — the case timeline shows the retry cadence and where recovery breaks down.",
+  "connector_type": null,
+  "category": "ecommerce",
+  "required_tables": [
+    {
+      "name": "invoices",
+      "role": "primary",
+      "description": "Subscription invoice records (invoice_id, subscription_id, customer_id, amount, currency, invoice_date, due_date, status)",
+      "source_hint": "Stripe / Recurly / Chargebee invoice export"
+    },
+    {
+      "name": "payment_attempts",
+      "role": "additional",
+      "description": "Individual payment attempt events (invoice_id, attempt_number, attempted_at, outcome, failure_code, payment_method_type)",
+      "source_hint": "Billing provider charge attempt log; each failed + final attempt is one row"
+    },
+    {
+      "name": "dunning_outcomes",
+      "role": "additional",
+      "description": "Terminal dunning state (invoice_id, recovered_at, cancelled_at, write_off_at, recovery_amount)",
+      "source_hint": "Derived table or billing provider subscription-status export at dunning end"
+    }
+  ],
+  "joins": [
+    {
+      "left_table": "invoices",
+      "right_table": "payment_attempts",
+      "left_on": ["invoice_id"],
+      "right_on": ["invoice_id"],
+      "how": "left"
+    },
+    {
+      "left_table": "invoices",
+      "right_table": "dunning_outcomes",
+      "left_on": ["invoice_id"],
+      "right_on": ["invoice_id"],
+      "how": "left"
+    }
+  ],
+  "case_id_column": "invoice_id",
+  "events": [
+    {
+      "activity_name": "Invoice Generated",
+      "source_table": "invoices",
+      "timestamp_column": "invoice_date",
+      "resource_column": "customer_id"
+    },
+    {
+      "activity_name": "Payment Failed",
+      "source_table": "payment_attempts",
+      "timestamp_column": "attempted_at",
+      "resource_column": "payment_method_type",
+      "filter": "outcome = 'failed' AND attempt_number = 1"
+    },
+    {
+      "activity_name": "Retry Attempted",
+      "source_table": "payment_attempts",
+      "timestamp_column": "attempted_at",
+      "resource_column": "payment_method_type",
+      "filter": "outcome = 'failed' AND attempt_number > 1"
+    },
+    {
+      "activity_name": "Payment Recovered",
+      "source_table": "dunning_outcomes",
+      "timestamp_column": "recovered_at"
+    },
+    {
+      "activity_name": "Subscription Cancelled",
+      "source_table": "dunning_outcomes",
+      "timestamp_column": "cancelled_at"
+    }
+  ],
+  "additional_columns": {
+    "subscription_id": "invoices.subscription_id",
+    "customer_id": "invoices.customer_id",
+    "invoice_amount": "invoices.amount",
+    "currency": "invoices.currency",
+    "failure_code": "payment_attempts.failure_code",
+    "attempt_number": "payment_attempts.attempt_number"
+  },
+  "sample_kpis": [
+    "Recovery rate overall",
+    "Recovery rate by retry attempt number",
+    "Dunning cycle time (failed to recovered or cancelled)",
+    "Revenue at risk per cohort"
+  ],
+  "default_kpis": [
+    {
+      "name": "Dunning Cycle Time (Failed to Resolved)",
+      "metric": "avg_cycle_time",
+      "target": 168,
+      "unit": "hours"
+    },
+    {
+      "name": "Retry Rework Rate",
+      "metric": "rework_rate",
+      "target": 60,
+      "unit": "percent"
+    },
+    {
+      "name": "Process Conformance",
+      "metric": "conformance_fitness",
+      "target": 0.88,
+      "unit": "ratio"
+    }
+  ],
+  "reference_model": {
+    "places": [
+      {"name": "p_start"},
+      {"name": "p_invoiced"},
+      {"name": "p_failed"},
+      {"name": "p_retry"},
+      {"name": "p_end"}
+    ],
+    "transitions": [
+      {"name": "t_invoice",  "label": "Invoice Generated"},
+      {"name": "t_fail",     "label": "Payment Failed"},
+      {"name": "t_retry",    "label": "Retry Attempted"},
+      {"name": "t_recover",  "label": "Payment Recovered"},
+      {"name": "t_cancel",   "label": "Subscription Cancelled"}
+    ],
+    "arcs": [
+      {"source": "p_start",   "target": "t_invoice"},
+      {"source": "t_invoice", "target": "p_invoiced"},
+      {"source": "p_invoiced","target": "t_fail"},
+      {"source": "t_fail",    "target": "p_failed"},
+      {"source": "p_failed",  "target": "t_retry"},
+      {"source": "t_retry",   "target": "p_retry"},
+      {"source": "p_retry",   "target": "t_retry"},
+      {"source": "p_retry",   "target": "t_recover"},
+      {"source": "t_recover", "target": "p_end"},
+      {"source": "p_failed",  "target": "t_cancel"},
+      {"source": "p_retry",   "target": "t_cancel"},
+      {"source": "t_cancel",  "target": "p_end"}
+    ],
+    "initial_marking": ["p_start"],
+    "final_marking": ["p_end"]
+  },
+  "default_alert_rules": [
+    {
+      "name": "Dunning avg cycle time > 7 days",
+      "metric": "avg_cycle_time",
+      "condition": "gt",
+      "threshold": 168
+    },
+    {
+      "name": "Conformance fitness below 80 %",
+      "metric": "conformance_fitness",
+      "condition": "lt",
+      "threshold": 0.80
+    }
+  ],
+  "notes": "Because each retry appears as a separate row in payment_attempts with attempt_number > 1, the builder will produce one 'Retry Attempted' event per retry row. This is correct — the multi-step loop is visible in the trace. Slice by failure_code to identify card-type or issuer patterns. The rework_rate KPI will reflect the fraction of invoices that hit at least one retry cycle, which is the inverse of the first-attempt success rate."
+}

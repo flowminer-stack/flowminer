@@ -157,3 +157,19 @@ def _ocel_counts(ocel) -> tuple[int, int]:
 # UUIDs that don't correspond to an EventLog row). Populated in the
 # convert endpoint and consulted from ``_assert_ocel_access``.
 _ocel_owners: dict[str, UUID] = {}
+
+
+def write_ocel_to_disk(ocel, output_path: str) -> str:
+    """Persist a pm4py OCEL object to ``output_path`` as OCEL 2.0 JSON.
+
+    Mirrors the writer-resolution used in the OPerA path (``write_ocel2_json``
+    first, fall back to the legacy ``write_ocel_json``) so a downgraded pm4py
+    still produces a readable file. Returns ``output_path`` for chaining.
+    """
+    import pm4py
+
+    writer = getattr(pm4py, "write_ocel2_json", None) or getattr(pm4py, "write_ocel_json", None)
+    if writer is None:  # pragma: no cover - pinned pm4py always has these
+        raise ValueError("Installed pm4py exposes no OCEL JSON writer")
+    writer(ocel, output_path)
+    return output_path

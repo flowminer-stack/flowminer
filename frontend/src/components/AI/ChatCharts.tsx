@@ -27,7 +27,9 @@ import {
   LineChart as RLineChart,
   Line,
   CartesianGrid,
+  Legend,
 } from 'recharts';
+import clsx from 'clsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -277,6 +279,110 @@ export function FilterProposalRender({
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+export function ConformanceChartRender({
+  render,
+  eventLogId,
+}: {
+  render: Extract<ChatToolRender, { type: 'conformance_chart' }>;
+  eventLogId?: string;
+}) {
+  const route = eventLogId ? `/conformance/${eventLogId}` : null;
+  const fitness = render.stochastic_fitness;
+  const emd = render.emd_distance;
+  const fitnessLabel = `${(fitness * 100).toFixed(1)}%`;
+  const fitnessColor =
+    fitness >= 0.9
+      ? 'text-success'
+      : fitness >= 0.7
+        ? 'text-warning'
+        : 'text-danger';
+
+  return (
+    <div className="mt-2 rounded-md border border-line bg-surface-1 p-2">
+      {/* Header row */}
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
+          {render.title}
+        </p>
+        {route && (
+          <Link
+            to={route}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-medium text-accent transition-colors hover:bg-accent/10"
+          >
+            Full view <ExternalLink size={9} />
+          </Link>
+        )}
+      </div>
+
+      {/* Headline scores */}
+      <div className="mb-2 grid grid-cols-3 gap-1.5">
+        <div className="rounded bg-surface-2 px-2 py-1.5 text-center">
+          <p className={clsx('text-[13px] font-bold tabular-nums', fitnessColor)}>
+            {fitnessLabel}
+          </p>
+          <p className="text-[9px] text-fg-faint">Stochastic Fitness</p>
+        </div>
+        <div className="rounded bg-surface-2 px-2 py-1.5 text-center">
+          <p className="text-[13px] font-bold tabular-nums text-fg">
+            {emd.toFixed(4)}
+          </p>
+          <p className="text-[9px] text-fg-faint">EMD Distance</p>
+        </div>
+        <div className="rounded bg-surface-2 px-2 py-1.5 text-center">
+          <p className="text-[13px] font-bold tabular-nums text-danger">
+            {render.severity_breakdown.severe}
+          </p>
+          <p className="text-[9px] text-fg-faint">Severe Variants</p>
+        </div>
+      </div>
+
+      {/* Distribution comparison chart */}
+      {render.data.length > 0 && (
+        <div style={{ width: '100%', height: Math.max(140, render.data.length * 36) }}>
+          <ResponsiveContainer>
+            <RBarChart
+              data={render.data}
+              layout="vertical"
+              margin={{ top: 2, right: 10, bottom: 2, left: 4 }}
+            >
+              <CartesianGrid strokeDasharray="2 2" stroke="var(--line)" horizontal={false} />
+              <XAxis
+                type="number"
+                tickFormatter={(v: number) => `${v}%`}
+                tick={{ fill: 'var(--fg-muted)', fontSize: 9 }}
+              />
+              <YAxis
+                dataKey="label"
+                type="category"
+                width={110}
+                tickFormatter={(v: string) => (v.length > 18 ? v.slice(0, 15) + '…' : v)}
+                tick={{ fill: 'var(--fg-muted)', fontSize: 8 }}
+              />
+              <Tooltip
+                contentStyle={{
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--line)',
+                  fontSize: 10,
+                }}
+                formatter={(v: number, name: string) => [
+                  `${v}%`,
+                  name === 'log_pct' ? 'Log frequency' : 'Model probability',
+                ]}
+              />
+              <Legend
+                formatter={(v) => (v === 'log_pct' ? 'Log freq.' : 'Model prob.')}
+                wrapperStyle={{ fontSize: 9 }}
+              />
+              <Bar dataKey="log_pct" name="log_pct" fill="var(--accent)" radius={[0, 2, 2, 0]} />
+              <Bar dataKey="model_pct" name="model_pct" fill="var(--fg-faint)" radius={[0, 2, 2, 0]} />
+            </RBarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }

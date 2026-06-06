@@ -15,3 +15,4 @@ export { ServiceNowConfig } from './ServiceNowConfig';
 export { SnowflakeConfig } from './SnowflakeConfig';
 export { BigQueryConfig } from './BigQueryConfig';
 export { GenericErpConfig } from './GenericErpConfig';
+export { ShopifyConfig } from './ShopifyConfig';

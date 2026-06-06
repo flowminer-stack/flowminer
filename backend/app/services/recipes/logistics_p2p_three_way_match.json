@@ -1,0 +1,154 @@
+{
+  "id": "logistics_p2p_three_way_match",
+  "process_name": "Logistics P2P Three-Way Match",
+  "description": "Purchase Order / Goods Receipt / Invoice matching for indirect procurement and logistics spend. Maps the PO lifecycle across three documents that must converge: PO Created → GR Posted → Invoice Received → Three-Way Match → Payment Released. Deviations (price variance, quantity shortfall, missing GR before invoice) are surfaced as conformance exceptions. Designed for ERP exports (SAP MM, Oracle Fusion, Coupa) but works with any flat extract that aligns on PO number.",
+  "connector_type": null,
+  "category": "logistics",
+  "required_tables": [
+    {
+      "name": "purchase_orders",
+      "role": "primary",
+      "description": "PO header (po_number, vendor_id, company_code, created_at, created_by, ordered_amount, currency, status)",
+      "source_hint": "SAP EKKO / Oracle PO_HEADERS / Coupa PO export"
+    },
+    {
+      "name": "goods_receipts",
+      "role": "additional",
+      "description": "Goods receipt / delivery confirmation (po_number, gr_number, received_at, received_qty, received_amount, posted_by)",
+      "source_hint": "SAP EKBE (VGABE=1) / Oracle RCV_TRANSACTIONS / 3PL receiving log"
+    },
+    {
+      "name": "invoices",
+      "role": "additional",
+      "description": "Supplier invoices (po_number, invoice_number, invoice_date, invoiced_amount, received_at_ap, matched_at, payment_date, match_status)",
+      "source_hint": "SAP RBKP / Oracle AP_INVOICES / Coupa invoice export"
+    }
+  ],
+  "joins": [
+    {
+      "left_table": "purchase_orders",
+      "right_table": "goods_receipts",
+      "left_on": ["po_number"],
+      "right_on": ["po_number"],
+      "how": "left"
+    },
+    {
+      "left_table": "purchase_orders",
+      "right_table": "invoices",
+      "left_on": ["po_number"],
+      "right_on": ["po_number"],
+      "how": "left"
+    }
+  ],
+  "case_id_column": "po_number",
+  "events": [
+    {
+      "activity_name": "PO Created",
+      "source_table": "purchase_orders",
+      "timestamp_column": "created_at",
+      "resource_column": "created_by"
+    },
+    {
+      "activity_name": "Goods Receipt Posted",
+      "source_table": "goods_receipts",
+      "timestamp_column": "received_at",
+      "resource_column": "posted_by"
+    },
+    {
+      "activity_name": "Invoice Received",
+      "source_table": "invoices",
+      "timestamp_column": "received_at_ap"
+    },
+    {
+      "activity_name": "Three-Way Match Completed",
+      "source_table": "invoices",
+      "timestamp_column": "matched_at",
+      "filter": "match_status = 'matched'"
+    },
+    {
+      "activity_name": "Payment Released",
+      "source_table": "invoices",
+      "timestamp_column": "payment_date"
+    }
+  ],
+  "additional_columns": {
+    "vendor_id": "purchase_orders.vendor_id",
+    "company_code": "purchase_orders.company_code",
+    "ordered_amount": "purchase_orders.ordered_amount",
+    "invoiced_amount": "invoices.invoiced_amount",
+    "match_status": "invoices.match_status",
+    "received_qty": "goods_receipts.received_qty"
+  },
+  "sample_kpis": [
+    "Three-way match rate (% POs matched without exception)",
+    "P2P cycle time (PO Created to Payment Released)",
+    "Invoice-before-GR rate (control violation)",
+    "Price variance exception rate"
+  ],
+  "default_kpis": [
+    {
+      "name": "P2P Cycle Time (PO to Payment)",
+      "metric": "avg_cycle_time",
+      "target": 336,
+      "unit": "hours"
+    },
+    {
+      "name": "Three-Way Match Conformance",
+      "metric": "conformance_fitness",
+      "target": 0.92,
+      "unit": "ratio"
+    },
+    {
+      "name": "Rework Rate (re-matching / disputes)",
+      "metric": "rework_rate",
+      "target": 5,
+      "unit": "percent"
+    }
+  ],
+  "reference_model": {
+    "places": [
+      {"name": "p_start"},
+      {"name": "p_po_created"},
+      {"name": "p_gr_posted"},
+      {"name": "p_inv_received"},
+      {"name": "p_matched"},
+      {"name": "p_end"}
+    ],
+    "transitions": [
+      {"name": "t_po_create",  "label": "PO Created"},
+      {"name": "t_gr_post",    "label": "Goods Receipt Posted"},
+      {"name": "t_inv_recv",   "label": "Invoice Received"},
+      {"name": "t_3wm",        "label": "Three-Way Match Completed"},
+      {"name": "t_payment",    "label": "Payment Released"}
+    ],
+    "arcs": [
+      {"source": "p_start",       "target": "t_po_create"},
+      {"source": "t_po_create",   "target": "p_po_created"},
+      {"source": "p_po_created",  "target": "t_gr_post"},
+      {"source": "t_gr_post",     "target": "p_gr_posted"},
+      {"source": "p_gr_posted",   "target": "t_inv_recv"},
+      {"source": "t_inv_recv",    "target": "p_inv_received"},
+      {"source": "p_inv_received","target": "t_3wm"},
+      {"source": "t_3wm",         "target": "p_matched"},
+      {"source": "p_matched",     "target": "t_payment"},
+      {"source": "t_payment",     "target": "p_end"}
+    ],
+    "initial_marking": ["p_start"],
+    "final_marking": ["p_end"]
+  },
+  "default_alert_rules": [
+    {
+      "name": "P2P avg cycle time > 21 days",
+      "metric": "avg_cycle_time",
+      "condition": "gt",
+      "threshold": 504
+    },
+    {
+      "name": "Three-way match conformance below 85 %",
+      "metric": "conformance_fitness",
+      "condition": "lt",
+      "threshold": 0.85
+    }
+  ],
+  "notes": "The critical control is that Goods Receipt Posted must appear before Invoice Received in each case — any trace where Invoice Received precedes Goods Receipt Posted is a three-way-match exception (potential fraud / control failure). Conformance deviations surface these automatically. For SAP: use EKBE (VGABE=1 for GR, VGABE=2 for IR) with BLDAT as the timestamp; the builder joins on EBELN. For price-variance exceptions, add invoiced_amount and ordered_amount as additional_columns and cross-reference in a custom KPI dashboard."
+}

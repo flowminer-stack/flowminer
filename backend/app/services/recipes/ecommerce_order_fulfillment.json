@@ -1,0 +1,156 @@
+{
+  "id": "ecommerce_order_fulfillment",
+  "process_name": "E-Commerce Order-to-Fulfillment",
+  "description": "End-to-end order lifecycle from payment capture through last-mile delivery. Built for flat order/order-line schemas typical of Shopify, WooCommerce, and SAP Retail exports. The reference happy path is: Order Paid → Pick Started → Pack Completed → Shipped → Delivered. Adjust warehouse-status codes to match your OMS before mining.",
+  "connector_type": null,
+  "category": "ecommerce",
+  "required_tables": [
+    {
+      "name": "orders",
+      "role": "primary",
+      "description": "Order header — one row per order (order_id, customer_id, channel, created_at, paid_at, status)",
+      "source_hint": "OMS / Shopify orders export or database table"
+    },
+    {
+      "name": "fulfillments",
+      "role": "additional",
+      "description": "Fulfillment / shipment records (order_id, fulfillment_id, picked_at, packed_at, shipped_at, carrier, tracking_number)",
+      "source_hint": "WMS fulfillment table or Shopify fulfillments export"
+    },
+    {
+      "name": "deliveries",
+      "role": "additional",
+      "description": "Delivery confirmations from carrier feed (order_id, delivered_at, delivery_status, carrier_code)",
+      "source_hint": "Carrier tracking webhook feed or 3PL delivery report"
+    }
+  ],
+  "joins": [
+    {
+      "left_table": "orders",
+      "right_table": "fulfillments",
+      "left_on": ["order_id"],
+      "right_on": ["order_id"],
+      "how": "left"
+    },
+    {
+      "left_table": "orders",
+      "right_table": "deliveries",
+      "left_on": ["order_id"],
+      "right_on": ["order_id"],
+      "how": "left"
+    }
+  ],
+  "case_id_column": "order_id",
+  "events": [
+    {
+      "activity_name": "Order Paid",
+      "source_table": "orders",
+      "timestamp_column": "paid_at",
+      "resource_column": "channel"
+    },
+    {
+      "activity_name": "Pick Started",
+      "source_table": "fulfillments",
+      "timestamp_column": "picked_at",
+      "resource_column": "warehouse_id"
+    },
+    {
+      "activity_name": "Pack Completed",
+      "source_table": "fulfillments",
+      "timestamp_column": "packed_at",
+      "resource_column": "warehouse_id"
+    },
+    {
+      "activity_name": "Shipped",
+      "source_table": "fulfillments",
+      "timestamp_column": "shipped_at",
+      "resource_column": "carrier"
+    },
+    {
+      "activity_name": "Delivered",
+      "source_table": "deliveries",
+      "timestamp_column": "delivered_at",
+      "resource_column": "carrier_code"
+    }
+  ],
+  "additional_columns": {
+    "customer_id": "orders.customer_id",
+    "channel": "orders.channel",
+    "order_value": "orders.total_price",
+    "sku_count": "orders.line_item_count",
+    "carrier": "fulfillments.carrier",
+    "warehouse_id": "fulfillments.warehouse_id"
+  },
+  "sample_kpis": [
+    "OTIF % (On Time In Full)",
+    "Fill rate by SKU",
+    "Paid-to-shipped cycle time",
+    "Shipped-to-delivered cycle time"
+  ],
+  "default_kpis": [
+    {
+      "name": "Order Cycle Time (Paid to Delivered)",
+      "metric": "avg_cycle_time",
+      "target": 96,
+      "unit": "hours"
+    },
+    {
+      "name": "OTIF Compliance",
+      "metric": "sla_compliance",
+      "target": 95,
+      "unit": "percent"
+    },
+    {
+      "name": "Rework / Re-pick Rate",
+      "metric": "rework_rate",
+      "target": 3,
+      "unit": "percent"
+    }
+  ],
+  "reference_model": {
+    "places": [
+      {"name": "p_start"},
+      {"name": "p_paid"},
+      {"name": "p_picked"},
+      {"name": "p_packed"},
+      {"name": "p_shipped"},
+      {"name": "p_end"}
+    ],
+    "transitions": [
+      {"name": "t_paid",    "label": "Order Paid"},
+      {"name": "t_pick",    "label": "Pick Started"},
+      {"name": "t_pack",    "label": "Pack Completed"},
+      {"name": "t_ship",    "label": "Shipped"},
+      {"name": "t_deliver", "label": "Delivered"}
+    ],
+    "arcs": [
+      {"source": "p_start",  "target": "t_paid"},
+      {"source": "t_paid",   "target": "p_paid"},
+      {"source": "p_paid",   "target": "t_pick"},
+      {"source": "t_pick",   "target": "p_picked"},
+      {"source": "p_picked", "target": "t_pack"},
+      {"source": "t_pack",   "target": "p_packed"},
+      {"source": "p_packed", "target": "t_ship"},
+      {"source": "t_ship",   "target": "p_shipped"},
+      {"source": "p_shipped","target": "t_deliver"},
+      {"source": "t_deliver","target": "p_end"}
+    ],
+    "initial_marking": ["p_start"],
+    "final_marking": ["p_end"]
+  },
+  "default_alert_rules": [
+    {
+      "name": "Stuck Orders — avg cycle time > 5 days",
+      "metric": "avg_cycle_time",
+      "condition": "gt",
+      "threshold": 120
+    },
+    {
+      "name": "OTIF below 90 % — conformance fitness drop",
+      "metric": "conformance_fitness",
+      "condition": "lt",
+      "threshold": 0.90
+    }
+  ],
+  "notes": "OTIF % is the share of orders delivered on-time (within SLA) and in full (no short shipment). It cannot be computed as a single metric from the event log alone — pair the process view with a KPI dashboard that joins promised_delivery_date and quantity_fulfilled. The conformance fitness alert fires when the discovered process deviates significantly from the paid→pick→pack→ship→deliver happy path."
+}

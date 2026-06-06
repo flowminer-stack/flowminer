@@ -1,9 +1,61 @@
 import api from './http';
 import type {
-  LogBuilderBuildRequest,
+  LogBuilderBuildRequest as BaseLogBuilderBuildRequest,
   LogBuilderUploadResponse,
-  LogBuilderBuildResponse,
+  LogBuilderBuildResponse as BaseLogBuilderBuildResponse,
 } from '@/types';
+
+// ─── OCEL-aware build contract ───────────────────────────────────────────────
+//
+// The /log-builder/build endpoint branches on an `ocel_mode` flag. We extend the
+// shared base types here (rather than in the shared types module) so the two
+// modes share one request/response surface:
+//
+//  • Standard mode (`ocel_mode` falsy): unchanged — a `case_id_column` is
+//    required and the response carries case/event counts.
+//  • OCEL mode (`ocel_mode: true`): `case_id_column` is ignored (and so made
+//    optional here); each column listed in `object_type_columns` becomes one
+//    OCEL object type. Activity + timestamp are still designated via `events`.
+//    The response additionally carries `ocel_id`, `object_types`, etc.
+export type LogBuilderBuildRequest = Omit<BaseLogBuilderBuildRequest, 'case_id_column'> & {
+  /** Optional in both modes; ignored by the backend when `ocel_mode` is true. */
+  case_id_column?: string;
+  /** Switch the backend to the object-centric (OCEL) build path. */
+  ocel_mode?: boolean;
+  /** Wide-table columns to materialise as OCEL object types (OCEL mode only). */
+  object_type_columns?: string[];
+  /**
+   * Optional process content pack (recipe) id. When set, the backend
+   * auto-creates the recipe's default Alert rows + CustomKPIs and attaches its
+   * reference_model after the build, returning a `recipe_applied` summary.
+   */
+  recipe_id?: string;
+};
+
+// Standard-mode fields (`total_events`, `total_cases`) are relaxed to optional
+// since an OCEL build reports counts via `event_count` / `object_count` instead.
+export type LogBuilderBuildResponse = Omit<
+  BaseLogBuilderBuildResponse,
+  'total_events' | 'total_cases'
+> & {
+  total_events?: number;
+  total_cases?: number;
+  /** Present on a successful OCEL build; navigate to /ocpm/:id with this. */
+  ocel_id?: string;
+  object_types?: string[];
+  object_count?: number;
+  event_count?: number;
+  /**
+   * Present when the build request carried a `recipe_id`. Summarises what the
+   * content pack provisioned alongside the event log.
+   */
+  recipe_applied?: {
+    recipe_id: string;
+    alerts_created: number;
+    kpis_created: number;
+    reference_model_attached: boolean;
+  };
+};
 
 // ─── Log Builder ─────────────────────────────────────────────────────────────
 

@@ -26,5 +26,8 @@ export * from './taskMining';
 export * from './systemSettings';
 export * from './ai';
 export * from './logBuilder';
+export * from './predictive';
+export * from './stochasticConformance';
+export * from './timedDeclare';
 
 export { default } from './http';

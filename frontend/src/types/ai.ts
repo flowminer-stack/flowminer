@@ -38,11 +38,28 @@ export interface ChatToolRenderFilterProposal {
   }>;
 }
 
+/** Inline conformance chart emitted by the show_conformance chat tool. */
+export interface ChatToolRenderConformanceChart {
+  type: 'conformance_chart';
+  title: string;
+  emd_distance: number;
+  stochastic_fitness: number;
+  severity_breakdown: { minor: number; moderate: number; severe: number };
+  /** Top deviating variants, each with log_pct / model_pct / contribution_pct. */
+  data: Array<{
+    label: string;
+    log_pct: number;
+    model_pct: number;
+    contribution_pct: number;
+  }>;
+}
+
 export type ChatToolRender =
   | ChatToolRenderBarChart
   | ChatToolRenderLineChart
   | ChatToolRenderMetricCard
-  | ChatToolRenderFilterProposal;
+  | ChatToolRenderFilterProposal
+  | ChatToolRenderConformanceChart;
 
 export interface ChatToolResult {
   data?: unknown;

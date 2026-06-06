@@ -155,6 +155,75 @@ async def whatif_bottleneck(
 # ─── 2. Automation candidates scorer (IBM / UiPath) ──────────────────────
 
 
+def _compute_readiness_score(
+    freq: int,
+    avg_dur: float,
+    total_time: float,
+    all_freqs: "pd.Series",
+    all_durs: "pd.Series",
+    rework_rates: "dict[str, float]",
+    case_count: int,
+    total_cases: int,
+    variant_breadth: int,
+    strategic_weight: float = 1.0,
+) -> float:
+    """Return a 0–100 automation-readiness score.
+
+    Weighted signal mix (weights sum to 1.0):
+      - volume percentile          0.30  — high-frequency activities are cheaper to automate
+      - duration vs median         0.25  — near-median duration → well-understood, predictable step
+      - rework rate (inverted)     0.25  — low rework → stable, not iterative/creative
+      - variant breadth (inverted) 0.15  — fewer case variants → simpler execution paths
+      - strategic weight           0.05  — optional caller-supplied multiplier (0–2)
+
+    All sub-scores are clamped to [0, 1] before weighting.  The final
+    result is scaled to [0, 100] and rounded to 1 decimal place.
+    """
+    total = max(len(all_freqs), 1)
+
+    # 1. Volume percentile — rank of this activity's frequency among all
+    vol_percentile = float((all_freqs < freq).sum()) / total  # 0..1
+
+    # 2. Duration score — activities at or below the median are scored 1;
+    #    activities far above the median score lower (they may be too complex
+    #    or too variable to automate cheaply).
+    median_dur = float(all_durs.median()) if len(all_durs) > 0 else avg_dur
+    if median_dur > 0:
+        dur_ratio = avg_dur / median_dur
+        # Peak at dur_ratio == 1 (exactly median); decays for very long or
+        # very short activities.  Short activities are fine; very long ones
+        # are risky. We use a soft penalty only above 3× the median.
+        dur_score = 1.0 if dur_ratio <= 2.0 else max(0.0, 1.0 - (dur_ratio - 2.0) / 8.0)
+    else:
+        dur_score = 1.0
+
+    # 3. Rework rate (inverted) — a rework rate of 0% → sub-score 1.0;
+    #    50%+ rework → sub-score 0.  Missing data → assume 0% rework (score 1).
+    act_key = str(all_freqs.index[all_freqs.index.get_loc(all_freqs.index[0])] if total > 0 else "")
+    rwork = rework_rates.get(str(all_freqs.name), 0.0) if hasattr(all_freqs, "name") else 0.0
+    rework_score = max(0.0, 1.0 - rwork / 50.0)
+
+    # 4. Variant breadth (inverted) — activities appearing in many variants
+    #    are more complex to automate.  We normalize by total case count.
+    if total_cases > 0:
+        breadth_ratio = variant_breadth / total_cases
+        breadth_score = max(0.0, 1.0 - breadth_ratio)
+    else:
+        breadth_score = 1.0
+
+    # 5. Strategic weight — caller-supplied 0–2 multiplier, mapped to 0–1.
+    strat_score = min(1.0, max(0.0, strategic_weight / 2.0))
+
+    raw = (
+        0.30 * vol_percentile
+        + 0.25 * dur_score
+        + 0.25 * rework_score
+        + 0.15 * breadth_score
+        + 0.05 * strat_score
+    )
+    return round(min(100.0, max(0.0, raw * 100)), 1)
+
+
 class AutomationCandidate(BaseModel):
     activity: str
     frequency: int
@@ -163,6 +232,8 @@ class AutomationCandidate(BaseModel):
     score: float
     estimated_hours_saved: float
     estimated_cost_saved: float
+    # Additive (non-breaking): readiness score 0–100
+    readiness_score: float = 0.0
 
 
 class AutomationCandidatesResponse(BaseModel):
@@ -185,33 +256,79 @@ async def automation_candidates(
     Returns the top 20 candidates, each with editable assumption inputs
     so the caller can re-run with different cost/rate values and see
     projected savings update in real time.
+
+    Each candidate now also carries a ``readiness_score`` (0–100) derived
+    from volume percentile, duration vs median, rework rate, and variant
+    breadth — inspired by the automatable_score concept in agent_mining.
     """
     await _assert_event_log_access(event_log_id, db, current_user)
     _event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
 
     df = _add_dwell(df)
-    agg = df.dropna(subset=["_dwell"]).groupby(ACTIVITY_COL).agg(
+    dwell_df = df.dropna(subset=["_dwell"])
+    agg = dwell_df.groupby(ACTIVITY_COL).agg(
         frequency=("_dwell", "count"),
         avg_duration=("_dwell", "mean"),
         total_time=("_dwell", "sum"),
     )
     agg["score"] = agg["frequency"] * agg["avg_duration"]
-    agg = agg.sort_values("score", ascending=False).head(20)
+    agg_sorted = agg.sort_values("score", ascending=False).head(20)
+
+    # Pre-compute universe-level signals for readiness scoring.
+    all_freqs_series = agg["frequency"]
+    all_durs_series = agg["avg_duration"]
+    total_cases = int(df[CASE_COL].nunique())
+
+    # Rework rate per activity: fraction of occurrences that are repeated in
+    # the same case (self-loops counted as rework).
+    try:
+        cnt = df.groupby([CASE_COL, ACTIVITY_COL]).size().reset_index(name="_n")
+        rework_df = cnt[cnt["_n"] > 1].groupby(ACTIVITY_COL).size()
+        total_act = df.groupby(ACTIVITY_COL).apply(lambda g: g[CASE_COL].nunique())
+        rework_rates_map: dict[str, float] = {}
+        for act in rework_df.index:
+            denom = float(total_act.get(act, 1))
+            rework_rates_map[str(act)] = (rework_df[act] / denom * 100) if denom > 0 else 0.0
+    except Exception:
+        rework_rates_map = {}
+
+    # Variant breadth per activity: how many distinct cases touch this activity.
+    try:
+        act_case_counts = df.groupby(ACTIVITY_COL)[CASE_COL].nunique()
+    except Exception:
+        act_case_counts = pd.Series(dtype=int)
 
     candidates: list[AutomationCandidate] = []
-    for act, row in agg.iterrows():
+    for act, row in agg_sorted.iterrows():
         total_sec = float(row["total_time"])
         hours_saved = (total_sec / 3600.0) * automation_rate
         cost_saved = hours_saved * hourly_cost
+        act_str = str(act)
+
+        variant_breadth = int(act_case_counts.get(act, 1)) if not act_case_counts.empty else 1
+        rwork_rate = rework_rates_map.get(act_str, 0.0)
+
+        readiness = _compute_readiness_score(
+            freq=int(row["frequency"]),
+            avg_dur=float(row["avg_duration"]),
+            total_time=total_sec,
+            all_freqs=all_freqs_series,
+            all_durs=all_durs_series,
+            rework_rates={act_str: rwork_rate},
+            case_count=variant_breadth,
+            total_cases=total_cases,
+            variant_breadth=variant_breadth,
+        )
         candidates.append(
             AutomationCandidate(
-                activity=str(act),
+                activity=act_str,
                 frequency=int(row["frequency"]),
                 avg_duration_seconds=float(row["avg_duration"]),
                 total_time_seconds=total_sec,
                 score=float(row["score"]),
                 estimated_hours_saved=hours_saved,
                 estimated_cost_saved=cost_saved,
+                readiness_score=readiness,
             )
         )
 

@@ -30,6 +30,7 @@ class ConnectorType(str, enum.Enum):
     oracle_fusion = "oracle_fusion"
     coupa = "coupa"
     ariba = "ariba"
+    shopify = "shopify"
 
 
 class ConnectorStatus(str, enum.Enum):

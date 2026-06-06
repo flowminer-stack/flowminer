@@ -1,0 +1,178 @@
+{
+  "id": "logistics_otif_root_cause",
+  "process_name": "Logistics OTIF Root-Cause Analysis",
+  "description": "Identifies where in the supply chain OTIF failures originate by tagging each late case with its first deviation from the expected timeline. Built for TMS / WMS / OMS multi-table exports. The happy path is: Order Released → Carrier Tendered → Picked Up → In Transit → Delivered On Time. Late cases deviate at Carrier Tendered (acceptance failure), Pick Up (dwell), In Transit (transit time), or Delivered (last mile). Slice by carrier, lane (origin/destination pair), and warehouse_id to locate systemic failure points.",
+  "connector_type": null,
+  "category": "logistics",
+  "required_tables": [
+    {
+      "name": "shipments",
+      "role": "primary",
+      "description": "Shipment / load records (shipment_id, order_id, origin_warehouse, destination_zip, carrier_id, lane_id, mode, requested_delivery_date, status)",
+      "source_hint": "TMS shipment master or OMS fulfillment export"
+    },
+    {
+      "name": "tender_events",
+      "role": "additional",
+      "description": "Carrier tender and acceptance events (shipment_id, tendered_at, carrier_id, tender_outcome, accepted_at, rejection_reason)",
+      "source_hint": "TMS tender log; one row per tender attempt"
+    },
+    {
+      "name": "tracking_events",
+      "role": "additional",
+      "description": "Milestone tracking updates from carrier or IoT (shipment_id, event_type, event_at, location, carrier_code)",
+      "source_hint": "Carrier tracking API feed or EDI 214 events; filter to: PICKUP, IN_TRANSIT, OUT_FOR_DELIVERY, DELIVERED"
+    }
+  ],
+  "joins": [
+    {
+      "left_table": "shipments",
+      "right_table": "tender_events",
+      "left_on": ["shipment_id"],
+      "right_on": ["shipment_id"],
+      "how": "left"
+    },
+    {
+      "left_table": "shipments",
+      "right_table": "tracking_events",
+      "left_on": ["shipment_id"],
+      "right_on": ["shipment_id"],
+      "how": "left"
+    }
+  ],
+  "case_id_column": "shipment_id",
+  "events": [
+    {
+      "activity_name": "Order Released to Carrier",
+      "source_table": "shipments",
+      "timestamp_column": "released_at",
+      "resource_column": "origin_warehouse"
+    },
+    {
+      "activity_name": "Carrier Tendered",
+      "source_table": "tender_events",
+      "timestamp_column": "tendered_at",
+      "resource_column": "carrier_id"
+    },
+    {
+      "activity_name": "Tender Accepted",
+      "source_table": "tender_events",
+      "timestamp_column": "accepted_at",
+      "resource_column": "carrier_id",
+      "filter": "tender_outcome = 'accepted'"
+    },
+    {
+      "activity_name": "Picked Up",
+      "source_table": "tracking_events",
+      "timestamp_column": "event_at",
+      "resource_column": "carrier_code",
+      "filter": "event_type = 'PICKUP'"
+    },
+    {
+      "activity_name": "In Transit",
+      "source_table": "tracking_events",
+      "timestamp_column": "event_at",
+      "resource_column": "location",
+      "filter": "event_type = 'IN_TRANSIT'"
+    },
+    {
+      "activity_name": "Delivered",
+      "source_table": "tracking_events",
+      "timestamp_column": "event_at",
+      "resource_column": "carrier_code",
+      "filter": "event_type = 'DELIVERED'"
+    }
+  ],
+  "additional_columns": {
+    "carrier_id": "shipments.carrier_id",
+    "lane_id": "shipments.lane_id",
+    "origin_warehouse": "shipments.origin_warehouse",
+    "destination_zip": "shipments.destination_zip",
+    "requested_delivery_date": "shipments.requested_delivery_date",
+    "mode": "shipments.mode",
+    "rejection_reason": "tender_events.rejection_reason"
+  },
+  "sample_kpis": [
+    "OTIF % (on-time delivery vs requested_delivery_date)",
+    "First-tender acceptance rate by carrier",
+    "Dwell time at origin (Released → Picked Up)",
+    "Transit time by lane",
+    "On-time delivery rate by carrier and lane"
+  ],
+  "default_kpis": [
+    {
+      "name": "End-to-End Shipment Cycle Time",
+      "metric": "avg_cycle_time",
+      "target": 72,
+      "unit": "hours"
+    },
+    {
+      "name": "OTIF Process Conformance",
+      "metric": "conformance_fitness",
+      "target": 0.92,
+      "unit": "ratio"
+    },
+    {
+      "name": "Tender Rework Rate (re-tender after rejection)",
+      "metric": "rework_rate",
+      "target": 8,
+      "unit": "percent"
+    }
+  ],
+  "reference_model": {
+    "places": [
+      {"name": "p_start"},
+      {"name": "p_released"},
+      {"name": "p_tendered"},
+      {"name": "p_accepted"},
+      {"name": "p_picked"},
+      {"name": "p_transit"},
+      {"name": "p_end"}
+    ],
+    "transitions": [
+      {"name": "t_release",  "label": "Order Released to Carrier"},
+      {"name": "t_tender",   "label": "Carrier Tendered"},
+      {"name": "t_accept",   "label": "Tender Accepted"},
+      {"name": "t_pickup",   "label": "Picked Up"},
+      {"name": "t_transit",  "label": "In Transit"},
+      {"name": "t_deliver",  "label": "Delivered"}
+    ],
+    "arcs": [
+      {"source": "p_start",    "target": "t_release"},
+      {"source": "t_release",  "target": "p_released"},
+      {"source": "p_released", "target": "t_tender"},
+      {"source": "t_tender",   "target": "p_tendered"},
+      {"source": "p_tendered", "target": "t_accept"},
+      {"source": "t_accept",   "target": "p_accepted"},
+      {"source": "p_accepted", "target": "t_pickup"},
+      {"source": "t_pickup",   "target": "p_picked"},
+      {"source": "p_picked",   "target": "t_transit"},
+      {"source": "t_transit",  "target": "p_transit"},
+      {"source": "p_transit",  "target": "t_deliver"},
+      {"source": "t_deliver",  "target": "p_end"}
+    ],
+    "initial_marking": ["p_start"],
+    "final_marking": ["p_end"]
+  },
+  "default_alert_rules": [
+    {
+      "name": "Avg shipment cycle time > 4 days",
+      "metric": "avg_cycle_time",
+      "condition": "gt",
+      "threshold": 96
+    },
+    {
+      "name": "OTIF conformance below 88 %",
+      "metric": "conformance_fitness",
+      "condition": "lt",
+      "threshold": 0.88
+    },
+    {
+      "name": "Tender rework rate > 10 %",
+      "metric": "rework_rate",
+      "condition": "gt",
+      "threshold": 10
+    }
+  ],
+  "notes": "First-deviation tagging: the conformance deviations table identifies the first non-conforming transition per case. Join that to carrier_id, lane_id, and origin_warehouse (via additional_columns) in a BI tool to produce the root-cause breakdown. The filter fields on Picked Up, In Transit, and Delivered are advisory — if your tracking feed has one row per event type with different event_type codes, use the connector WHERE clause to materialize those as separate tables before upload, or use the Extraction Copilot to melt the event_type column."
+}

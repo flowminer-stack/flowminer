@@ -17,9 +17,11 @@ import hashlib
 import json
 import logging
 import os
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -343,13 +345,22 @@ async def check_conformance(
             detail="method must be one of: auto, token_replay, alignment, decomposed, footprints, jsd",
         )
 
-    cache_params = {"reference_model": ref_model_dict, "method": method}
     await _assert_event_log_access(event_log_id, db, current_user)
+
+    event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
+
+    # When the caller did not supply an explicit reference model, prefer one
+    # persisted alongside the log (e.g. attached by a vertical recipe at build
+    # time). Falls through to auto-discovery if no sidecar exists.
+    if ref_model_dict is None:
+        from app.services.log_builder_recipes import read_reference_model_sidecar
+
+        ref_model_dict = read_reference_model_sidecar(event_log.file_path)
+
+    cache_params = {"reference_model": ref_model_dict, "method": method}
     cached = _get_cached(event_log_id, "conformance", cache_params)
     if cached is not None:
         return ConformanceResponse(**cached)
-
-    event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
 
     try:
         result = await _run_in_thread(
@@ -410,13 +421,21 @@ async def check_stochastic_conformance(
                 detail="reference_model must be a valid JSON string",
             )
 
-    cache_params = {"reference_model": ref_model_dict}
     await _assert_event_log_access(event_log_id, db, current_user)
+
+    _event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
+
+    # Prefer a recipe-attached reference model when none was passed (see the
+    # non-stochastic conformance endpoint for the rationale).
+    if ref_model_dict is None:
+        from app.services.log_builder_recipes import read_reference_model_sidecar
+
+        ref_model_dict = read_reference_model_sidecar(_event_log.file_path)
+
+    cache_params = {"reference_model": ref_model_dict}
     cached = _get_cached(event_log_id, "conformance_stochastic", cache_params)
     if cached is not None:
         return StochasticConformanceResponse(**cached)
-
-    _event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
 
     try:
         result = await _run_in_thread(
@@ -2088,6 +2107,227 @@ async def predict_suffix(
     )
     _set_cached(event_log_id, "predict_suffix", result, cache_params)
     return result
+
+
+# ── Close-the-loop: alarms, explainability, model health ─────────────────────
+#
+# These three endpoints sit on top of the per-log model persistence in
+# ``app.services.model_store``: passing ``event_log_id`` lets the predictive
+# service reuse a fitted model across the (potentially repeated) alarm /
+# explanation calls instead of refitting every request.
+
+
+class NextActivityPrediction(BaseModel):
+    activity: str
+    probability: float
+
+
+class CaseAtRisk(BaseModel):
+    case_id: str
+    prefix_length: int
+    last_activity: str
+    elapsed_seconds: float
+    breach_probability: float = Field(..., description="P(case finishes over SLA)")
+    risk_label: str
+    predicted_remaining_seconds: float | None = None
+    predicted_total_seconds: float | None = None
+    predicted_finish_over_sla: bool | None = None
+    top_next_activities: list[NextActivityPrediction] = Field(default_factory=list)
+
+
+class CasesAtRiskResponse(BaseModel):
+    event_log_id: UUID
+    sla_hours: float
+    sla_seconds: float
+    risk_threshold: float
+    count: int
+    cases_at_risk: list[CaseAtRisk] = Field(default_factory=list)
+
+
+class FeatureContribution(BaseModel):
+    feature: str
+    value: float
+    contribution: float = Field(..., description="Signed SHAP contribution")
+
+
+class ExplainResponse(BaseModel):
+    available: bool
+    reason: str | None = None
+    case_id: str | None = None
+    kind: str | None = None
+    prefix_length: int | None = None
+    current_activity: str | None = None
+    top_contributions: list[FeatureContribution] = Field(default_factory=list)
+    model_info: dict | None = None
+
+
+class ModelHealthEntry(BaseModel):
+    kind: str
+    trained: bool
+    trained_at: str | None = None
+    n_cases: int | None = None
+    metrics: dict = Field(default_factory=dict)
+    content_hash: str | None = None
+    serializer: str | None = None
+
+
+class ModelHealthResponse(BaseModel):
+    event_log_id: UUID
+    models: list[ModelHealthEntry] = Field(default_factory=list)
+
+
+@router.get("/predict/cases-at-risk/{event_log_id}", response_model=CasesAtRiskResponse)
+async def predict_cases_at_risk(
+    event_log_id: UUID,
+    sla_hours: float = Query(..., gt=0, description="SLA threshold in hours; cases predicted to finish beyond it are at risk."),
+    risk_threshold: float = Query(0.7, ge=0.0, le=1.0, description="Minimum breach probability for a case to be flagged."),
+    as_of: datetime | None = Query(
+        default=None,
+        description=(
+            "ISO datetime cutoff defining 'now'. Only cases open at this moment "
+            "(started but not finished) are scored, on their truncated in-progress "
+            "prefix. Defaults to the ~0.6 quantile of case end times so a meaningful "
+            "subset of a fully-historical log is still in-flight."
+        ),
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Score the cases open at ``as_of`` for SLA-breach risk (the close-the-loop alarm layer).
+
+    A case is "open" at ``as_of`` when it had started but not yet finished by
+    then; it is scored on the events that had occurred by the cutoff (its
+    in-progress prefix). Already-finished and not-yet-started cases are
+    excluded. When ``as_of`` is omitted, a default cutoff (~0.6 quantile of
+    case end times) is derived so a fully-historical log still yields a
+    meaningful set of in-flight cases.
+
+    Returns those open cases whose predicted breach probability meets
+    ``risk_threshold``, each with P(breach), predicted remaining time, and the
+    top likely next activities for routing the alarm.
+    """
+    await _assert_event_log_access(event_log_id, db, current_user)
+    sla_seconds = sla_hours * 3600.0
+    cache_params = {
+        "sla_hours": sla_hours,
+        "risk_threshold": risk_threshold,
+        "as_of": as_of.isoformat() if as_of is not None else None,
+    }
+    cached = _get_cached(event_log_id, "predict_cases_at_risk", cache_params)
+    if cached is not None:
+        return cached
+
+    _event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
+    at_risk = await _run_in_thread(
+        predictive_service.score_cases_for_alarm,
+        df,
+        sla_seconds,
+        risk_threshold,
+        str(event_log_id),
+        as_of,
+    )
+    result = {
+        "event_log_id": event_log_id,
+        "sla_hours": sla_hours,
+        "sla_seconds": sla_seconds,
+        "risk_threshold": risk_threshold,
+        "count": len(at_risk),
+        "cases_at_risk": at_risk,
+    }
+    _set_cached(event_log_id, "predict_cases_at_risk", result, cache_params)
+    return result
+
+
+@router.get("/predict/explain/{event_log_id}/{case_id}", response_model=ExplainResponse)
+async def predict_explain(
+    event_log_id: UUID,
+    case_id: str,
+    kind: str = Query("outcome", description="Which model to explain: outcome | remaining_time | next_activity."),
+    top_n: int = Query(8, ge=1, le=50, description="Number of top signed feature contributions to return."),
+    sla_threshold: float | None = Query(default=None, description="SLA threshold in seconds for the outcome model (defaults to median)."),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Explain a single case's prediction via SHAP feature attributions.
+
+    Returns the top-N signed feature contributions for the case's current
+    prefix. When SHAP isn't installed (or the model/case can't be resolved)
+    the service returns ``{"available": false, "reason": ...}`` and we pass
+    that through unchanged.
+    """
+    await _assert_event_log_access(event_log_id, db, current_user)
+    cache_params = {"case_id": case_id, "kind": kind, "top_n": top_n, "sla_threshold": sla_threshold}
+    cached = _get_cached(event_log_id, "predict_explain", cache_params)
+    if cached is not None:
+        return cached
+
+    _event_log, df = await _load_event_log_and_df(event_log_id, db, current_user)
+    result = await _run_in_thread(
+        predictive_service.explain_case,
+        df,
+        case_id,
+        kind,
+        top_n,
+        sla_threshold,
+        str(event_log_id),
+    )
+    _set_cached(event_log_id, "predict_explain", result, cache_params)
+    return result
+
+
+@router.get("/predict/model-health/{event_log_id}", response_model=ModelHealthResponse)
+async def predict_model_health(
+    event_log_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Report the persisted-model metadata (trained_at, n_cases, MAE/AUC/etc.)
+    for each predictive model kind cached for this event log.
+
+    Reads ``model_store`` envelope metadata only — it does not retrain or load
+    the (potentially large) estimator into memory. Kinds with no cached model
+    report ``trained: false``.
+    """
+    await _assert_event_log_access(event_log_id, db, current_user)
+
+    import os as _os
+
+    from app.services import model_store
+
+    log_id = str(event_log_id)
+
+    # Discover every kind actually persisted for this log by scanning the cache
+    # directory. The outcome model is stored under a threshold-folded kind
+    # (e.g. ``outcome__median`` / ``outcome__sla3600``), so a fixed kind list
+    # would miss it — enumerate the .pkl files instead.
+    discovered: list[str] = []
+    try:
+        model_dir = model_store._model_dir(log_id)  # creates the dir if absent
+        for name in sorted(_os.listdir(model_dir)):
+            if name.endswith(".pkl"):
+                discovered.append(name[: -len(".pkl")])
+    except Exception as e:  # noqa: BLE001 - health must never 500
+        logger.warning("model-health: could not list cache dir for %s: %s", log_id, e)
+
+    # Always surface the three core kinds (reporting trained=false when absent),
+    # plus any extra persisted kinds (e.g. threshold-specific outcome models).
+    base_kinds = ["remaining_time", "outcome", "next_activity"]
+    ordered = base_kinds + [k for k in discovered if k not in base_kinds]
+
+    models: list[dict] = []
+    for kind in ordered:
+        meta = model_store.model_meta(log_id, kind)
+        if meta is None:
+            # Skip a base kind only if a threshold-variant of it is present
+            # (avoids a misleading "outcome: not trained" alongside the real
+            # "outcome__median: trained" entry).
+            if kind in base_kinds and any(d.startswith(kind + "__") for d in discovered):
+                continue
+            models.append({"kind": kind, "trained": False, "metrics": {}})
+        else:
+            models.append({"kind": kind, "trained": True, **meta})
+
+    return {"event_log_id": event_log_id, "models": models}
 
 
 @router.get("/digital-twin/{event_log_id}")

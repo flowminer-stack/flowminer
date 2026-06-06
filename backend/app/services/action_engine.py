@@ -127,6 +127,7 @@ class _NotifyAdapter:
         metric: str = "",
         condition: str = "",
         threshold: Any = "",
+        extra_payload: dict | None = None,
     ) -> None:
         self.id = adapter_id
         self.name = name
@@ -138,6 +139,11 @@ class _NotifyAdapter:
         self.metric = metric
         self.condition = condition
         self.threshold = threshold
+        # Extra fields merged into the webhook JSON body for action rules so
+        # the receiver gets rule_id / case_id / event_log_id / case metrics —
+        # not just the alert-shaped payload. Notifier._send_webhook reads this
+        # via getattr, so real Alert objects (which lack it) are unaffected.
+        self.extra_payload = extra_payload or {}
 
 
 def _build_notifier_result(case: dict, subject: str | None = None) -> dict:
@@ -167,6 +173,98 @@ def _notify_context(params: dict, case: dict) -> dict:
     }
 
 
+def _webhook_extra_payload(
+    params: dict,
+    case: dict,
+    event_log_id: UUID | None,
+) -> dict:
+    """Enrich the outbound action-rule webhook body with the rule/case context.
+
+    The base Notifier webhook payload is alert-shaped (alert_name, metric,
+    threshold, …). For action rules the receiver also wants to know *which*
+    rule fired, *which* case/log it was, and the key case metrics so it can
+    act without a second round-trip into FlowMiner."""
+    return {
+        "rule_id": str(params["rule_id"]) if params.get("rule_id") else None,
+        "case_id": case.get("case_id"),
+        "event_log_id": str(event_log_id) if event_log_id else None,
+        "case_metrics": {
+            "case_duration": case.get("case_duration"),
+            "time_on_activity": case.get("time_on_activity"),
+            "current_activity": case.get("current_activity"),
+            "event_count": case.get("event_count"),
+            "rework_count": case.get("rework_count"),
+        },
+    }
+
+
+async def _insert_task(
+    db: Any,
+    *,
+    project_id: UUID,
+    event_log_id: UUID | None,
+    case: dict,
+    title: str,
+    description: str | None,
+    priority: str,
+    params: dict,
+) -> str:
+    """Insert a Task row inside a SAVEPOINT and return its id as a string.
+
+    This is the in-app delivery mechanism shared by ``create_task``,
+    ``escalate``, and ``notify_in_app`` — there is no separate notifications
+    table; the Task inbox IS the in-app inbox.
+
+    ``assignee`` resolution: ``params['assignee']`` may carry either a user
+    UUID (set as ``assignee_id``) or an email address. An email is *not* a
+    valid FK, so it is left off ``assignee_id`` and stashed in ``context``
+    so the inbox UI can still show the intended owner.
+    """
+    from app.models.task import Task  # lazy import to avoid circular deps
+
+    assignee = params.get("assignee")
+    assignee_id: UUID | None = None
+    assignee_email: str | None = None
+    if assignee:
+        try:
+            assignee_id = assignee if isinstance(assignee, UUID) else UUID(str(assignee))
+        except (ValueError, AttributeError, TypeError):
+            # Not a UUID — treat as an email/handle and stash it instead.
+            assignee_email = str(assignee)
+
+    rule_id = params.get("rule_id")
+    source_rule_id: UUID | None = None
+    if rule_id:
+        try:
+            source_rule_id = rule_id if isinstance(rule_id, UUID) else UUID(str(rule_id))
+        except (ValueError, AttributeError, TypeError):
+            source_rule_id = None
+
+    context = {"case": case, "rule_params": params}
+    if assignee_email:
+        context["assignee_email"] = assignee_email
+
+    task_row = Task(
+        project_id=project_id,
+        event_log_id=event_log_id,
+        case_id=case.get("case_id"),
+        title=title,
+        description=description,
+        priority=priority,
+        status="open",
+        assignee_id=assignee_id,
+        source_rule_id=source_rule_id,
+        context=context,
+    )
+    # Insert inside a SAVEPOINT so a flush error for this one case rolls back
+    # only this row instead of poisoning the shared request/worker session —
+    # mirrors the tag_case pattern. The caller commits.
+    async with db.begin_nested():
+        db.add(task_row)
+        await db.flush()
+    return str(task_row.id)
+
+
 async def dispatch_action(
     action: dict,
     case: dict,
@@ -176,6 +274,7 @@ async def dispatch_action(
     db: Any | None = None,
     event_log_id: UUID | None = None,
     created_by: UUID | None = None,
+    project_id: UUID | None = None,
 ) -> dict:
     """Execute a single action against a case. Returns an execution detail dict.
 
@@ -191,9 +290,13 @@ async def dispatch_action(
     Transport parameters are injected from the API layer:
 
     * ``notifier``      — ``Notifier`` instance (email / webhook / Slack).
-    * ``db``            — ``AsyncSession`` for DB writes (``tag_case``).
-    * ``event_log_id``  — needed by ``tag_case`` to set ``CaseTag.event_log_id``.
+    * ``db``            — ``AsyncSession`` for DB writes (``tag_case``,
+                          ``create_task``, ``escalate``, ``notify_in_app``).
+    * ``event_log_id``  — needed by ``tag_case``/Task rows to set the FK.
     * ``created_by``    — user UUID recorded on new ``CaseTag`` rows.
+    * ``project_id``    — required to insert Task rows (NOT NULL FK). When the
+                          caller omits it, the Task-creating actions fall back
+                          to their webhook transport (or pending-connector).
     """
     action_type = action.get("type")
     params = action.get("params", {}) or {}
@@ -261,6 +364,7 @@ async def dispatch_action(
                 name=f"Action rule webhook — case {case['case_id']}",
                 email_recipients=[],
                 webhook_url=url,
+                extra_payload=_webhook_extra_payload(params, case, event_log_id),
                 **_notify_context(params, case),
             )
             # httpx.Client is synchronous & blocking — run it off the loop.
@@ -359,8 +463,29 @@ async def dispatch_action(
         }
         if dry_run:
             return detail
-        # No task connector wired yet — route via webhook if a URL is supplied,
-        # otherwise record as pending-connector so the execution history is honest.
+        # Primary path: insert a real Task row into the inbox when we have a DB
+        # session + project_id. This is the in-app delivery mechanism.
+        if db is not None and project_id is not None:
+            try:
+                task_id = await _insert_task(
+                    db,
+                    project_id=project_id,
+                    event_log_id=event_log_id,
+                    case=case,
+                    title=title,
+                    description=params.get("description"),
+                    priority=params.get("priority", "medium"),
+                    params=params,
+                )
+                detail["success"] = True
+                detail["task_id"] = task_id
+            except Exception as exc:
+                logger.error("create_task insert failed for case %s: %s", case["case_id"], exc)
+                detail["success"] = False
+                detail["error"] = str(exc)
+            return detail
+        # Fallback: no DB session (Celery sync path may supply a webhook_url)
+        # — route via webhook if a URL is supplied, otherwise record pending.
         webhook_url = params.get("webhook_url") or params.get("url")
         if webhook_url and notifier is not None:
             try:
@@ -369,6 +494,7 @@ async def dispatch_action(
                     name=title,
                     email_recipients=[],
                     webhook_url=webhook_url,
+                    extra_payload=_webhook_extra_payload(params, case, event_log_id),
                     **_notify_context(params, case),
                 )
                 # httpx.Client is synchronous & blocking — run it off the loop.
@@ -382,15 +508,16 @@ async def dispatch_action(
                 detail["error"] = str(exc)
         else:
             logger.info(
-                "create_task for case %s recorded as pending — no connector configured",
+                "create_task for case %s recorded as pending — no DB session or connector",
                 case["case_id"],
             )
             detail["success"] = False
-            detail["note"] = "Needs external task-management connector"
+            detail["note"] = "Needs db+project_id (in-app Task) or a webhook connector"
         return detail
 
     if action_type == "escalate":
         level = params.get("level", "manager")
+        title = params.get("title", f"Escalate to {level} — case {case['case_id']}")
         detail = {
             "action": "escalate",
             "level": level,
@@ -399,15 +526,36 @@ async def dispatch_action(
         }
         if dry_run:
             return detail
-        # Route via webhook if configured, otherwise log as pending connector.
+        # Primary path: insert an urgent Task row into the inbox.
+        if db is not None and project_id is not None:
+            try:
+                task_id = await _insert_task(
+                    db,
+                    project_id=project_id,
+                    event_log_id=event_log_id,
+                    case=case,
+                    title=title,
+                    description=params.get("description"),
+                    priority="urgent",
+                    params=params,
+                )
+                detail["success"] = True
+                detail["task_id"] = task_id
+            except Exception as exc:
+                logger.error("escalate insert failed for case %s: %s", case["case_id"], exc)
+                detail["success"] = False
+                detail["error"] = str(exc)
+            return detail
+        # Fallback: route via webhook if configured, otherwise log as pending.
         webhook_url = params.get("webhook_url") or params.get("url")
         if webhook_url and notifier is not None:
             try:
                 adapter = _NotifyAdapter(
                     adapter_id=case["case_id"],
-                    name=f"Escalate to {level} — case {case['case_id']}",
+                    name=title,
                     email_recipients=[],
                     webhook_url=webhook_url,
+                    extra_payload=_webhook_extra_payload(params, case, event_log_id),
                     **_notify_context(params, case),
                 )
                 # httpx.Client is synchronous & blocking — run it off the loop.
@@ -421,11 +569,52 @@ async def dispatch_action(
                 detail["error"] = str(exc)
         else:
             logger.info(
-                "escalate for case %s recorded as pending — no connector configured",
+                "escalate for case %s recorded as pending — no DB session or connector",
                 case["case_id"],
             )
             detail["success"] = False
-            detail["note"] = "Needs external escalation connector"
+            detail["note"] = "Needs db+project_id (in-app Task) or a webhook connector"
+        return detail
+
+    if action_type == "notify_in_app":
+        # In-app delivery: there is no separate notifications table, so the
+        # Task inbox IS the in-app inbox. Insert a Task the user works through.
+        title = params.get("title", f"Action rule triggered for case {case['case_id']}")
+        priority = params.get("priority", "medium")
+        detail = {
+            "action": "notify_in_app",
+            "title": title,
+            "priority": priority,
+            "case_id": case["case_id"],
+            "timestamp": timestamp,
+        }
+        if dry_run:
+            return detail
+        if db is None or project_id is None:
+            logger.info(
+                "notify_in_app for case %s skipped — needs db + project_id",
+                case["case_id"],
+            )
+            detail["success"] = False
+            detail["note"] = "notify_in_app requires db + project_id"
+            return detail
+        try:
+            task_id = await _insert_task(
+                db,
+                project_id=project_id,
+                event_log_id=event_log_id,
+                case=case,
+                title=title,
+                description=params.get("description"),
+                priority=priority,
+                params=params,
+            )
+            detail["success"] = True
+            detail["task_id"] = task_id
+        except Exception as exc:
+            logger.error("notify_in_app insert failed for case %s: %s", case["case_id"], exc)
+            detail["success"] = False
+            detail["error"] = str(exc)
         return detail
 
     return {

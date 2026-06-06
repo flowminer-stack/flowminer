@@ -198,12 +198,37 @@ export interface AutomationCandidate {
   score: number;
   estimated_hours_saved: number;
   estimated_cost_saved: number;
+  /** 0–100 readiness score: volume percentile + duration + rework + variant breadth */
+  readiness_score: number;
 }
 
 export interface AutomationCandidatesResponse {
   candidates: AutomationCandidate[];
   hourly_cost_used: number;
   automation_rate_used: number;
+}
+
+// ─── Value Calculators (Initiatives) ─────────────────────────────────────────
+
+export interface ValueCalculatorInput {
+  key: string;
+  label: string;
+  unit: string;
+  default: number;
+}
+
+export interface ValueCalculator {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  inputs: ValueCalculatorInput[];
+  formula: string;
+}
+
+export interface ValueCalculatorsResponse {
+  calculators: ValueCalculator[];
+  categories: string[];
 }
 
 export interface VariantEvolutionResponse {

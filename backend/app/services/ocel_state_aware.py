@@ -48,6 +48,7 @@ def enrich_ocel_with_state_transitions(
     ocel: Any,
     state_column: str,
     object_type: str | None = None,
+    materialize: bool = False,
 ) -> dict[str, Any]:
     """Enrich an OCEL frame with object-state-transition events.
 
@@ -61,6 +62,14 @@ def enrich_ocel_with_state_transitions(
     object_type
         If set, only enrich objects of this type. Otherwise enrich
         all object types that have the state column.
+    materialize
+        When True, also build and return a NEW OCEL object (under the
+        ``materialized_ocel`` key) whose ``events``/``relations`` tables contain
+        the synthetic state-transition events and whose existing events carry
+        the ``state_{type}`` annotation columns. This is what lets downstream
+        OC-DFG / OPerA / improvement analyses actually *see* the transition
+        events instead of running on the unenriched log. The key is omitted
+        from the JSON-serialisable summary (the caller pops it).
 
     Returns
     -------
@@ -70,6 +79,8 @@ def enrich_ocel_with_state_transitions(
         ``state_transitions`` — the full list of generated transition events
         ``distinct_states`` — unique states observed per object type
         ``method`` — "sa_ocpm_kretzschmann_berti_vanderaalst_2025"
+        ``materialized_ocel`` — (only when ``materialize=True`` and at least
+            one transition was generated) the enriched pm4py OCEL object
     """
     try:
         objects_df: pd.DataFrame = ocel.objects
@@ -172,24 +183,39 @@ def enrich_ocel_with_state_transitions(
             }
 
         # Join objects → relations → events to assign each object's
-        # state to the timestamp of its first related event
+        # state to the timestamp of its first related event.
+        #
+        # pm4py's convert output puts ``ocel:timestamp`` AND ``ocel:type`` on
+        # BOTH the relations and the objects/events tables, so an un-renamed
+        # merge would suffix the collisions to ``_x``/``_y`` (or ``_rel``/
+        # ``_obj``) and the subsequent reads/sorts would KeyError on the now-
+        # absent original names. We rename every column we read off the
+        # events/objects side to private, collision-free names BEFORE merging
+        # so the reads below never depend on pandas' suffix behaviour.
         merged = relations_df.merge(
-            events_df[[eid_col, ts_col]], on=eid_col, how="inner"
-        ).merge(
-            objects_scope[[oid_col, type_col, state_column]],
-            left_on=rel_oid_col,
-            right_on=oid_col,
+            events_df[[eid_col, ts_col]].rename(columns={ts_col: "_ev_ts"}),
+            on=eid_col,
             how="inner",
-            suffixes=("_rel", "_obj"),
+        ).merge(
+            objects_scope[[oid_col, type_col, state_column]].rename(
+                columns={
+                    oid_col: "_obj_oid",
+                    type_col: "_obj_type",
+                    state_column: "_obj_state",
+                }
+            ),
+            left_on=rel_oid_col,
+            right_on="_obj_oid",
+            how="inner",
         )
         # Pick the earliest event per object as the "state appears" moment
-        first_events = merged.sort_values(ts_col).drop_duplicates(
+        first_events = merged.sort_values("_ev_ts").drop_duplicates(
             subset=[rel_oid_col], keep="first"
         )
         for _, row in first_events.iterrows():
             oid = str(row[rel_oid_col])
-            otype = str(row[type_col])
-            new_state = row[state_column]
+            otype = str(row["_obj_type"])
+            new_state = row["_obj_state"]
             if pd.isna(new_state):
                 continue
             new_state_str = str(new_state)
@@ -199,7 +225,7 @@ def enrich_ocel_with_state_transitions(
                 "object_type": otype,
                 "from_state": None,
                 "to_state": new_state_str,
-                "timestamp": pd.to_datetime(row[ts_col]) - timedelta(microseconds=1),
+                "timestamp": pd.to_datetime(row["_ev_ts"]) - timedelta(microseconds=1),
                 "activity": f"{otype}::state={new_state_str}",
             })
             current_state_by_oid[oid] = new_state_str
@@ -272,7 +298,7 @@ def enrich_ocel_with_state_transitions(
     else:
         event_state_annotations = {}
 
-    return {
+    result: dict[str, Any] = {
         "new_events_count": len(state_transitions),
         "annotated_events": annotated_events,
         "state_transitions": [
@@ -288,3 +314,130 @@ def enrich_ocel_with_state_transitions(
         "state_column": state_column,
         "object_type_filter": object_type,
     }
+
+    if materialize and state_transitions:
+        try:
+            result["materialized_ocel"] = _materialize_enriched_ocel(
+                ocel,
+                events_df=events_df,
+                objects_df=objects_df,
+                relations_df=relations_df,
+                eid_col=eid_col,
+                activity_col=activity_col,
+                ts_col=ts_col,
+                rel_oid_col=rel_oid_col,
+                rel_eid_col=rel_eid_col,
+                rel_type_col=rel_type_col,
+                oid_col=oid_col,
+                type_col=type_col,
+                state_transitions=state_transitions,
+                event_state_annotations=event_state_annotations,
+            )
+        except Exception as e:  # never fail the whole request on materialisation
+            logger.warning("State-aware materialisation failed; returning summary only: %s", e)
+
+    return result
+
+
+def _materialize_enriched_ocel(
+    ocel: Any,
+    *,
+    events_df: pd.DataFrame,
+    objects_df: pd.DataFrame,
+    relations_df: pd.DataFrame,
+    eid_col: str,
+    activity_col: str,
+    ts_col: str,
+    rel_oid_col: str | None,
+    rel_eid_col: str | None,
+    rel_type_col: str | None,
+    oid_col: str,
+    type_col: str,
+    state_transitions: list[dict[str, Any]],
+    event_state_annotations: dict[str, dict[str, str]],
+) -> Any:
+    """Build a NEW pm4py OCEL with the synthetic state-transition events
+    appended and the existing events annotated with object state.
+
+    The synthetic events are regular OCEL events (distinguished activity name
+    ``{type}::state…``) related to the single object whose state changed, so
+    the result is backward-compatible with every OCEL 2.0 reader and shows up
+    in OC-DFG / OPerA / improvement runs. Returns a brand-new ``OCEL`` instance
+    (the input frames are never mutated in place).
+    """
+    from pm4py.objects.ocel.obj import OCEL
+
+    new_events = events_df.copy()
+    new_objects = objects_df.copy()
+    new_relations = relations_df.copy()
+
+    rel_has_activity = rel_eid_col is not None and "ocel:activity" in new_relations.columns
+    rel_has_ts = rel_eid_col is not None and "ocel:timestamp" in new_relations.columns
+    rel_has_qual = rel_eid_col is not None and "ocel:qualifier" in new_relations.columns
+
+    # Stable, collision-free ids for the synthetic events.
+    existing_eids = {str(v) for v in new_events[eid_col].tolist()}
+    event_rows: list[dict[str, Any]] = []
+    relation_rows: list[dict[str, Any]] = []
+    for idx, tr in enumerate(state_transitions):
+        eid = f"state::{idx}"
+        while eid in existing_eids:
+            eid = f"state::{idx}::{len(existing_eids)}"
+        existing_eids.add(eid)
+
+        ts = tr["timestamp"]
+        activity = tr["activity"]
+        event_rows.append({eid_col: eid, activity_col: activity, ts_col: ts})
+
+        if rel_oid_col is not None and rel_eid_col is not None:
+            rel_row: dict[str, Any] = {
+                rel_eid_col: eid,
+                rel_oid_col: tr["oid"],
+            }
+            if rel_type_col is not None:
+                rel_row[rel_type_col] = tr["object_type"]
+            if rel_has_activity:
+                rel_row["ocel:activity"] = activity
+            if rel_has_ts:
+                rel_row["ocel:timestamp"] = ts
+            if rel_has_qual:
+                rel_row["ocel:qualifier"] = "state_transition"
+            relation_rows.append(rel_row)
+
+    if event_rows:
+        new_events = pd.concat(
+            [new_events, pd.DataFrame(event_rows)], ignore_index=True
+        )
+    if relation_rows:
+        new_relations = pd.concat(
+            [new_relations, pd.DataFrame(relation_rows)], ignore_index=True
+        )
+
+    # Annotate existing events with the current state of each related object.
+    # event_state_annotations: eid -> {state_<type>: state}. Materialise each
+    # distinct annotation key as a column on the events table.
+    if event_state_annotations:
+        ann_cols: set[str] = set()
+        for ann in event_state_annotations.values():
+            ann_cols.update(ann.keys())
+        eid_str = new_events[eid_col].astype(str)
+        for col in sorted(ann_cols):
+            new_events[col] = eid_str.map(
+                lambda e, _c=col: event_state_annotations.get(e, {}).get(_c)
+            )
+
+    # Normalise timestamps and ordering on the combined events table.
+    new_events[ts_col] = pd.to_datetime(new_events[ts_col], errors="coerce", utc=True)
+    new_events = new_events.sort_values(ts_col).reset_index(drop=True)
+    if rel_has_ts:
+        new_relations["ocel:timestamp"] = pd.to_datetime(
+            new_relations["ocel:timestamp"], errors="coerce", utc=True
+        )
+
+    enriched = OCEL(
+        events=new_events,
+        objects=new_objects,
+        relations=new_relations,
+        globals=getattr(ocel, "globals", None),
+    )
+    return enriched

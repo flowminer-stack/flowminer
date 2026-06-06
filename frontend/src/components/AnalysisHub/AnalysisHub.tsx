@@ -17,6 +17,7 @@ import {
   CalendarDays,
   Database,
   MessageSquare,
+  ShieldCheck,
 } from 'lucide-react';
 import clsx from 'clsx';
 import type { LucideIcon } from 'lucide-react';
@@ -31,6 +32,7 @@ import SNAView from './SNAView';
 import CaseClustering from './CaseClustering';
 import LogSkeleton from './LogSkeleton';
 import DeclareRules from './DeclareRules';
+import ComplianceDashboard from './ComplianceDashboard';
 import FourEyes from './FourEyes';
 import PerformanceSpectrum from './PerformanceSpectrum';
 import FeatureExport from './FeatureExport';
@@ -122,6 +124,13 @@ export const ANALYSIS_ITEMS: AnalysisItem[] = [
     icon: FileCheck,
     description: 'Discovered DECLARE constraints',
     component: DeclareRules,
+  },
+  {
+    id: 'timed-compliance',
+    label: 'SLA / Timed Compliance',
+    icon: ShieldCheck,
+    description: 'No-code SLA conformance checks',
+    component: ComplianceDashboard,
   },
   {
     id: 'four-eyes',

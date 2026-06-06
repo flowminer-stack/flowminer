@@ -51,6 +51,8 @@ const ProcessHealthPage = lazy(() => import('@/pages/ProcessHealthPage'));
 const CausalMapPage = lazy(() => import('@/pages/CausalMapPage'));
 const ProcessPulsePage = lazy(() => import('@/pages/ProcessPulsePage'));
 const ProcessCityPage = lazy(() => import('@/pages/ProcessCityPage'));
+const CasesAtRiskPage = lazy(() => import('@/pages/CasesAtRiskPage'));
+const ActionRulesPage = lazy(() => import('@/pages/ActionRulesPage'));
 
 // ─── Protected Route ─────────────────────────────────────────────────────────
 
@@ -211,6 +213,7 @@ export default function App() {
           <Route path="/sustainability/:eventLogId" element={<SustainabilityPage />} />
           <Route path="/automation-roi/:eventLogId" element={<AutomationRoiPage />} />
           <Route path="/health/:eventLogId" element={<ProcessHealthPage />} />
+          <Route path="/cases-at-risk/:eventLogId" element={<CasesAtRiskPage />} />
           <Route path="/causal-map/:eventLogId" element={<CausalMapPage />} />
           <Route path="/pulse/:eventLogId" element={<ProcessPulsePage />} />
           <Route path="/process-city/:eventLogId" element={<ProcessCityPage />} />
@@ -235,6 +238,7 @@ export default function App() {
           <Route path="/ocpm" element={<OCPMPage />} />
           <Route path="/ocpm/:eventLogId" element={<OCPMPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
+          <Route path="/action-rules" element={<ActionRulesPage />} />
           <Route path="/connectors" element={<ConnectorsPage />} />
           <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/settings" element={<SettingsPage />} />

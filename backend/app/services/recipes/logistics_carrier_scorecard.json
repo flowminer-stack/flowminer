@@ -1,0 +1,172 @@
+{
+  "id": "logistics_carrier_scorecard",
+  "process_name": "Logistics Carrier Performance Scorecard",
+  "description": "Measures carrier performance across the three SLA pillars: tender acceptance rate, on-time delivery %, and dwell time at origin. Built for TMS exports where each shipment produces tender, pickup, and delivery events. The process view surfaces per-carrier deviations and variance across lanes — use the case attributes (carrier_id, lane_id, service_level) as slice dimensions in a BI dashboard to produce the scorecard. Pair with an SLA-breach alert to trigger automated carrier-review workflows.",
+  "connector_type": null,
+  "category": "logistics",
+  "required_tables": [
+    {
+      "name": "shipments",
+      "role": "primary",
+      "description": "Shipment master (shipment_id, carrier_id, service_level, lane_id, origin_warehouse, destination_warehouse, committed_pickup_date, committed_delivery_date, created_at)",
+      "source_hint": "TMS shipment master table"
+    },
+    {
+      "name": "carrier_tenders",
+      "role": "additional",
+      "description": "Tender offer and response (shipment_id, tender_sent_at, carrier_id, response_at, acceptance_status, rejection_code)",
+      "source_hint": "TMS tender response log; latest tender per shipment"
+    },
+    {
+      "name": "carrier_milestones",
+      "role": "additional",
+      "description": "Carrier-reported milestone timestamps (shipment_id, actual_pickup_at, actual_delivery_at, pod_at, carrier_code, late_reason_code)",
+      "source_hint": "Carrier EDI / API milestone feed or TMS tracking table"
+    }
+  ],
+  "joins": [
+    {
+      "left_table": "shipments",
+      "right_table": "carrier_tenders",
+      "left_on": ["shipment_id"],
+      "right_on": ["shipment_id"],
+      "how": "left"
+    },
+    {
+      "left_table": "shipments",
+      "right_table": "carrier_milestones",
+      "left_on": ["shipment_id"],
+      "right_on": ["shipment_id"],
+      "how": "left"
+    }
+  ],
+  "case_id_column": "shipment_id",
+  "events": [
+    {
+      "activity_name": "Shipment Created",
+      "source_table": "shipments",
+      "timestamp_column": "created_at",
+      "resource_column": "origin_warehouse"
+    },
+    {
+      "activity_name": "Tender Sent",
+      "source_table": "carrier_tenders",
+      "timestamp_column": "tender_sent_at",
+      "resource_column": "carrier_id"
+    },
+    {
+      "activity_name": "Tender Accepted",
+      "source_table": "carrier_tenders",
+      "timestamp_column": "response_at",
+      "resource_column": "carrier_id",
+      "filter": "acceptance_status = 'accepted'"
+    },
+    {
+      "activity_name": "Picked Up",
+      "source_table": "carrier_milestones",
+      "timestamp_column": "actual_pickup_at",
+      "resource_column": "carrier_code"
+    },
+    {
+      "activity_name": "Delivered",
+      "source_table": "carrier_milestones",
+      "timestamp_column": "actual_delivery_at",
+      "resource_column": "carrier_code"
+    },
+    {
+      "activity_name": "Proof of Delivery Confirmed",
+      "source_table": "carrier_milestones",
+      "timestamp_column": "pod_at",
+      "resource_column": "carrier_code"
+    }
+  ],
+  "additional_columns": {
+    "carrier_id": "shipments.carrier_id",
+    "service_level": "shipments.service_level",
+    "lane_id": "shipments.lane_id",
+    "origin_warehouse": "shipments.origin_warehouse",
+    "committed_pickup_date": "shipments.committed_pickup_date",
+    "committed_delivery_date": "shipments.committed_delivery_date",
+    "acceptance_status": "carrier_tenders.acceptance_status",
+    "rejection_code": "carrier_tenders.rejection_code",
+    "late_reason_code": "carrier_milestones.late_reason_code"
+  },
+  "sample_kpis": [
+    "Tender acceptance rate by carrier",
+    "On-time pickup % vs committed_pickup_date",
+    "On-time delivery % vs committed_delivery_date",
+    "Dwell time at origin (Tender Accepted → Picked Up)",
+    "Transit time variance by lane",
+    "POD confirmation lag (Delivered → POD Confirmed)"
+  ],
+  "default_kpis": [
+    {
+      "name": "End-to-End Carrier Cycle Time",
+      "metric": "avg_cycle_time",
+      "target": 48,
+      "unit": "hours"
+    },
+    {
+      "name": "Carrier SLA Conformance",
+      "metric": "conformance_fitness",
+      "target": 0.95,
+      "unit": "ratio"
+    },
+    {
+      "name": "Tender Rework Rate",
+      "metric": "rework_rate",
+      "target": 5,
+      "unit": "percent"
+    }
+  ],
+  "reference_model": {
+    "places": [
+      {"name": "p_start"},
+      {"name": "p_created"},
+      {"name": "p_tendered"},
+      {"name": "p_accepted"},
+      {"name": "p_picked"},
+      {"name": "p_delivered"},
+      {"name": "p_end"}
+    ],
+    "transitions": [
+      {"name": "t_create",  "label": "Shipment Created"},
+      {"name": "t_tender",  "label": "Tender Sent"},
+      {"name": "t_accept",  "label": "Tender Accepted"},
+      {"name": "t_pickup",  "label": "Picked Up"},
+      {"name": "t_deliver", "label": "Delivered"},
+      {"name": "t_pod",     "label": "Proof of Delivery Confirmed"}
+    ],
+    "arcs": [
+      {"source": "p_start",     "target": "t_create"},
+      {"source": "t_create",    "target": "p_created"},
+      {"source": "p_created",   "target": "t_tender"},
+      {"source": "t_tender",    "target": "p_tendered"},
+      {"source": "p_tendered",  "target": "t_accept"},
+      {"source": "t_accept",    "target": "p_accepted"},
+      {"source": "p_accepted",  "target": "t_pickup"},
+      {"source": "t_pickup",    "target": "p_picked"},
+      {"source": "p_picked",    "target": "t_deliver"},
+      {"source": "t_deliver",   "target": "p_delivered"},
+      {"source": "p_delivered", "target": "t_pod"},
+      {"source": "t_pod",       "target": "p_end"}
+    ],
+    "initial_marking": ["p_start"],
+    "final_marking": ["p_end"]
+  },
+  "default_alert_rules": [
+    {
+      "name": "Carrier SLA conformance below 90 %",
+      "metric": "conformance_fitness",
+      "condition": "lt",
+      "threshold": 0.90
+    },
+    {
+      "name": "Avg carrier cycle time > 3 days",
+      "metric": "avg_cycle_time",
+      "condition": "gt",
+      "threshold": 72
+    }
+  ],
+  "notes": "This recipe produces a process-mining view that drives a carrier scorecard — it does not compute scorecard percentages itself. To build the scorecard: (1) mine the process, (2) export case attributes with carrier_id, committed_delivery_date, actual_delivery_at, and acceptance_status, (3) compute KPIs in your BI layer (on-time = actual_delivery_at <= committed_delivery_date; acceptance rate = accepted / total tenders by carrier). The SLA-breach alert (conformance < 0.90) triggers when the process pattern across all shipments deviates from the expected carrier flow, signalling systemic issues beyond individual late shipments."
+}

@@ -166,15 +166,27 @@ async def evaluate_rule_endpoint(
     dispatched = []
 
     if not dry_run and matches:
+        # Inject the firing rule's id into the action params so the downstream
+        # Task gets source_rule_id and the webhook payload gets rule_id (the
+        # user-authored params carry no rule id). dispatch_action / _insert_task
+        # read params['rule_id']. Mirrors the scheduled evaluate_action_rules path.
+        action = {
+            **rule.action,
+            "params": {
+                **(rule.action.get("params") or {}),
+                "rule_id": str(rule.id),
+            },
+        }
         for case in matches:
             detail = await dispatch_action(
-                rule.action,
+                action,
                 case,
                 dry_run=False,
                 notifier=_notifier,
                 db=db,
                 event_log_id=rule.event_log_id,
                 created_by=current_user.id,
+                project_id=rule.project_id,
             )
             dispatched.append(detail)
             db.add(

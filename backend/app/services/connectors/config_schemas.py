@@ -217,6 +217,24 @@ class OracleFusionConfig(_Base):
     limit: int = Field(default=10000, title="Max rows")
 
 
+class ShopifyConfig(_Base):
+    shop_domain: str = Field(
+        title="Shop domain", description="The myshopify.com domain, e.g. acme.myshopify.com"
+    )
+    access_token: SecretStr = Field(
+        title="Admin API access token", description="Shopify Admin API access token (shpat_…)"
+    )
+    lookback_days: int = Field(
+        default=90, title="Lookback (days)", description="History window for the first sync"
+    )
+    max_orders: int = Field(default=5000, title="Max orders")
+    webhook_secret: Optional[SecretStr] = Field(
+        default=None,
+        title="Webhook signing secret",
+        description="Shopify app webhook signing secret (for HMAC-verified live webhooks)",
+    )
+
+
 # ─── Registry: connector_type id -> config model ─────────────────────────────
 # DatabaseConfig serves all four SQL dialects.
 CONFIG_MODELS: dict[str, type[BaseModel]] = {
@@ -239,6 +257,7 @@ CONFIG_MODELS: dict[str, type[BaseModel]] = {
     "coupa": CoupaConfig,
     "ariba": AribaConfig,
     "oracle_fusion": OracleFusionConfig,
+    "shopify": ShopifyConfig,
 }
 
 

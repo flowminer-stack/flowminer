@@ -51,6 +51,14 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.check_anomaly_subscriptions",
         "schedule": 300.0,
     },
+    "dispatch-action-rules": {
+        "task": "app.workers.tasks.dispatch_all_action_rules",
+        "schedule": 300.0,  # every 5 minutes
+    },
+    "connector-auto-sync": {
+        "task": "app.workers.tasks.scan_connector_schedules",
+        "schedule": 600.0,  # every 10 minutes
+    },
     # Demo instance: wipe and re-seed every hour. The task itself
     # no-ops unless settings.DEMO_MODE is true, so this entry is safe
     # to ship on every deployment.

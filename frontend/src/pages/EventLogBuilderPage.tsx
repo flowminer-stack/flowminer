@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Upload,
@@ -10,8 +10,12 @@ import {
   GitMerge,
   Link2,
   Info,
+  Boxes,
+  Package,
+  X,
 } from 'lucide-react';
 import { logBuilder } from '@/api/client';
+import type { ProcessRecipe } from '@/api/logBuilder';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import PageHeader from '@/components/common/PageHeader';
 import { useUIStore } from '@/store';
@@ -50,6 +54,11 @@ interface EventMapping {
   timestamp_column: string;
 }
 
+// Standard = one row per case → a classic (case-centric) event log.
+// OCEL = each chosen wide-table column becomes an object type → an
+// object-centric event log, navigated to via /ocpm/:id.
+type BuildMode = 'standard' | 'ocel';
+
 const KIND_COLORS: Record<string, string> = {
   datetime: 'badge-accent',
   datetime_like: 'badge-accent',
@@ -81,12 +90,48 @@ export default function EventLogBuilderPage() {
   const [uploading, setUploading] = useState(false);
   const [building, setBuilding] = useState(false);
   const [logName, setLogName] = useState('Built log');
+  const [buildMode, setBuildMode] = useState<BuildMode>('standard');
   const [caseIdColumn, setCaseIdColumn] = useState('');
+  // OCEL mode: each selected wide-table column becomes one OCEL object type.
+  const [objectTypeColumns, setObjectTypeColumns] = useState<string[]>([]);
   const [resourceColumn, setResourceColumn] = useState<string>('');
   const [events, setEvents] = useState<EventMapping[]>([]);
   const [passthrough, setPassthrough] = useState<string[]>([]);
   const [nextId, setNextId] = useState(1);
   const [nextSourceId, setNextSourceId] = useState(1);
+
+  // ── Process content packs (recipes) ─────────────────────────────────────────
+  // A recipe pre-fills the builder's process scaffold (events, case id, joins,
+  // passthrough columns) using the recipe's *logical* table/column names. The
+  // user then maps those onto the columns of their actual uploaded data and the
+  // selected recipe id is sent to the backend so it provisions the pack's
+  // alerts / KPIs / reference model on a successful build.
+  const [recipes, setRecipes] = useState<ProcessRecipe[]>([]);
+  const [recipesLoaded, setRecipesLoaded] = useState(false);
+  const [selectedRecipeId, setSelectedRecipeId] = useState<string>('');
+
+  const selectedRecipe = useMemo(
+    () => recipes.find((r) => r.id === selectedRecipeId) ?? null,
+    [recipes, selectedRecipeId],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    logBuilder
+      .getTemplates()
+      .then((rs) => {
+        if (!cancelled) setRecipes(rs);
+      })
+      .catch(() => {
+        // Recipes are a best-effort onboarding aid; manual building still works.
+      })
+      .finally(() => {
+        if (!cancelled) setRecipesLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const isMultiSource = sources.length > 1;
 
@@ -161,10 +206,40 @@ export default function EventLogBuilderPage() {
     setEvents([]);
     setPassthrough([]);
     setCaseIdColumn('');
+    setObjectTypeColumns([]);
     setResourceColumn('');
     setNextId(1);
     setNextSourceId(1);
     setLogName('Built log');
+    setSelectedRecipeId('');
+  };
+
+  // Apply a content pack: pre-fill the editable process scaffold from the
+  // recipe. The recipe uses logical column names (e.g. "case_id", "po_created_at")
+  // which the user re-points to their own uploaded columns. Recipes are
+  // case-centric, so applying one also switches to standard build mode.
+  const applyRecipe = (recipe: ProcessRecipe) => {
+    setSelectedRecipeId(recipe.id);
+    setBuildMode('standard');
+    setLogName(recipe.process_name || 'Built log');
+    setCaseIdColumn(recipe.case_id_column || '');
+    const mappedEvents = recipe.events.map((e, i) => ({
+      id: i + 1,
+      activity_name: e.activity_name,
+      timestamp_column: e.timestamp_column,
+    }));
+    setEvents(mappedEvents);
+    setNextId(mappedEvents.length + 1);
+    // additional_columns is a {column: role} map of extra fields the pack carries
+    // through to the log; seed them as passthrough columns.
+    setPassthrough(Object.keys(recipe.additional_columns || {}));
+    // First event with a resource column hints the resource designation.
+    const resHint = recipe.events.find((e) => e.resource_column)?.resource_column;
+    if (resHint) setResourceColumn(resHint);
+  };
+
+  const clearRecipe = () => {
+    setSelectedRecipeId('');
   };
 
   // Upload the very first (primary) source and auto-suggest a mapping.
@@ -179,6 +254,9 @@ export default function EventLogBuilderPage() {
         { id: sid, preview: r, joinLeftOn: '', joinRightOn: '', joinHow: 'left' },
       ]);
       setNextSourceId(sid + 1);
+      // When a content pack is active its process scaffold takes precedence —
+      // don't overwrite the recipe's events/case-id with auto-detection.
+      if (selectedRecipeId) return;
       // Auto-suggest: first non-datetime column as case id, datetime cols as events.
       const nonDatetime = r.columns.find(
         (c) => c.kind !== 'datetime' && c.kind !== 'datetime_like',
@@ -268,15 +346,25 @@ export default function EventLogBuilderPage() {
   const togglePassthrough = (col: string) =>
     setPassthrough((p) => (p.includes(col) ? p.filter((c) => c !== col) : [...p, col]));
 
+  const toggleObjectType = (col: string) =>
+    setObjectTypeColumns((p) => (p.includes(col) ? p.filter((c) => c !== col) : [...p, col]));
+
   // Every additional source must have valid join keys before we can build.
   const joinsConfigured = sources
     .slice(1)
     .every((s) => s.joinLeftOn && s.joinRightOn);
 
+  const isOcel = buildMode === 'ocel';
+
+  // Designation differs by mode: standard needs a single case id, OCEL needs at
+  // least one object-type column. Activity + timestamp (events) are required in
+  // both modes.
+  const designationReady = isOcel ? objectTypeColumns.length > 0 : !!caseIdColumn;
+
   const canBuild =
     sources.length > 0 &&
     joinsConfigured &&
-    caseIdColumn &&
+    designationReady &&
     events.length > 0 &&
     events.every((e) => e.activity_name && e.timestamp_column) &&
     !!logName;
@@ -300,7 +388,6 @@ export default function EventLogBuilderPage() {
         project_id: projectId,
         name: logName,
         staging_path: primary.preview.staging_path,
-        case_id_column: caseIdColumn,
         events: events.map((e) => ({
           activity_name: e.activity_name,
           timestamp_column: e.timestamp_column,
@@ -308,9 +395,40 @@ export default function EventLogBuilderPage() {
         resource_column: resourceColumn || null,
         passthrough_columns: passthrough,
         ...(isMultiSource ? { additional_sources, joins } : {}),
+        ...(isOcel
+          ? // OCEL mode: case_id is ignored server-side; designate object types.
+            { ocel_mode: true, object_type_columns: objectTypeColumns }
+          : {
+              case_id_column: caseIdColumn,
+              // Recipes are case-centric; only attach in standard mode.
+              ...(selectedRecipeId ? { recipe_id: selectedRecipeId } : {}),
+            }),
       });
-      addNotification({ type: 'success', title: `Built event log: ${r.total_events} events` });
-      navigate(`/process/${r.event_log_id}`);
+
+      if (isOcel) {
+        const ocelId = r.ocel_id;
+        if (!ocelId) throw new Error('Build succeeded but no OCEL id was returned');
+        addNotification({
+          type: 'success',
+          title: `Built OCEL: ${r.event_count ?? 0} events · ${r.object_count ?? 0} objects`,
+        });
+        navigate(`/ocpm/${ocelId}`);
+      } else {
+        addNotification({ type: 'success', title: `Built event log: ${r.total_events} events` });
+        // Surface what the content pack provisioned, if anything.
+        if (r.recipe_applied) {
+          const { alerts_created, kpis_created, reference_model_attached } = r.recipe_applied;
+          const packName = selectedRecipe?.process_name ?? 'content pack';
+          const parts = [`${alerts_created} alert${alerts_created === 1 ? '' : 's'}`, `${kpis_created} KPI${kpis_created === 1 ? '' : 's'}`];
+          addNotification({
+            type: 'success',
+            title: `Applied ${packName}`,
+            message: `Created ${parts.join(' + ')}${reference_model_attached ? ' · reference model attached for conformance' : ''}.`,
+            duration: 8000,
+          });
+        }
+        navigate(`/process/${r.event_log_id}`);
+      }
     } catch (err: unknown) {
       addNotification({ type: 'error', title: 'Build failed', message: errMsg(err) });
     } finally {
@@ -327,7 +445,7 @@ export default function EventLogBuilderPage() {
       <PageHeader
         title="Event Log Builder"
         icon={Wand2}
-        description="Turn one or more wide tables with timestamp columns into a standard event log"
+        description="Turn one or more wide tables with timestamp columns into a standard or object-centric (OCEL) event log"
         backTo={-1}
       />
 
@@ -517,29 +635,177 @@ export default function EventLogBuilderPage() {
             </div>
           </div>
 
+          {/* ── Content pack (recipe) picker ────────────────────────────── */}
+          {recipesLoaded && recipes.length > 0 && (
+            <div className="rounded-lg border border-line bg-surface-1 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Package size={14} className="text-accent" />
+                <h2 className="text-[13px] font-semibold text-fg">Start from a content pack</h2>
+                {selectedRecipe && <span className="badge badge-accent">{selectedRecipe.category}</span>}
+              </div>
+              <p className="mb-3 flex items-center gap-1 text-[11px] text-fg-faint">
+                <Info size={11} /> A pack pre-fills the process scaffold below (events, case id,
+                passthrough columns). It uses the pack's logical column names — re-point each one to
+                your uploaded columns. Picking a pack also provisions its alerts, KPIs and reference
+                model when you build.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  className="input min-w-[260px] flex-1"
+                  value={selectedRecipeId}
+                  onChange={(e) => {
+                    const next = recipes.find((r) => r.id === e.target.value);
+                    if (next) applyRecipe(next);
+                    else clearRecipe();
+                  }}
+                >
+                  <option value="">— Build manually (no pack) —</option>
+                  {recipes.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.process_name}
+                      {r.connector_type ? ` · ${r.connector_type}` : ''}
+                    </option>
+                  ))}
+                </select>
+                {selectedRecipe && (
+                  <button
+                    onClick={clearRecipe}
+                    className="btn-ghost flex items-center gap-1 text-[11px]"
+                    title="Clear pack and build manually"
+                  >
+                    <X size={12} /> Clear pack
+                  </button>
+                )}
+              </div>
+
+              {selectedRecipe && (
+                <div className="mt-3 space-y-2 rounded border border-accent/30 bg-accent/5 p-3">
+                  {selectedRecipe.description && (
+                    <p className="text-[11px] text-fg-muted">{selectedRecipe.description}</p>
+                  )}
+                  <div>
+                    <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-fg-faint">
+                      Tables this pack expects
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {selectedRecipe.required_tables.map((t) => (
+                        <span
+                          key={t.name}
+                          className="badge badge-slate"
+                          title={`${t.role}${t.description ? ` — ${t.description}` : ''}${
+                            t.source_hint ? ` · ${t.source_hint}` : ''
+                          }`}
+                        >
+                          {t.name}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="mt-1.5 flex items-center gap-1 text-[10px] text-fg-faint">
+                      <Info size={11} /> Map your uploaded data onto these logical tables — upload the
+                      table(s) above, then adjust the case id, events and join keys to your actual
+                      column names below.
+                    </p>
+                  </div>
+                  {selectedRecipe.sample_kpis.length > 0 && (
+                    <div className="text-[10px] text-fg-faint">
+                      Includes KPIs: {selectedRecipe.sample_kpis.join(', ')}
+                    </div>
+                  )}
+                  {selectedRecipe.notes && (
+                    <p className="text-[10px] text-fg-faint">{selectedRecipe.notes}</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ── Step 3: Mapping + events ────────────────────────────────── */}
           <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
             <div className="rounded-lg border border-line bg-surface-1 p-4">
               <h2 className="mb-3 text-[13px] font-semibold text-fg">Configuration</h2>
               <div className="space-y-3">
+                <Field label="Log type">
+                  <div className="grid grid-cols-2 gap-2">
+                    {(
+                      [
+                        { mode: 'standard' as const, icon: Database, label: 'Standard event log', hint: 'One case id' },
+                        { mode: 'ocel' as const, icon: Boxes, label: 'Object-centric (OCEL)', hint: 'Multiple object types' },
+                      ]
+                    ).map(({ mode, icon: Icon, label, hint }) => {
+                      const active = buildMode === mode;
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => setBuildMode(mode)}
+                          aria-pressed={active}
+                          className={`flex flex-col items-start gap-0.5 rounded border px-3 py-2 text-left transition-colors ${
+                            active
+                              ? 'border-accent bg-accent/10 text-accent'
+                              : 'border-line text-fg-muted hover:border-accent/40'
+                          }`}
+                        >
+                          <span className="flex items-center gap-1.5 text-[11px] font-semibold">
+                            <Icon size={13} /> {label}
+                          </span>
+                          <span className="text-[10px] text-fg-faint">{hint}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
                 <Field label="New event log name">
                   <input className="input w-full" value={logName} onChange={(e) => setLogName(e.target.value)} />
                 </Field>
-                <Field label="Case ID column">
-                  <select
-                    className="input w-full"
-                    value={caseIdColumn}
-                    onChange={(e) => setCaseIdColumn(e.target.value)}
-                  >
-                    <option value="">— Select —</option>
-                    {wideColumns.map((c) => (
-                      <option key={c.name} value={c.name}>
-                        {c.name}
-                        {isMultiSource ? ` (${c.sourceLabel})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                {isOcel ? (
+                  <Field label="Object types (one per column)">
+                    <p className="mb-1.5 flex items-center gap-1 text-[10px] text-fg-faint">
+                      <Info size={11} /> Each selected column becomes one OCEL object type. The case id
+                      is not used in object-centric mode.
+                    </p>
+                    <div className="flex flex-wrap gap-1">
+                      {wideColumns.map((c) => {
+                        const sel = objectTypeColumns.includes(c.name);
+                        return (
+                          <button
+                            key={c.name}
+                            type="button"
+                            onClick={() => toggleObjectType(c.name)}
+                            aria-pressed={sel}
+                            className={`rounded border px-2 py-0.5 text-[10px] ${
+                              sel ? 'border-accent bg-accent/10 text-accent' : 'border-line text-fg-muted'
+                            }`}
+                            title={isMultiSource ? c.sourceLabel : undefined}
+                          >
+                            {c.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {objectTypeColumns.length > 0 && (
+                      <p className="mt-1.5 text-[10px] text-fg-faint">
+                        {objectTypeColumns.length} object type
+                        {objectTypeColumns.length === 1 ? '' : 's'} selected
+                      </p>
+                    )}
+                  </Field>
+                ) : (
+                  <Field label="Case ID column">
+                    <select
+                      className="input w-full"
+                      value={caseIdColumn}
+                      onChange={(e) => setCaseIdColumn(e.target.value)}
+                    >
+                      <option value="">— Select —</option>
+                      {wideColumns.map((c) => (
+                        <option key={c.name} value={c.name}>
+                          {c.name}
+                          {isMultiSource ? ` (${c.sourceLabel})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
                 <Field label="Resource column (optional)">
                   <select
                     className="input w-full"
@@ -626,13 +892,20 @@ export default function EventLogBuilderPage() {
             {!joinsConfigured && (
               <span className="text-[11px] text-amber-500">Set join keys for every added source</span>
             )}
+            {joinsConfigured && isOcel && objectTypeColumns.length === 0 && (
+              <span className="text-[11px] text-amber-500">Select at least one object-type column</span>
+            )}
             <button
               onClick={handleBuild}
               disabled={!canBuild || building}
               className="btn-primary flex items-center gap-2 disabled:opacity-50"
             >
-              <Wand2 size={14} />
-              {building ? 'Building...' : 'Build event log'}
+              {isOcel ? <Boxes size={14} /> : <Wand2 size={14} />}
+              {building
+                ? 'Building...'
+                : isOcel
+                  ? 'Build as OCEL'
+                  : 'Build event log'}
             </button>
           </div>
         </>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Sparkles, Coins, Bot } from 'lucide-react';
+import { Sparkles, Coins, Bot, ShieldCheck } from 'lucide-react';
 import {
   ScatterChart,
   Scatter,
@@ -59,6 +59,7 @@ interface BubbleDatum {
   z: number; // $ recoverable (re-priced client-side)
   hours: number;
   tierIdx: number;
+  readiness_score: number;
 }
 
 export default function AutomationRoiPage() {
@@ -119,6 +120,7 @@ export default function AutomationRoiPage() {
         z: Math.round(p.cost),
         hours: p.hours,
         tierIdx,
+        readiness_score: p.c.readiness_score ?? 0,
       };
     });
     return { bubbles, totalRecoverable, totalHours };
@@ -156,16 +158,47 @@ export default function AutomationRoiPage() {
         <>
           {/* Headline + assumption sliders */}
           <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <div className="card relative overflow-hidden p-5 lg:col-span-1">
-              <div className="flex items-center gap-2 text-fg-muted">
-                <Coins size={15} className="text-success" />
-                <span className="text-[11px] font-semibold uppercase tracking-wider">Recoverable / year</span>
+            <div className="flex flex-col gap-4 lg:col-span-1">
+              {/* Recoverable value card */}
+              <div className="card relative overflow-hidden p-5 flex-1">
+                <div className="flex items-center gap-2 text-fg-muted">
+                  <Coins size={15} className="text-success" />
+                  <span className="text-[11px] font-semibold uppercase tracking-wider">Recoverable / year</span>
+                </div>
+                <p className="mt-2 text-4xl font-bold tabular-nums text-fg">{money(totalRecoverable)}</p>
+                <p className="mt-1 text-[12px] text-fg-muted">
+                  ≈ {formatNumber(Math.round(totalHours))} hours of manual work across {bubbles.length} activities
+                </p>
+                <Sparkles size={64} className="pointer-events-none absolute -bottom-3 -right-3 text-success/10" />
               </div>
-              <p className="mt-2 text-4xl font-bold tabular-nums text-fg">{money(totalRecoverable)}</p>
-              <p className="mt-1 text-[12px] text-fg-muted">
-                ≈ {formatNumber(Math.round(totalHours))} hours of manual work across {bubbles.length} activities
-              </p>
-              <Sparkles size={64} className="pointer-events-none absolute -bottom-3 -right-3 text-success/10" />
+              {/* Dollar ROI card — top candidate by readiness */}
+              {ranked.length > 0 && (() => {
+                const topByReadiness = [...ranked].sort((a, b) => b.readiness_score - a.readiness_score)[0];
+                return (
+                  <div className="card p-5">
+                    <div className="flex items-center gap-2 text-fg-muted">
+                      <ShieldCheck size={15} className="text-accent" />
+                      <span className="text-[11px] font-semibold uppercase tracking-wider">Highest readiness</span>
+                    </div>
+                    <p className="mt-2 text-lg font-semibold text-fg truncate">{topByReadiness.activity}</p>
+                    <div className="mt-2 flex items-center gap-3">
+                      <div>
+                        <p className="text-[10px] text-fg-faint">Readiness score</p>
+                        <p className="text-2xl font-bold tabular-nums text-accent">
+                          {topByReadiness.readiness_score.toFixed(0)}
+                          <span className="text-sm font-normal text-fg-muted">/100</span>
+                        </p>
+                      </div>
+                      <div className="border-l border-line pl-3">
+                        <p className="text-[10px] text-fg-faint">Dollar ROI</p>
+                        <p className="text-2xl font-bold tabular-nums text-success">
+                          {money(topByReadiness.z)}<span className="text-sm font-normal text-fg-muted">/yr</span>
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="card p-5 lg:col-span-2">
@@ -279,25 +312,38 @@ export default function AutomationRoiPage() {
             <div className="card p-4 lg:col-span-1">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-fg-faint">Top targets</p>
               <div className="mt-3 space-y-2">
-                {ranked.slice(0, 8).map((b, i) => (
-                  <div key={b.activity} className="flex items-center gap-3">
-                    <div
-                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
-                      style={{ backgroundColor: TIERS[b.tierIdx].color }}
-                    >
-                      {i + 1}
+                {ranked.slice(0, 8).map((b, i) => {
+                  // Readiness badge colour: green ≥70, amber ≥40, slate <40
+                  const rBadgeColor =
+                    b.readiness_score >= 70
+                      ? 'text-success'
+                      : b.readiness_score >= 40
+                      ? 'text-amber-500'
+                      : 'text-fg-faint';
+                  return (
+                    <div key={b.activity} className="flex items-center gap-3">
+                      <div
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+                        style={{ backgroundColor: TIERS[b.tierIdx].color }}
+                      >
+                        {i + 1}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[12px] font-medium text-fg">{b.activity}</p>
+                        <div className="flex items-center gap-2 text-[10px] text-fg-muted">
+                          <span>{formatNumber(b.y)} runs · {formatDuration(b.x)} each</span>
+                          <span className={`flex items-center gap-0.5 ${rBadgeColor}`}>
+                            <ShieldCheck size={9} />
+                            {b.readiness_score.toFixed(0)}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="shrink-0 text-[12px] font-semibold tabular-nums text-success">
+                        {money(b.z)}
+                      </span>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[12px] font-medium text-fg">{b.activity}</p>
-                      <p className="text-[10px] text-fg-muted">
-                        {formatNumber(b.y)} runs · {formatDuration(b.x)} each
-                      </p>
-                    </div>
-                    <span className="shrink-0 text-[12px] font-semibold tabular-nums text-success">
-                      {money(b.z)}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>

@@ -15,7 +15,7 @@ import uuid as uuid_mod
 from uuid import UUID
 
 import aiofiles
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,6 +81,7 @@ from app.services.ocel_store import (
     _ocel_owners,
     _ocel_store,
     _read_ocel,
+    write_ocel_to_disk,
 )
 
 
@@ -96,12 +97,27 @@ def _sanitize_id(name: str) -> str:
 @router.post("/upload", response_model=OCELUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_ocel(
     file: UploadFile = File(..., description="OCEL file (.jsonocel, .xmlocel, .sqlite, .json, .xml)"),
+    project_id: UUID | None = Form(
+        None,
+        description=(
+            "Project to attach the uploaded OCEL to. When supplied the OCEL is "
+            "persisted as an EventLog row so it survives a worker restart; when "
+            "omitted it is kept in-memory only (legacy behaviour)."
+        ),
+    ),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Upload an OCEL file.  The file is saved to the upload directory, read with
     pm4py, and cached in memory.  Returns basic stats about the log.
+
+    When ``project_id`` is supplied an ``EventLog`` row (``log_type='ocel'``)
+    is created and its UUID becomes the returned ``id``. This is what makes the
+    OCEL reloadable after a worker restart: ``_get_ocel_or_404`` looks the row
+    up by id and re-parses ``file_path`` from disk on a cache miss. Without a
+    persisted row the in-memory cache is the only copy and a restart 404s every
+    subsequent OCPM call — the bug this fix closes.
     """
     if file.filename is None:
         raise HTTPException(
@@ -119,10 +135,22 @@ async def upload_ocel(
             ),
         )
 
-    # Save to UPLOAD_DIR/ocel/<uuid>_filename
-    ocel_dir = os.path.join(settings.UPLOAD_DIR, "ocel")
+    # If a project is named, confirm write access before any disk I/O.
+    if project_id is not None:
+        from app.api.deps import assert_project_access
+
+        await assert_project_access(project_id, db, current_user)
+
+    # Persist alongside other project files when attached to a project so the
+    # reload-from-disk path lines up with the rest of the upload pipeline;
+    # otherwise fall back to the shared UPLOAD_DIR/ocel staging dir.
+    if project_id is not None:
+        ocel_dir = os.path.join(settings.UPLOAD_DIR, str(project_id))
+    else:
+        ocel_dir = os.path.join(settings.UPLOAD_DIR, "ocel")
     os.makedirs(ocel_dir, exist_ok=True)
-    unique_filename = f"{uuid_mod.uuid4().hex}_{file.filename}"
+    safe_filename = os.path.basename(file.filename).replace("\x00", "")
+    unique_filename = f"{uuid_mod.uuid4().hex}_{safe_filename}"
     file_path = os.path.join(ocel_dir, unique_filename)
 
     async with aiofiles.open(file_path, "wb") as out_file:
@@ -155,9 +183,36 @@ async def upload_ocel(
 
     event_count, object_count = _ocel_counts(ocel)
 
-    ocel_id = str(uuid_mod.uuid4())
+    if project_id is not None:
+        # Persist as a real EventLog row so the OCEL is reloadable after a
+        # restart. Mirrors the OCEL branch of api/event_logs.py upload: the
+        # row id IS the ocel_id, log_type='ocel', file_path on disk.
+        try:
+            activities_count = len(set(ocel.get_extended_table()["ocel:activity"].tolist())) if event_count > 0 else 0
+        except Exception:
+            activities_count = 0
+
+        event_log = EventLog(
+            project_id=project_id,
+            name=safe_filename,
+            file_path=file_path,
+            source_type=SourceType.upload,
+            log_type=LogType.ocel.value,
+            status=EventLogStatus.ready,
+            object_types=list(object_types),
+            total_events=event_count,
+            total_cases=object_count,  # objects as "cases" for OCEL
+            total_activities=activities_count,
+        )
+        db.add(event_log)
+        await db.commit()
+        await db.refresh(event_log)
+        ocel_id = str(event_log.id)
+    else:
+        ocel_id = str(uuid_mod.uuid4())
+        _ocel_owners[ocel_id] = current_user.id
+
     _ocel_store[ocel_id] = ocel
-    _ocel_owners[ocel_id] = current_user.id
 
     return OCELUploadResponse(
         id=ocel_id,
@@ -2261,6 +2316,16 @@ async def ocel_state_aware(
     ocel_id: str,
     state_column: str = Query(..., description="Object attribute column that carries the state label"),
     object_type: str | None = Query(None, description="Optional — restrict to a single object type"),
+    persist: bool = Query(
+        True,
+        description=(
+            "When true (default) the enriched OCEL — with the synthetic "
+            "state-transition events materialised — replaces the stored log "
+            "in memory and on disk, so downstream OC-DFG / OPerA / "
+            "improvement-report runs actually see the new events. Set false "
+            "to compute the summary without mutating the stored log."
+        ),
+    ),
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2277,6 +2342,11 @@ async def ocel_state_aware(
     logs without any custom preprocessing, and is backward-compatible
     with every OCEL 2.0 reader (the new events are regular events
     with a distinguished activity name prefix).
+
+    Unless ``persist=false``, the enriched OCEL is written back to the
+    EventLog's file on disk AND replaces the in-memory cache entry, so a
+    subsequent ``_get_ocel_or_404`` (in this process or after a restart)
+    returns the enriched log and downstream analyses run on it.
     """
     from app.services.ocel_state_aware import enrich_ocel_with_state_transitions
     import asyncio as _asyncio
@@ -2290,6 +2360,7 @@ async def ocel_state_aware(
             ocel,
             state_column,
             object_type,
+            persist,  # materialize — only build the new OCEL when we'll persist it
         )
     except ValueError as e:
         raise HTTPException(
@@ -2302,7 +2373,87 @@ async def ocel_state_aware(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"State-aware enrichment failed: {e}",
         )
+
+    # ``materialized_ocel`` is the enriched pm4py OCEL object; it is not
+    # JSON-serialisable and is absent from StateAwareResponse, so pop it out
+    # of the dict before constructing the response either way.
+    enriched_ocel = result.pop("materialized_ocel", None)
+
+    if persist and enriched_ocel is not None:
+        try:
+            await _asyncio.to_thread(
+                _persist_enriched_ocel_sync, ocel_id, enriched_ocel
+            )
+        except Exception as e:
+            # Persistence is best-effort: the summary is still valid even if
+            # the write-back failed, but surface a hint to the caller.
+            logger.error(
+                "State-aware enrichment computed but persisting failed for %s: %s",
+                ocel_id, e, exc_info=True,
+            )
+            result["note"] = (
+                (result.get("note") + " | " if result.get("note") else "")
+                + f"enrichment NOT persisted ({e})"
+            )
+
     return StateAwareResponse(**result)
+
+
+def _persist_enriched_ocel_sync(ocel_id: str, enriched_ocel) -> None:
+    """Write the enriched OCEL back to disk and refresh the in-memory cache
+    and EventLog totals so every later reload sees the materialised events.
+
+    Synchronous (dispatched to a thread): uses the sync engine, mirroring
+    ``_resolve_ocel_disk_path_sync`` / ``_get_ocel_or_404``. Writes to the
+    EventLog's existing ``file_path`` when there is a backing row (so the
+    next disk reload returns the enriched log) and always updates the
+    in-memory store so same-process analyses see it immediately.
+    """
+    from sqlalchemy.orm import Session as SyncSession
+    from app.database import sync_engine
+
+    # Always refresh the in-memory cache first — same-process downstream
+    # analyses (OC-DFG / OPerA / improvement-report) read from here.
+    _ocel_store[ocel_id] = enriched_ocel
+
+    event_count, object_count = _ocel_counts(enriched_ocel)
+    try:
+        activities_count = len(
+            set(enriched_ocel.events["ocel:activity"].astype(str).tolist())
+        )
+    except Exception:
+        activities_count = 0
+
+    with SyncSession(sync_engine) as db:
+        event_log = db.query(EventLog).filter(
+            EventLog.id == UUID(ocel_id),
+            EventLog.log_type == LogType.ocel.value,
+        ).first()
+
+        if event_log is None or not event_log.file_path:
+            # Synthetic conversion id (no backing row / no file): the
+            # in-memory refresh above is the only durable place to put it.
+            logger.info(
+                "State-aware: ocel %s has no EventLog file_path; "
+                "enriched log kept in memory only",
+                ocel_id,
+            )
+            return
+
+        # Overwrite the existing file in place so file_path stays valid and
+        # the next disk reload returns the enriched OCEL.
+        write_ocel_to_disk(enriched_ocel, event_log.file_path)
+
+        # Keep the row's totals consistent with the now-enriched log.
+        event_log.total_events = event_count
+        event_log.total_cases = object_count
+        event_log.total_activities = activities_count
+        db.add(event_log)
+        db.commit()
+        logger.info(
+            "State-aware: persisted enriched OCEL %s to %s (%d events, %d objects)",
+            ocel_id, event_log.file_path, event_count, object_count,
+        )
 
 
 # ---------------------------------------------------------------------------

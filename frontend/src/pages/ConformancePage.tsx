@@ -9,12 +9,14 @@ import {
   TrendingUp,
   Download,
   Target,
+  Activity,
 } from 'lucide-react';
 import PageHeader from '@/components/common/PageHeader';
 import EmptyState from '@/components/common/EmptyState';
 import HintTooltip from '@/components/common/Tooltip';
 import ComplianceMatrix from '@/components/Conformance/ComplianceMatrix';
 import SideBySideConformance from '@/components/Conformance/SideBySideConformance';
+import StochasticConformancePanel from '@/components/Conformance/StochasticConformancePanel';
 import ExplainButton from '@/components/AI/ExplainButton';
 import { mining as miningApi } from '@/api/client';
 import { useUIStore } from '@/store';
@@ -132,11 +134,14 @@ function MetricGauge({
   );
 }
 
+type ConformanceTab = 'token_replay' | 'stochastic';
+
 export default function ConformancePage() {
   const { eventLogId } = useParams<{ eventLogId: string }>();
   const navigate = useNavigate();
   const addNotification = useUIStore((s) => s.addNotification);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [activeTab, setActiveTab] = useState<ConformanceTab>('token_replay');
 
   const { eventLog } = useEventLogData(eventLogId);
 
@@ -254,7 +259,44 @@ export default function ConformancePage() {
         }
       />
 
-      {conformance && (
+      {/* Tab switcher */}
+      <div className="mt-6 flex gap-1 border-b border-line">
+        <button
+          type="button"
+          onClick={() => setActiveTab('token_replay')}
+          className={clsx(
+            'flex items-center gap-1.5 border-b-2 px-4 py-2 text-[13px] font-medium transition-colors',
+            activeTab === 'token_replay'
+              ? 'border-accent text-accent'
+              : 'border-transparent text-fg-muted hover:text-fg',
+          )}
+        >
+          <ShieldCheck size={14} />
+          Token Replay / Alignment
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('stochastic')}
+          className={clsx(
+            'flex items-center gap-1.5 border-b-2 px-4 py-2 text-[13px] font-medium transition-colors',
+            activeTab === 'stochastic'
+              ? 'border-accent text-accent'
+              : 'border-transparent text-fg-muted hover:text-fg',
+          )}
+        >
+          <Activity size={14} />
+          Stochastic (EMD)
+        </button>
+      </div>
+
+      {/* Stochastic tab */}
+      {activeTab === 'stochastic' && eventLogId && (
+        <div className="mt-6">
+          <StochasticConformancePanel eventLogId={eventLogId} />
+        </div>
+      )}
+
+      {activeTab === 'token_replay' && conformance && (
         <>
           {/* Metrics */}
           <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -437,15 +479,15 @@ export default function ConformancePage() {
         />
       )}
 
-      {/* Compliance matrix (Minit / ARIS parity) */}
-      {eventLogId && conformance && (
+      {/* Compliance matrix (Minit / ARIS parity) — token-replay tab only */}
+      {activeTab === 'token_replay' && eventLogId && conformance && (
         <div className="mt-8">
           <ComplianceMatrix eventLogId={eventLogId} />
         </div>
       )}
 
-      {/* Side-by-side conformance (ARIS parity) */}
-      {eventLogId && conformance && (
+      {/* Side-by-side conformance (ARIS parity) — token-replay tab only */}
+      {activeTab === 'token_replay' && eventLogId && conformance && (
         <div className="mt-8">
           <SideBySideConformance eventLogId={eventLogId} />
         </div>

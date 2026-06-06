@@ -461,6 +461,19 @@ class MiningEngine:
         """
         return _formal_methods.get_declare(df, support_threshold)
 
+    def check_timed_declare(self, df: pd.DataFrame, constraints: list[dict]) -> dict:
+        """Evaluate SLA-aware (time-bounded) DECLARE-style constraints.
+
+        Supports response/precedence within a time bound T plus
+        existence/absence within T of the case start, with an optional
+        Mon–Fri business-days duration mode. Returns per-constraint
+        violation_rate, a bounded sample of violating_case_ids, and
+        time-to-violation stats.
+
+        Implementation in app.services.mining.formal_methods.
+        """
+        return _formal_methods.check_timed_declare(df, constraints)
+
     def check_four_eyes(
         self, df: pd.DataFrame, activity1: str, activity2: str
     ) -> dict:
