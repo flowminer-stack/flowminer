@@ -174,25 +174,26 @@ export default function EACapabilityMapPage() {
               </div>
             )}
           </div>
-          <div className="flex flex-col gap-1 text-[10px]">
+          <div className="flex shrink-0 items-center gap-1 text-[10px]">
             <button
               type="button"
               onClick={() => handleAddChild(node.id)}
-              className="rounded border border-line bg-surface-0 px-2 py-0.5 text-fg-muted hover:border-accent hover:text-accent"
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded border border-line bg-surface-0 px-2 py-1 text-fg-muted hover:border-accent hover:text-accent"
             >
               <Plus size={9} /> Sub
             </button>
             <button
               type="button"
               onClick={() => handleLinkLog(node)}
-              className="rounded border border-line bg-surface-0 px-2 py-0.5 text-fg-muted hover:border-accent hover:text-accent"
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded border border-line bg-surface-0 px-2 py-1 text-fg-muted hover:border-accent hover:text-accent"
             >
-              + Log
+              <Plus size={9} /> Log
             </button>
             <button
               type="button"
               onClick={() => handleDelete(node.id)}
-              className="rounded border border-line bg-surface-0 px-2 py-0.5 text-fg-muted hover:border-danger hover:text-danger"
+              aria-label="Delete capability"
+              className="inline-flex items-center rounded border border-line bg-surface-0 px-2 py-1 text-fg-muted hover:border-danger hover:text-danger"
             >
               <Trash2 size={9} />
             </button>
