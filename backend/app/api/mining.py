@@ -2157,6 +2157,12 @@ class ExplainResponse(BaseModel):
     kind: str | None = None
     prefix_length: int | None = None
     current_activity: str | None = None
+    base_value: float | None = Field(
+        default=None, description="Model expected value (waterfall start)"
+    )
+    predicted_value: float | None = Field(
+        default=None, description="This case's prediction (waterfall end)"
+    )
     top_contributions: list[FeatureContribution] = Field(default_factory=list)
     model_info: dict | None = None
 

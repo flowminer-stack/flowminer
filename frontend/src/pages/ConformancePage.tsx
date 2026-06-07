@@ -17,6 +17,7 @@ import HintTooltip from '@/components/common/Tooltip';
 import ComplianceMatrix from '@/components/Conformance/ComplianceMatrix';
 import SideBySideConformance from '@/components/Conformance/SideBySideConformance';
 import StochasticConformancePanel from '@/components/Conformance/StochasticConformancePanel';
+import ConformanceDeviationHeatmap from '@/components/Conformance/ConformanceDeviationHeatmap';
 import ExplainButton from '@/components/AI/ExplainButton';
 import { mining as miningApi } from '@/api/client';
 import { useUIStore } from '@/store';
@@ -467,6 +468,9 @@ export default function ConformancePage() {
               </div>
             </div>
           )}
+
+          {/* Deviation heatmap */}
+          <ConformanceDeviationHeatmap conformance={conformance} />
         </>
       )}
 

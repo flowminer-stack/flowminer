@@ -46,6 +46,10 @@ export interface ExplainResponse {
   kind?: string;
   prefix_length?: number;
   current_activity?: string;
+  /** Model expected value — the waterfall's starting point. */
+  base_value?: number | null;
+  /** This case's prediction — the waterfall's end point. */
+  predicted_value?: number | null;
   top_contributions: FeatureContribution[];
   model_info?: Record<string, unknown>;
 }

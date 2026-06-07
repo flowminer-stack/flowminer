@@ -1218,12 +1218,39 @@ class PredictiveService:
         # Top-N by absolute contribution; keep the sign in the payload.
         scored.sort(key=lambda c: abs(c["contribution"]), reverse=True)
 
+        # Base (expected) value + this case's prediction so the client can draw
+        # a TRUE waterfall: base + Σ(all contributions) = prediction. Best-effort
+        # for outcome (probability space) and remaining_time (seconds); left as
+        # None for next_activity / unusual shapes (client falls back to bars).
+        base_value: float | None = None
+        predicted_value: float | None = None
+        try:
+            ev = explainer.expected_value
+            if kind == "remaining_time":
+                raw_base = float(ev[0] if hasattr(ev, "__len__") else ev)
+                base_value = max(0.0, raw_base)  # seconds are non-negative
+                predicted_value = max(0.0, float(model.predict(X_case)[0]))
+            elif kind == "outcome":
+                # Binary classifier: expected_value is [P(class0), P(class1)].
+                # Only trust the positive-class base when the shape is exactly
+                # binary; otherwise leave None and the client falls back to bars.
+                if hasattr(ev, "__len__") and len(ev) == 2:
+                    base_value = float(ev[1])
+                elif not hasattr(ev, "__len__"):
+                    base_value = float(ev)
+                if hasattr(model, "predict_proba"):
+                    predicted_value = float(model.predict_proba(X_case)[0][1])
+        except Exception:  # noqa: BLE001 - waterfall extras are best-effort
+            base_value, predicted_value = None, None
+
         return {
             "available": True,
             "case_id": str(case_id),
             "kind": kind,
             "prefix_length": int(latest_row.iloc[0]["prefix_length"]),
             "current_activity": str(latest_row.iloc[0]["last_activity"]),
+            "base_value": round(base_value, 6) if base_value is not None else None,
+            "predicted_value": round(predicted_value, 6) if predicted_value is not None else None,
             "top_contributions": scored[:top_n],
             "model_info": payload.get("model_info", {}),
         }

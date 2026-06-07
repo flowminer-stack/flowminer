@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Eye, EyeOff, Percent, Hash, Flame, Search, X } from 'lucide-react';
+import { Eye, EyeOff, Percent, Hash, Flame, Search, X, GitBranch, Zap } from 'lucide-react';
 import clsx from 'clsx';
 import type { ProcessNode } from '@/types';
 
@@ -18,6 +18,10 @@ interface MapToolbarProps {
   setHighlightSlow: (v: boolean) => void;
   hiddenActivities: Set<string>;
   setHiddenActivities: (s: Set<string>) => void;
+  // Opt-in renderer toggle (trial). Only rendered when `setRenderEngine`
+  // is supplied, so existing callers are unaffected.
+  renderEngine?: 'cytoscape' | 'sigma';
+  setRenderEngine?: (e: 'cytoscape' | 'sigma') => void;
 }
 
 export default function MapToolbar({
@@ -28,6 +32,8 @@ export default function MapToolbar({
   setHighlightSlow,
   hiddenActivities,
   setHiddenActivities,
+  renderEngine,
+  setRenderEngine,
 }: MapToolbarProps) {
   const [panelOpen, setPanelOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -89,6 +95,40 @@ export default function MapToolbar({
           %
         </button>
       </div>
+
+      {/* Render-engine toggle (trial) — only when wired by the parent. */}
+      {setRenderEngine && (
+        <div className="flex items-center gap-px rounded-md border border-line bg-surface-1 p-0.5">
+          <button
+            type="button"
+            onClick={() => setRenderEngine('cytoscape')}
+            className={clsx(
+              'flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors',
+              renderEngine !== 'sigma'
+                ? 'bg-accent text-white'
+                : 'text-fg-muted hover:text-fg',
+            )}
+            title="Classic graph renderer"
+          >
+            <GitBranch size={10} />
+            Graph
+          </button>
+          <button
+            type="button"
+            onClick={() => setRenderEngine('sigma')}
+            className={clsx(
+              'flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors',
+              renderEngine === 'sigma'
+                ? 'bg-accent text-white'
+                : 'text-fg-muted hover:text-fg',
+            )}
+            title="Experimental WebGL renderer (trial)"
+          >
+            <Zap size={10} />
+            Sigma
+          </button>
+        </div>
+      )}
 
       {/* Highlight slow toggle */}
       <button

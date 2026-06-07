@@ -32,6 +32,9 @@ import ProcessMap from '@/components/ProcessMap/ProcessMap';
 // small logs that open on the 2D map never pay for it.
 const ProcessCityCanvas = lazy(() => import('@/components/ProcessMap/ProcessCityCanvas'));
 import MapToolbar from '@/components/ProcessMap/MapToolbar';
+// Opt-in WebGL renderer (trial) — lazy so its sigma/graphology chunk only
+// loads when the user actually flips to the Sigma engine.
+const ProcessMapSigma = lazy(() => import('@/components/ProcessMap/ProcessMapSigma'));
 import NodeContextMenu from '@/components/ProcessMap/NodeContextMenu';
 import CommentThread from '@/components/ProcessMap/CommentThread';
 import ActivityTreemapDrawer from '@/components/ProcessMap/ActivityTreemapDrawer';
@@ -181,6 +184,9 @@ export default function ProcessViewPage() {
 
   // ── Competitive UX state ─────────────────────────────────────────
   const [labelMode, setLabelMode] = useState<'absolute' | 'relative'>('absolute');
+  // Opt-in renderer for the process map. Defaults to the battle-tested
+  // cytoscape path; 'sigma' is an additive WebGL trial for very large DFGs.
+  const [renderEngine, setRenderEngine] = useState<'cytoscape' | 'sigma'>('cytoscape');
   const [highlightSlow, setHighlightSlow] = useState(false);
   const [hiddenActivities, setHiddenActivities] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<{ node: ProcessNode; x: number; y: number } | null>(null);
@@ -1007,6 +1013,8 @@ export default function ProcessViewPage() {
                         setHighlightSlow={setHighlightSlow}
                         hiddenActivities={hiddenActivities}
                         setHiddenActivities={setHiddenActivities}
+                        renderEngine={renderEngine}
+                        setRenderEngine={setRenderEngine}
                       />
                     </div>
                     {/* Apromore-style filter expression bar + chip
@@ -1024,34 +1032,60 @@ export default function ProcessViewPage() {
                       attributeColumns={eventLog?.additional_columns ?? []}
                     />
                     <div className="flex-1">
-                      <ProcessMap
-                        nodes={discovery.nodes}
-                        edges={discovery.edges}
-                        complexity={complexity}
-                        layoutName={mapLayout}
-                        labelMode={labelMode}
-                        highlightSlow={highlightSlow}
-                        hiddenActivities={hiddenActivities}
-                        onNodeClick={(node) => {
-                          setSelectedNode(node.id);
-                          setActivityDetailOpen(true);
-                        }}
-                        onAddActivityFilter={(activity) =>
-                          addChip({
-                            type: 'activity',
-                            label: `activity: ${activity}`,
-                            payload: { activity },
-                          })
-                        }
-                        onContextMenu={(node, pos) =>
-                          setContextMenu({ node, x: pos.x, y: pos.y })
-                        }
-                        onEdgeClick={(edge) =>
-                          setSelectedEdge({ source: edge.source, target: edge.target })
-                        }
-                        selectedNode={selectedNode ?? undefined}
-                        cyRef={cyRef}
-                      />
+                      {renderEngine === 'sigma' ? (
+                        // WebGL trial renderer. No cyRef — replay/export
+                        // controls stay wired to the cytoscape path and are
+                        // simply unavailable here (they no-op against a null
+                        // cyRef, so they can't crash).
+                        <Suspense
+                          fallback={
+                            <div className="flex h-full items-center justify-center">
+                              <LoadingSpinner size="lg" text="Loading WebGL renderer…" />
+                            </div>
+                          }
+                        >
+                          <ProcessMapSigma
+                            nodes={discovery.nodes}
+                            edges={discovery.edges}
+                            labelMode={labelMode}
+                            hiddenActivities={hiddenActivities}
+                            onNodeClick={(node) => {
+                              setSelectedNode(node.id);
+                              setActivityDetailOpen(true);
+                            }}
+                            selectedNode={selectedNode ?? undefined}
+                          />
+                        </Suspense>
+                      ) : (
+                        <ProcessMap
+                          nodes={discovery.nodes}
+                          edges={discovery.edges}
+                          complexity={complexity}
+                          layoutName={mapLayout}
+                          labelMode={labelMode}
+                          highlightSlow={highlightSlow}
+                          hiddenActivities={hiddenActivities}
+                          onNodeClick={(node) => {
+                            setSelectedNode(node.id);
+                            setActivityDetailOpen(true);
+                          }}
+                          onAddActivityFilter={(activity) =>
+                            addChip({
+                              type: 'activity',
+                              label: `activity: ${activity}`,
+                              payload: { activity },
+                            })
+                          }
+                          onContextMenu={(node, pos) =>
+                            setContextMenu({ node, x: pos.x, y: pos.y })
+                          }
+                          onEdgeClick={(edge) =>
+                            setSelectedEdge({ source: edge.source, target: edge.target })
+                          }
+                          selectedNode={selectedNode ?? undefined}
+                          cyRef={cyRef}
+                        />
+                      )}
                     </div>
                   </div>
                 ) : (

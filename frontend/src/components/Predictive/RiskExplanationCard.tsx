@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import { predictive } from '@/api/predictive';
 import type { ExplainResponse } from '@/types/predictive';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import ShapWaterfall from '@/components/Predictive/ShapWaterfall';
 
 interface RiskExplanationCardProps {
   eventLogId: string;
@@ -69,6 +70,12 @@ export default function RiskExplanationCard({
     1e-9,
     ...contributions.map((c) => Math.abs(c.contribution)),
   );
+  // Newer models return both anchors, enabling a true additive waterfall.
+  // Older models / cached cases lack them — fall back to diverging spark-bars.
+  const canWaterfall =
+    data != null &&
+    data.base_value != null &&
+    data.predicted_value != null;
 
   return (
     <div className="card p-5">
@@ -153,6 +160,10 @@ export default function RiskExplanationCard({
             <p className="mt-4 text-[12px] text-fg-muted">
               No feature contributions were returned for this case.
             </p>
+          ) : canWaterfall ? (
+            <div className="mt-3">
+              <ShapWaterfall data={data} />
+            </div>
           ) : (
             <div className="mt-4 space-y-2.5">
               {contributions.map((c, i) => {
