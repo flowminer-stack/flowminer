@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Brain,
 } from 'lucide-react';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import clsx from 'clsx';
 import PageHeader from '@/components/common/PageHeader';
 import EmptyState from '@/components/common/EmptyState';
@@ -185,6 +186,18 @@ export default function CasesAtRiskPage() {
             Refresh
           </button>
         }
+      />
+
+      <FeatureGuide
+        storageKey="cases-at-risk"
+        icon={ShieldAlert}
+        title="Predicting SLA breaches before they happen"
+        lead="A model trained on your completed cases scores each in-flight case for its probability of breaching the SLA, so you can intervene on the risky ones now. Expand a case to see the factors driving its score."
+        steps={[
+          { label: 'Sort by risk', detail: 'the highest breach-probability cases sit at the top' },
+          { label: 'Open the explanation', detail: 'the SHAP waterfall shows what pushes each case\'s risk up or down' },
+          { label: 'Act early', detail: 'escalate or reassign the cases most likely to breach' },
+        ]}
       />
 
       {/* Controls */}

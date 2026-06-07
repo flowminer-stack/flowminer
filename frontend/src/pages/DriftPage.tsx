@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import PageHeader from '@/components/common/PageHeader';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
 import {
@@ -435,6 +436,18 @@ export default function DriftPage() {
             {summary?.total_windows ?? 0} windows
           </>
         }
+      />
+
+      <FeatureGuide
+        storageKey="drift"
+        icon={TrendingUp}
+        title="What concept-drift detection finds"
+        lead="Processes change over time — a new system, policy or season shifts how work flows. Drift detection scans the log chronologically and flags the points where process behaviour measurably changed."
+        steps={[
+          { label: 'Spot the change points', detail: 'markers show when behaviour shifted' },
+          { label: 'Compare before vs after', detail: 'see how the process differed across a drift point' },
+          { label: 'Trace the cause', detail: 'line drift dates up with known operational changes' },
+        ]}
       />
 
       {/* Parameters bar */}

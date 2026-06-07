@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { BarChart3, Boxes, ChevronRight, Loader2 } from 'lucide-react';
+import { BarChart3, Boxes, ChevronRight, GitCompareArrows, Loader2 } from 'lucide-react';
 import {
   BarChart,
   Bar,
@@ -18,6 +18,7 @@ import {
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
 import PageHeader from '@/components/common/PageHeader';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import { useUIStore } from '@/store';
 import DpBenchmarkPanel from '@/components/Scorecards/DpBenchmarkPanel';
 
@@ -140,6 +141,18 @@ export default function BenchmarkPage() {
         icon={BarChart3}
         description="Compare KPIs across event logs (federated: no raw data shared). OCEL logs expose each object type as a selectable flattened view."
         backTo={-1}
+      />
+
+      <FeatureGuide
+        storageKey="benchmark"
+        icon={GitCompareArrows}
+        title="What benchmarking compares"
+        lead="Put your event logs side by side on the same KPIs — cycle time, throughput, conformance, rework — to see which process, region or period performs best and where the gaps are."
+        steps={[
+          { label: 'Pick logs to compare', detail: 'choose two or more event logs' },
+          { label: 'Compare the KPIs', detail: 'each metric is shown across logs with best/worst highlighted' },
+          { label: 'Investigate the gap', detail: 'drill into the laggard to see why it trails' },
+        ]}
       />
 
       <div className="rounded-lg border border-line bg-surface-1 p-4">

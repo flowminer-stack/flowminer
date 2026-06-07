@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Sparkles, Coins, Bot, ShieldCheck } from 'lucide-react';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import {
   ScatterChart,
   Scatter,
@@ -146,6 +147,18 @@ export default function AutomationRoiPage() {
         backTo={eventLogId ? `/process/${eventLogId}` : -1}
         description="Where automation pays off. Each bubble is an activity — bigger and redder means more money recoverable by automating it. Drag the assumptions to your own numbers."
         subtitle={eventLog?.name ?? 'Event Log'}
+      />
+
+      <FeatureGuide
+        storageKey="automation-roi"
+        icon={Bot}
+        title="Where automation pays off"
+        lead="Estimates the time and money tied up in each activity and ranks where automating or eliminating work would return the most — turning the process map into a prioritised business case."
+        steps={[
+          { label: 'Read the ranking', detail: 'activities ordered by automation upside in time and money' },
+          { label: 'Adjust the assumptions', detail: 'set the loaded hourly cost and automatable fraction to fit your org' },
+          { label: 'Build the case', detail: 'use the top candidates to justify an improvement initiative' },
+        ]}
       />
 
       {bubbles.length === 0 ? (

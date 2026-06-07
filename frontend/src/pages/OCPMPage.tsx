@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Boxes,
+  Layers,
   RefreshCw,
   ChevronDown,
   X,
@@ -14,6 +15,7 @@ import { ocel, projects as projectsApi, eventLogs as logsApi } from '@/api/clien
 import { useUIStore } from '@/store';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import PageHeader from '@/components/common/PageHeader';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import ImprovementReport from '@/components/OCPM/ImprovementReport';
 import OcelDropZone from '@/components/OCPM/OcelDropZone';
 import MultiSelect from '@/components/OCPM/MultiSelect';
@@ -194,6 +196,17 @@ export default function OCPMPage() {
         title="Object-Centric Process Mining"
         icon={Boxes}
         description="Discover object-centric directly-follows graphs from OCEL 2.0 data or convert existing event logs."
+      />
+      <FeatureGuide
+        storageKey="ocpm"
+        icon={Layers}
+        title="What object-centric process mining shows"
+        lead="Real processes touch several object types at once — an order, its items, the invoice. OCPM mines them together from an OCEL log instead of flattening everything to one case, so you can see how objects interact (e.g. an invoice stuck waiting on a not-yet-received purchase order)."
+        steps={[
+          { label: 'Choose object types', detail: 'pick which objects appear in the object-centric graph' },
+          { label: 'Read the OC-DFG', detail: 'edges are colour-coded per object type and annotated with frequency' },
+          { label: 'Inspect relationships', detail: 'see where one object type waits on or drives another' },
+        ]}
       />
 
       {/* Loading state when auto-loading from event log */}

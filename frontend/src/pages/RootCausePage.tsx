@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { Search, TrendingUp, TrendingDown } from 'lucide-react';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import HintTooltip from '@/components/common/Tooltip';
 import PageHeader from '@/components/common/PageHeader';
 import EmptyState from '@/components/common/EmptyState';
@@ -67,6 +68,18 @@ export default function RootCausePage() {
         backTo={-1}
         description="Attributes that correlate with longer or shorter case durations. Significant correlations suggest factors affecting performance."
         subtitle={`${eventLog?.name ?? 'Event Log'} — identifying factors affecting process performance`}
+      />
+
+      <FeatureGuide
+        storageKey="root-cause"
+        icon={Search}
+        title="Why some cases run slow"
+        lead="Correlates case attributes (region, type, resource, value…) with outcomes like long duration or SLA breach, and ranks which factors most distinguish the slow or failing cases from the rest."
+        steps={[
+          { label: 'Pick an outcome', detail: 'e.g. cases over the SLA or in the slowest quartile' },
+          { label: 'Read the drivers', detail: 'the attributes most associated with that outcome rank at the top' },
+          { label: 'Confirm on a slice', detail: 'filter to a driver and check the process for that segment' },
+        ]}
       />
 
       {rootCause && (

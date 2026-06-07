@@ -8,6 +8,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import PageHeader from '@/components/common/PageHeader';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
 import CostOfQualityCard from '@/components/Scorecards/CostOfQualityCard';
@@ -180,6 +181,17 @@ export default function ProcessHealthPage() {
         backTo={eventLogId ? `/process/${eventLogId}` : -1}
         description="A single composite score for how well this process is running right now — conformance, SLA, flow consistency, and rework rolled into one number, with the dimensions broken out."
         subtitle={eventLog?.name ?? 'Event Log'}
+      />
+      <FeatureGuide
+        storageKey="process-health"
+        icon={HeartPulse}
+        title="How the health score is built"
+        lead="A single 0-100 score that blends the signals that matter — conformance, SLA adherence, flow consistency and rework — into one number you can track over time, with each contributing dimension broken out so you know what is dragging it down."
+        steps={[
+          { label: 'Read the score', detail: 'higher is healthier' },
+          { label: 'Open the factors', detail: 'see which dimensions hurt the score most' },
+          { label: 'Fix the worst', detail: 'jump into the underlying analysis to act' },
+        ]}
       />
 
       {/* KPI command bar */}

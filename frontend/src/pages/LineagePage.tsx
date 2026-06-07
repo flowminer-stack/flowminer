@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   GitBranch,
+  Share2,
   LayoutDashboard,
   Bell,
   Workflow,
@@ -21,6 +22,7 @@ import clsx from 'clsx';
 import { lineage as lineageApi } from '@/api/lineage';
 import type { EventLogLineage, LineageRef } from '@/types/lineage';
 import PageHeader from '@/components/common/PageHeader';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import EmptyState from '@/components/common/EmptyState';
 import ErrorState from '@/components/common/ErrorState';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
@@ -199,6 +201,17 @@ export default function LineagePage() {
             {log.created_at && <> &middot; added {formatDate(log.created_at)}</>}
           </>
         }
+      />
+      <FeatureGuide
+        storageKey="lineage"
+        icon={Share2}
+        title="What data lineage tells you"
+        lead="Every dashboard, KPI, alert, report and scheduled job that depends on this event log, in one place — so before you re-ingest, filter or delete the log you know exactly what breaks downstream."
+        steps={[
+          { label: 'Scan the dependents', detail: 'grouped by type — dashboards, reports, alerts, KPIs' },
+          { label: 'Gauge the blast radius', detail: 'the counts show how widely this log is relied on' },
+          { label: 'Change it safely', detail: 'update or retire the log knowing what it affects' },
+        ]}
       />
 
       {/* Deletion-impact banner */}

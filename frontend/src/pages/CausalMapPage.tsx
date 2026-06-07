@@ -5,6 +5,7 @@ import cytoscape, { Core, EventObject, NodeSingular } from 'cytoscape';
 import dagre from 'cytoscape-dagre';
 import { Workflow, Maximize2, Info } from 'lucide-react';
 import PageHeader from '@/components/common/PageHeader';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
 import EmptyState from '@/components/common/EmptyState';
@@ -250,6 +251,18 @@ export default function CausalMapPage() {
         backTo={eventLogId ? `/process/${eventLogId}` : -1}
         description="What actually causes slowdowns — not just what follows what. A red arrow means the source activity makes the target slower; a green ⊣ means it speeds it up. Thicker = stronger effect. Click an activity to see what's dragging it."
         subtitle={eventLog?.name ?? 'Event Log'}
+      />
+
+      <FeatureGuide
+        storageKey="causal-map"
+        icon={Workflow}
+        title="Causation, not just correlation"
+        lead="Other views show what correlates with slow cases; this uses causal discovery (DirectLiNGAM) to estimate what actually drives what — which activities cause others to speed up (green) or slow down (red), with arrow thickness for effect strength."
+        steps={[
+          { label: 'Read the arrows', detail: 'direction is cause to effect; red slows, green speeds up' },
+          { label: 'Tune sensitivity', detail: 'the top-links and minimum-strength sliders filter weak edges' },
+          { label: 'Treat it as a hypothesis', detail: 'causal estimates point you where to look — validate before acting on them' },
+        ]}
       />
 
       {/* Controls + legend */}
