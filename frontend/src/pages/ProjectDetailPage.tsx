@@ -329,6 +329,37 @@ export default function ProjectDetailPage() {
             <div className="mt-5">
               <DisabledUploadButton label="Upload Event Log" />
             </div>
+
+            {!demoMode && (
+              <div className="mx-auto mt-8 max-w-2xl">
+                <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
+                  What you'll unlock once a log is in
+                </p>
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                  {[
+                    { icon: GitBranch, label: 'Discover', desc: 'Process map, variants & happy paths' },
+                    { icon: AlertTriangle, label: 'Performance', desc: 'Bottlenecks, rework & drift' },
+                    { icon: CheckCircle2, label: 'Conformance', desc: 'Fitness, SLA & rule checks' },
+                    { icon: TrendingUp, label: 'Prediction', desc: 'Cases at risk & automation ROI' },
+                    { icon: BarChart3, label: 'Behavior', desc: 'Dotted chart, clusters & social net' },
+                    { icon: Target, label: 'Value', desc: 'Health score, KPIs & sustainability' },
+                  ].map((c) => (
+                    <div
+                      key={c.label}
+                      className="flex items-start gap-2.5 rounded-lg border border-line bg-surface-1 p-3 text-left"
+                    >
+                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent/10">
+                        <c.icon size={14} className="text-accent" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[12px] font-semibold text-fg">{c.label}</p>
+                        <p className="mt-0.5 text-[11px] leading-snug text-fg-muted">{c.desc}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-2.5">

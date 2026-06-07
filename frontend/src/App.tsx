@@ -100,6 +100,26 @@ function PublicRoute({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+// ─── Admin Route (defense-in-depth) ──────────────────────────────────────────
+
+function AdminRoute({ children }: { children: ReactNode }) {
+  const user = useAuthStore((s) => s.user);
+  // Wait for the user to load before deciding, so a non-admin never briefly
+  // sees an admin page during hydration. ProtectedRoute already gates auth and
+  // the backend enforces admin on these endpoints — this is belt-and-braces.
+  if (!user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-surface-0">
+        <LoadingSpinner size="lg" />
+      </div>
+    );
+  }
+  if (user.role !== 'admin') {
+    return <Navigate to="/projects" replace />;
+  }
+  return <>{children}</>;
+}
+
 const LazyFallback = (
   <div className="flex min-h-[60vh] items-center justify-center">
     <LoadingSpinner size="md" />
@@ -247,9 +267,9 @@ export default function App() {
           <Route path="/connectors" element={<ConnectorsPage />} />
           <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/admin/users" element={<UserManagementPage />} />
-          <Route path="/admin/audit" element={<AuditLogPage />} />
-          <Route path="/admin/usage" element={<UsageAdminPage />} />
+          <Route path="/admin/users" element={<AdminRoute><UserManagementPage /></AdminRoute>} />
+          <Route path="/admin/audit" element={<AdminRoute><AuditLogPage /></AdminRoute>} />
+          <Route path="/admin/usage" element={<AdminRoute><UsageAdminPage /></AdminRoute>} />
           <Route path="/lineage/:eventLogId" element={<LineagePage />} />
           <Route path="/kpis" element={<KpisPage />} />
           <Route path="/kpis/:projectId" element={<KpisPage />} />
