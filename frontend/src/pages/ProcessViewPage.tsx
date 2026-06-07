@@ -73,6 +73,11 @@ type Tab = 'map' | 'city' | 'happy_path' | 'bpmn' | 'cases' | 'analysis';
 // is available) instead of a 2D hairball; smaller logs open on the flat map.
 const LARGE_EDGE_THRESHOLD = 80;
 
+// At/above this edge count the cytoscape canvas map gets sluggish, so the Sigma
+// WebGL renderer auto-engages on the Map tab (still overridable via the toolbar
+// toggle). Smaller logs keep cytoscape + dagre — better layout + minimap/replay.
+const SIGMA_EDGE_THRESHOLD = 600;
+
 /* ── Page ─────────────────────────────────────────────────────────────── */
 
 export default function ProcessViewPage() {
@@ -187,6 +192,20 @@ export default function ProcessViewPage() {
   // Opt-in renderer for the process map. Defaults to the battle-tested
   // cytoscape path; 'sigma' is an additive WebGL trial for very large DFGs.
   const [renderEngine, setRenderEngine] = useState<'cytoscape' | 'sigma'>('cytoscape');
+
+  // Auto-engage Sigma for very large graphs, once per log. A manual toggle
+  // afterward sticks because the ref blocks re-evaluation for the same log.
+  const autoEngineLogRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!discovery || !eventLogId || autoEngineLogRef.current === eventLogId) return;
+    autoEngineLogRef.current = eventLogId;
+    // Apply the per-log auto-default BOTH ways: Sigma for very large graphs,
+    // else cytoscape — so a small log opened after a large one falls back to
+    // cytoscape instead of staying on Sigma. A manual toggle still holds while
+    // you stay on the same log (the ref blocks re-evaluation).
+    const large = discovery.edges.length >= SIGMA_EDGE_THRESHOLD && isWebGLAvailable();
+    setRenderEngine(large ? 'sigma' : 'cytoscape');
+  }, [discovery, eventLogId]);
   const [highlightSlow, setHighlightSlow] = useState(false);
   const [hiddenActivities, setHiddenActivities] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<{ node: ProcessNode; x: number; y: number } | null>(null);

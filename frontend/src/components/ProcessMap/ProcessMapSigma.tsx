@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Graph from 'graphology';
 import Sigma from 'sigma';
-import forceAtlas2 from 'graphology-layout-forceatlas2';
+import dagre from 'dagre';
 import { FlaskConical } from 'lucide-react';
 import type { ProcessNode, ProcessEdge } from '@/types';
 import { useUIStore } from '@/store';
@@ -12,7 +12,7 @@ import { formatNumber } from '@/utils/format';
  * the cytoscape ProcessMap for very large directed-follows graphs, where
  * cytoscape's canvas renderer starts to struggle. This is intentionally
  * additive and self-contained: it accepts the same core props the cytoscape
- * map uses and renders them with a force-directed layout.
+ * map uses and renders them with a hierarchical (dagre) layout.
  *
  * Trial scope: minimap, replay animation and image export are NOT supported
  * here — those controls remain wired to the cytoscape path. Selection,
@@ -118,8 +118,8 @@ const ProcessMapSigma: React.FC<ProcessMapSigmaProps> = ({
     const maxFreq = Math.max(...freqs);
     const totalFreq = visibleNodes.reduce((s, n) => s + n.frequency, 0) || 1;
 
-    // Seed positions on a circle so force-atlas2 has a non-degenerate start
-    // (all-at-origin makes the layout collapse).
+    // Seed positions on a circle as a fallback, so the map is never blank if
+    // the dagre layout below throws.
     const N = visibleNodes.length;
     visibleNodes.forEach((node, i) => {
       const angle = (2 * Math.PI * i) / N;
@@ -160,16 +160,30 @@ const ProcessMapSigma: React.FC<ProcessMapSigmaProps> = ({
       }
     }
 
-    // Synchronous force-directed layout (mutates x/y in place).
+    // Hierarchical (dagre) layout — process flows read left-to-right far more
+    // legibly than a force-directed blob. dagre handles cyclic DFGs (it breaks
+    // cycles internally) and is the same engine the cytoscape map uses, so the
+    // layout cost matches; Sigma's win is the WebGL *rendering*, not the layout.
     try {
-      forceAtlas2.assign(g, {
-        iterations: 300,
-        settings: {
-          scalingRatio: 10,
-          gravity: 1,
-          adjustSizes: true,
-          barnesHutOptimize: g.order > 500,
-        },
+      const dg = new dagre.graphlib.Graph({ directed: true });
+      dg.setGraph({ rankdir: 'LR', nodesep: 28, ranksep: 90, edgesep: 14, marginx: 16, marginy: 16 });
+      dg.setDefaultEdgeLabel(() => ({}));
+      g.forEachNode((id, attr) => {
+        const s = (attr.size as number) ?? 10;
+        dg.setNode(id, { width: s * 2, height: s * 2 });
+      });
+      g.forEachEdge((_e, _a, source, target) => {
+        if (source !== target) dg.setEdge(source, target); // self-loops add no rank info
+      });
+      dagre.layout(dg);
+      g.forEachNode((id) => {
+        const p = dg.node(id);
+        if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+          g.setNodeAttribute(id, 'x', p.x);
+          // dagre LR and sigma share a y-down convention, so no flip is needed;
+          // sigma's autoRescale frames the graph to the viewport on render.
+          g.setNodeAttribute(id, 'y', p.y);
+        }
       });
     } catch {
       /* layout failure must not blank the map — keep the circle seed */
