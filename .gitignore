@@ -114,6 +114,11 @@ backend/uploads/
 # sometimes accumulate in the repo root during active development.
 # Keep them out of the public repo entirely.
 celonisDemo/
+
+# Normalized-DataFrame parquet sidecars written by mining_engine.load_event_log
+# (a per-mapping cache that lives next to each uploaded log; safe to delete).
+*.norm.parquet
+
 conformance-timeout.png
 efg-debug.png
 efg-fixed.png

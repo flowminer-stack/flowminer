@@ -3,6 +3,8 @@ Mining engine that orchestrates all process mining services.
 Provides a unified interface for loading event logs and running analyses.
 """
 
+import glob
+import hashlib
 import logging
 import os
 import threading
@@ -51,6 +53,25 @@ _DF_CACHE_MAX = 2  # bounded so steady memory stays small (≈2 logs)
 _DF_CACHE_LOCK = threading.Lock()
 
 
+# ── Normalized-DataFrame disk cache (parquet sidecar) ────────────────
+# The in-process LRU above only helps WITHIN one process between two analyses
+# of the same log. The first parse of a big XES still costs ~1.4 GB transient
+# RAM + ~5 s, and it happens fresh in every container (backend, worker) and
+# after every restart — which is what pushes the worker (2 GB, concurrency=2)
+# toward OOM when scheduled drift/anomaly/report tasks fire together.
+#
+# So the first time we normalize a log we also persist the result as a parquet
+# sidecar next to the source file (which lives in the shared /data/uploads
+# volume). Every later load — in ANY container, after ANY restart — becomes a
+# read_parquet (~0.5 s, ~250 MB, negligible transient) instead of re-parsing
+# the source. The sidecar is keyed by the column mapping (a re-mapping produces
+# a different sidecar) and invalidated by source mtime, so it can never serve a
+# frame that doesn't match the current mapping.
+def _normalized_sidecar_path(file_path: str, mapping_key: tuple) -> str:
+    h = hashlib.sha1(repr(mapping_key).encode("utf-8", "replace")).hexdigest()[:12]
+    return f"{file_path}.{h}.norm.parquet"
+
+
 class MiningEngine:
     """
     Orchestration engine for all process mining services.
@@ -83,17 +104,22 @@ class MiningEngine:
         """
         Load and normalize an event log file into a standardized DataFrame.
 
-        Delegates to IngestionService.load_event_log, with an mtime-keyed
-        in-process LRU so repeated analyses of the same log don't re-parse it.
+        Delegates to IngestionService.load_event_log, with two cache layers:
+        an mtime-keyed in-process LRU (so repeated analyses in one process don't
+        re-parse) and a parquet sidecar on disk (so the expensive first parse of
+        a large XES/CSV is reused across containers and restarts). See
+        _normalized_sidecar_path.
         """
         try:
             mtime = os.path.getmtime(file_path)
         except OSError:
             mtime = None  # un-stat-able path → don't cache, just parse
 
-        key = (file_path, mtime, case_id_col, activity_col,
-               timestamp_col, resource_col, cost_col)
+        mapping_key = (case_id_col, activity_col, timestamp_col,
+                       resource_col, cost_col)
+        key = (file_path, mtime, *mapping_key)
 
+        # Layer 1: in-process LRU.
         if mtime is not None:
             with _DF_CACHE_LOCK:
                 cached = _DF_CACHE.get(key)
@@ -101,6 +127,20 @@ class MiningEngine:
                     _DF_CACHE.move_to_end(key)
                     return cached.copy(deep=False)
 
+        # Layer 2: parquet sidecar on disk. Valid only if it is at least as new
+        # as the source (an older sidecar means the source was re-uploaded under
+        # the same path, so the cache is stale and we re-parse).
+        sidecar = _normalized_sidecar_path(file_path, mapping_key) if mtime is not None else None
+        if sidecar and os.path.exists(sidecar):
+            try:
+                if os.path.getmtime(sidecar) >= mtime:
+                    df = pd.read_parquet(sidecar)
+                    self._remember_df(key, df)
+                    return df.copy(deep=False)
+            except Exception as e:  # noqa: BLE001 — corrupt/partial sidecar
+                logger.warning("Ignoring unreadable parquet sidecar %s: %s", sidecar, e)
+
+        # Cache miss on both layers — parse the source.
         df = self.ingestion_service.load_event_log(
             file_path=file_path,
             case_id_col=case_id_col,
@@ -110,14 +150,44 @@ class MiningEngine:
             cost_col=cost_col,
         )
 
+        # Persist the sidecar for next time (best-effort — a write failure just
+        # means the next load re-parses). Drop sibling sidecars for stale
+        # mappings/mtimes so the cache for one log can't accumulate on disk.
+        if sidecar:
+            try:
+                # Write to a process/thread-unique temp file then atomically
+                # rename, so a concurrent cold load (e.g. two worker tasks) can
+                # never read a half-written parquet.
+                tmp = f"{sidecar}.tmp.{os.getpid()}.{threading.get_ident()}"
+                df.to_parquet(tmp, index=False)
+                os.replace(tmp, sidecar)
+                for old in glob.glob(f"{glob.escape(file_path)}.*.norm.parquet"):
+                    if old != sidecar:
+                        try:
+                            os.remove(old)
+                        except OSError:
+                            pass
+            except Exception as e:  # noqa: BLE001 — parquet write can fail on exotic dtypes
+                logger.warning("Could not write parquet sidecar %s: %s", sidecar, e)
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
+
         if mtime is not None:
-            with _DF_CACHE_LOCK:
-                _DF_CACHE[key] = df
-                _DF_CACHE.move_to_end(key)
-                while len(_DF_CACHE) > _DF_CACHE_MAX:
-                    _DF_CACHE.popitem(last=False)
+            self._remember_df(key, df)
             return df.copy(deep=False)
         return df
+
+    @staticmethod
+    def _remember_df(key: tuple, df: pd.DataFrame) -> None:
+        """Insert a frame into the in-process LRU, evicting the oldest."""
+        with _DF_CACHE_LOCK:
+            _DF_CACHE[key] = df
+            _DF_CACHE.move_to_end(key)
+            while len(_DF_CACHE) > _DF_CACHE_MAX:
+                _DF_CACHE.popitem(last=False)
 
     def run_discovery(
         self, df: pd.DataFrame, algorithm: str = "dfg", parameters: dict = None
