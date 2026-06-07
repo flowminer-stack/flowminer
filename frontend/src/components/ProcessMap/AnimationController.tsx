@@ -10,6 +10,15 @@ interface AnimationControllerProps {
   eventLogId: string;
   cyRef: React.RefObject<Core | null>;
   isReady: boolean;
+  /**
+   * Optional replay hooks for renderers other than cytoscape (e.g. the Sigma
+   * WebGL map). `onFlash` fires for every replayed event with the sanitized
+   * target node id and the source→target edge key (null when the event has no
+   * source). `onReset` fires when the replay is reset. Both are additive: the
+   * existing cytoscape animation still runs unchanged when `cyRef` is set.
+   */
+  onFlash?: (nodeId: string, edgeKey: string | null) => void;
+  onReset?: () => void;
 }
 
 const SPEEDS = [1, 2, 5, 10] as const;
@@ -32,6 +41,8 @@ const AnimationController: React.FC<AnimationControllerProps> = ({
   eventLogId,
   cyRef,
   isReady,
+  onFlash,
+  onReset,
 }) => {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,10 +80,17 @@ const AnimationController: React.FC<AnimationControllerProps> = ({
   // Flash a node + edge
   const flashEvent = useCallback(
     (evt: TimelineEvent) => {
+      const targetId = toNodeId(evt.activity);
+      const edgeId = evt.source ? `${toNodeId(evt.source)}->${targetId}` : null;
+
+      // Renderer-agnostic hook FIRST — fires even when cyRef is null (Sigma
+      // mode). ids/edge-key match the Sigma graph keys exactly, so no remap.
+      onFlash?.(targetId, edgeId);
+
+      // Cytoscape-specific animation below; no-ops in Sigma mode (cy == null).
       const cy = cyRef.current;
       if (!cy) return;
 
-      const targetId = toNodeId(evt.activity);
       const targetNode = cy.getElementById(targetId);
 
       // Flash the target node
@@ -92,9 +110,7 @@ const AnimationController: React.FC<AnimationControllerProps> = ({
       }
 
       // Flash the edge from source → target
-      if (evt.source) {
-        const sourceId = toNodeId(evt.source);
-        const edgeId = `${sourceId}->${targetId}`;
+      if (evt.source && edgeId) {
         const edge = cy.getElementById(edgeId);
 
         if (edge && edge.length > 0) {
@@ -114,7 +130,7 @@ const AnimationController: React.FC<AnimationControllerProps> = ({
         }
       }
     },
-    [cyRef],
+    [cyRef, onFlash],
   );
 
   // Inject flash CSS styles into cytoscape
@@ -197,7 +213,9 @@ const AnimationController: React.FC<AnimationControllerProps> = ({
   const handleReset = () => {
     setIsPlaying(false);
     setCursor(0);
-    // Clear all flashes
+    // Renderer-agnostic reset hook (Sigma mode).
+    onReset?.();
+    // Clear all flashes (cytoscape mode).
     const cy = cyRef.current;
     if (cy) {
       cy.nodes().removeClass('anim-flash');

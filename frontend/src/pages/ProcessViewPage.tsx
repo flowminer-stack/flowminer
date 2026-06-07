@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { type Core } from 'cytoscape';
 import {
@@ -214,6 +214,19 @@ export default function ProcessViewPage() {
   useFilterUrlSync(eventLogId);
 
   const cyRef = useRef<Core | null>(null);
+  // Imperative handle the Sigma WebGL renderer populates so AnimationController
+  // can drive replay flashing there (cyRef is null in sigma mode).
+  const sigmaAnimRef = useRef<{
+    flash: (n: string, e: string | null) => void;
+    reset: () => void;
+  } | null>(null);
+  // Stable callbacks so AnimationController's flashEvent/play-interval don't
+  // get torn down and rebuilt on every parent re-render during playback.
+  const handleSigmaFlash = useCallback(
+    (n: string, e: string | null) => sigmaAnimRef.current?.flash(n, e),
+    [],
+  );
+  const handleSigmaReset = useCallback(() => sigmaAnimRef.current?.reset(), []);
 
   const handleAlgorithmChange = (algo: Algorithm) => {
     setAlgorithm(algo);
@@ -1052,10 +1065,10 @@ export default function ProcessViewPage() {
                     />
                     <div className="flex-1">
                       {renderEngine === 'sigma' ? (
-                        // WebGL trial renderer. No cyRef — replay/export
-                        // controls stay wired to the cytoscape path and are
-                        // simply unavailable here (they no-op against a null
-                        // cyRef, so they can't crash).
+                        // WebGL renderer. No cyRef — the renderer has its own
+                        // minimap + PNG/CSV export, and replay is driven via
+                        // sigmaAnimRef (AnimationController's onFlash/onReset),
+                        // so the cytoscape cy path simply no-ops here.
                         <Suspense
                           fallback={
                             <div className="flex h-full items-center justify-center">
@@ -1073,6 +1086,7 @@ export default function ProcessViewPage() {
                               setActivityDetailOpen(true);
                             }}
                             selectedNode={selectedNode ?? undefined}
+                            animationRef={sigmaAnimRef}
                           />
                         </Suspense>
                       ) : (
@@ -1128,6 +1142,8 @@ export default function ProcessViewPage() {
                     eventLogId={eventLogId}
                     cyRef={cyRef}
                     isReady={!!cyRef.current}
+                    onFlash={handleSigmaFlash}
+                    onReset={handleSigmaReset}
                   />
                 </div>
               )}

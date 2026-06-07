@@ -1,11 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Graph from 'graphology';
 import Sigma from 'sigma';
 import dagre from 'dagre';
-import { FlaskConical } from 'lucide-react';
+import { FlaskConical, Download, Image, FileSpreadsheet, ChevronDown, Map as MapIcon, X } from 'lucide-react';
+import clsx from 'clsx';
 import type { ProcessNode, ProcessEdge } from '@/types';
 import { useUIStore } from '@/store';
 import { formatNumber } from '@/utils/format';
+import { buildNodesCsv, buildEdgesCsv, triggerDownload } from '@/utils/processMapExport';
 
 /**
  * Opt-in WebGL DFG renderer (Sigma.js + graphology) — a TRIAL alternative to
@@ -14,9 +16,11 @@ import { formatNumber } from '@/utils/format';
  * additive and self-contained: it accepts the same core props the cytoscape
  * map uses and renders them with a hierarchical (dagre) layout.
  *
- * Trial scope: minimap, replay animation and image export are NOT supported
- * here — those controls remain wired to the cytoscape path. Selection,
- * hover-dimming, hidden activities, label mode and click-to-inspect all work.
+ * Parity with the cytoscape map: selection, hover-dimming, hidden activities,
+ * label mode, click-to-inspect, a bird's-eye minimap, PNG/CSV export and
+ * replay-animation flashing (driven by AnimationController via `animationRef`)
+ * all work here. Every add-on is best-effort/guarded so a failure can never
+ * blank the WebGL renderer.
  */
 
 export interface ProcessMapSigmaProps {
@@ -26,6 +30,15 @@ export interface ProcessMapSigmaProps {
   selectedNode?: string;
   hiddenActivities?: Set<string>;
   labelMode?: 'absolute' | 'relative';
+  /**
+   * Optional imperative handle the parent populates so AnimationController can
+   * flash nodes/edges during replay. `flash(nodeId, edgeKey)` highlights a node
+   * (and optionally an edge) cyan for ~500ms; `reset()` clears all flashes.
+   */
+  animationRef?: React.MutableRefObject<{
+    flash: (nodeId: string, edgeKey: string | null) => void;
+    reset: () => void;
+  } | null>;
 }
 
 /* ── Theme palette ────────────────────────────────────────────────────── */
@@ -39,6 +52,8 @@ function getPalette(isDark: boolean) {
     edge: isDark ? '#3a3a40' : '#cdd1d8',
     label: isDark ? '#e0e0e4' : '#1a1d24',
     select: isDark ? '#06b6d4' : '#4f63b2',
+    // Replay flash — same cyan the cytoscape anim-flash uses, both themes.
+    flash: '#06b6d4',
     // Dim alpha applied to nodes/edges outside the highlighted neighbourhood.
     dimNode: isDark ? '#2f2f35' : '#e6e8ec',
     dimEdge: isDark ? '#26262b' : '#eef0f3',
@@ -75,6 +90,7 @@ const ProcessMapSigma: React.FC<ProcessMapSigmaProps> = ({
   selectedNode,
   hiddenActivities,
   labelMode = 'absolute',
+  animationRef,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
@@ -82,6 +98,18 @@ const ProcessMapSigma: React.FC<ProcessMapSigmaProps> = ({
 
   const theme = useUIStore((s) => s.theme);
   const isDark = theme === 'dark';
+
+  // Replay-flash state — sets of currently-flashing node ids / edge keys, plus
+  // their per-id removal timers. Read by the reducers; mutated by animationRef.
+  const flashNodesRef = useRef<Set<string>>(new Set());
+  const flashEdgesRef = useRef<Set<string>>(new Set());
+  const flashTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // Minimap + export overlay state.
+  const [minimapOpen, setMinimapOpen] = useState(true);
+  const [exportOpen, setExportOpen] = useState(false);
+  const minimapCanvasRef = useRef<HTMLCanvasElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
   // Hovered node id — drives neighbourhood dimming alongside `selectedNode`.
   const [hovered, setHovered] = useState<string | null>(null);
@@ -222,10 +250,19 @@ const ProcessMapSigma: React.FC<ProcessMapSigmaProps> = ({
       defaultEdgeColor: pal.edge,
       labelRenderedSizeThreshold: 6,
       nodeReducer: (key, data) => {
+        const res = { ...data };
+        // Replay flash takes precedence over selection / dimming so a flashed
+        // node always reads, even outside the focused neighbourhood.
+        if (flashNodesRef.current.has(key)) {
+          res.color = pal.flash;
+          res.highlighted = true;
+          res.zIndex = 2;
+          res.size = ((data.size as number) ?? 8) * 1.6;
+          return res;
+        }
         const sel = selectedRef.current;
         const hov = hoveredRef.current;
         const focus = hov ?? sel;
-        const res = { ...data };
         if (!focus) return res;
         const g = graphRef.current;
         const inFocus =
@@ -246,10 +283,17 @@ const ProcessMapSigma: React.FC<ProcessMapSigmaProps> = ({
         return res;
       },
       edgeReducer: (key, data) => {
+        const res = { ...data };
+        // Replay flash takes precedence: cyan + thicker.
+        if (flashEdgesRef.current.has(key)) {
+          res.color = pal.flash;
+          res.size = ((data.size as number) ?? 1) * 2.5;
+          res.zIndex = 2;
+          return res;
+        }
         const sel = selectedRef.current;
         const hov = hoveredRef.current;
         const focus = hov ?? sel;
-        const res = { ...data };
         if (!focus) return res;
         const g = graphRef.current;
         // hasEdge guard: during a rapid rebuild sigma may reduce an edge that
@@ -301,6 +345,329 @@ const ProcessMapSigma: React.FC<ProcessMapSigmaProps> = ({
     sigmaRef.current?.refresh();
   }, [selectedNode, hovered]);
 
+  /* ── Replay-animation handle ───────────────────────────────────────────
+   * Populate animationRef so AnimationController can flash nodes/edges during
+   * replay. Each flash (re-)arms a ~500ms removal timer keyed by id; on expiry
+   * the id leaves the set and a refresh re-runs the reducers (which un-flash).
+   * Everything is guarded so a stray call can never throw into the render loop.
+   */
+  useEffect(() => {
+    if (!animationRef) return;
+    const FLASH_MS = 500;
+
+    const refresh = () => {
+      try {
+        sigmaRef.current?.refresh();
+      } catch {
+        /* renderer mid-teardown — ignore */
+      }
+    };
+
+    const handle = {
+      flash: (nodeId: string, edgeKey: string | null) => {
+        try {
+          const g = graphRef.current;
+          // Only flash ids that exist in the current graph, so a stale replay
+          // event for a hidden/filtered activity is a silent no-op.
+          if (g && g.hasNode(nodeId)) {
+            flashNodesRef.current.add(nodeId);
+            const k = `node:${nodeId}`;
+            const prev = flashTimersRef.current.get(k);
+            if (prev) clearTimeout(prev);
+            flashTimersRef.current.set(
+              k,
+              setTimeout(() => {
+                flashNodesRef.current.delete(nodeId);
+                flashTimersRef.current.delete(k);
+                refresh();
+              }, FLASH_MS),
+            );
+          }
+          if (edgeKey && g && g.hasEdge(edgeKey)) {
+            flashEdgesRef.current.add(edgeKey);
+            const k = `edge:${edgeKey}`;
+            const prev = flashTimersRef.current.get(k);
+            if (prev) clearTimeout(prev);
+            flashTimersRef.current.set(
+              k,
+              setTimeout(() => {
+                flashEdgesRef.current.delete(edgeKey);
+                flashTimersRef.current.delete(k);
+                refresh();
+              }, FLASH_MS),
+            );
+          }
+          refresh();
+        } catch {
+          /* never let a flash break rendering */
+        }
+      },
+      reset: () => {
+        try {
+          flashTimersRef.current.forEach((t) => clearTimeout(t));
+          flashTimersRef.current.clear();
+          flashNodesRef.current.clear();
+          flashEdgesRef.current.clear();
+          refresh();
+        } catch {
+          /* ignore */
+        }
+      },
+    };
+
+    animationRef.current = handle;
+    return () => {
+      // Clear any in-flight flashes and detach the handle on unmount/rebuild.
+      flashTimersRef.current.forEach((t) => clearTimeout(t));
+      flashTimersRef.current.clear();
+      flashNodesRef.current.clear();
+      flashEdgesRef.current.clear();
+      if (animationRef.current === handle) animationRef.current = null;
+    };
+    // Re-bind when the renderer is recreated (graph/theme change) so the handle
+    // always refreshes the live instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animationRef, builtGraph, isDark]);
+
+  /* ── Minimap ──────────────────────────────────────────────────────────
+   * A sigma-native bird's-eye view (cytoscape-navigator is cytoscape-only).
+   * Draws each visible node as a dot scaled into the canvas, plus a stroked
+   * rectangle for the current viewport (derived via viewportToGraph on the two
+   * container corners). Redraws on every afterRender (covers pan/zoom + the
+   * initial frame) and on graph rebuild. All guarded so it never blanks the map.
+   */
+  const drawMinimap = useCallback(() => {
+    const canvas = minimapCanvasRef.current;
+    const sigma = sigmaRef.current;
+    const graph = graphRef.current;
+    if (!canvas || !sigma || !graph) return;
+    try {
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = canvas.clientWidth || 180;
+      const cssH = canvas.clientHeight || 120;
+      if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
+        canvas.width = Math.round(cssW * dpr);
+        canvas.height = Math.round(cssH * dpr);
+      }
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+
+      // Graph bounding box from raw node x/y attributes.
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      graph.forEachNode((_id, attr) => {
+        const x = attr.x as number;
+        const y = attr.y as number;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      });
+      if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
+
+      const pad = 8;
+      const gW = maxX - minX || 1;
+      const gH = maxY - minY || 1;
+      const sc = Math.min((cssW - pad * 2) / gW, (cssH - pad * 2) / gH);
+      // Centre the scaled graph within the minimap canvas.
+      const offX = (cssW - gW * sc) / 2;
+      const offY = (cssH - gH * sc) / 2;
+      const gx = (x: number) => offX + (x - minX) * sc;
+      const gy = (y: number) => offY + (y - minY) * sc;
+
+      const pal = getPalette(isDark);
+      // Nodes as dots (edges skipped for perf).
+      ctx.fillStyle = isDark ? '#7c8190' : '#9aa0ac';
+      graph.forEachNode((id, attr) => {
+        const x = attr.x as number;
+        const y = attr.y as number;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        // Flashing nodes pop cyan even in the minimap.
+        ctx.fillStyle = flashNodesRef.current.has(id)
+          ? pal.flash
+          : isDark
+            ? '#7c8190'
+            : '#9aa0ac';
+        ctx.beginPath();
+        ctx.arc(gx(x), gy(y), 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Current viewport rectangle, in graph space, via the two corners.
+      const tl = sigma.viewportToGraph({ x: 0, y: 0 });
+      const br = sigma.viewportToGraph({ x: sigma.getDimensions().width, y: sigma.getDimensions().height });
+      const rx1 = gx(Math.min(tl.x, br.x));
+      const ry1 = gy(Math.min(tl.y, br.y));
+      const rx2 = gx(Math.max(tl.x, br.x));
+      const ry2 = gy(Math.max(tl.y, br.y));
+      ctx.strokeStyle = pal.flash;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(
+        Math.max(0.5, rx1),
+        Math.max(0.5, ry1),
+        Math.min(cssW - 1, rx2 - rx1),
+        Math.min(cssH - 1, ry2 - ry1),
+      );
+    } catch {
+      /* minimap is purely decorative — never throw */
+    }
+  }, [isDark]);
+
+  // Redraw the minimap on render (pan/zoom/initial frame) and on rebuild/open.
+  useEffect(() => {
+    const sigma = sigmaRef.current;
+    if (!sigma || !minimapOpen) return;
+    drawMinimap();
+    const onAfterRender = () => drawMinimap();
+    try {
+      sigma.on('afterRender', onAfterRender);
+    } catch {
+      /* ignore */
+    }
+    return () => {
+      try {
+        sigma.off('afterRender', onAfterRender);
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [drawMinimap, minimapOpen, builtGraph, isDark]);
+
+  // Click-to-recenter: convert the click point inside the minimap back to graph
+  // space, then to the sigma viewport, then to the camera's framed-graph space
+  // and animate the camera there. Best-effort; wrapped so a bad conversion is a
+  // no-op rather than a broken pan.
+  const handleMinimapClick = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = minimapCanvasRef.current;
+      const sigma = sigmaRef.current;
+      const graph = graphRef.current;
+      if (!canvas || !sigma || !graph) return;
+      try {
+        const rect = canvas.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+        const cssW = canvas.clientWidth || 180;
+        const cssH = canvas.clientHeight || 120;
+
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        graph.forEachNode((_id, attr) => {
+          const x = attr.x as number;
+          const y = attr.y as number;
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        });
+        if (!Number.isFinite(minX)) return;
+
+        const pad = 8;
+        const gW = maxX - minX || 1;
+        const gH = maxY - minY || 1;
+        const sc = Math.min((cssW - pad * 2) / gW, (cssH - pad * 2) / gH);
+        const offX = (cssW - gW * sc) / 2;
+        const offY = (cssH - gH * sc) / 2;
+        // Minimap pixel → graph coords.
+        const graphX = (px - offX) / sc + minX;
+        const graphY = (py - offY) / sc + minY;
+
+        // graph → viewport → framed-graph → camera target. graphToViewport
+        // already accounts for the live camera, so the round-trip recenters on
+        // the clicked point without us re-deriving the normalization manually.
+        const viewport = sigma.graphToViewport({ x: graphX, y: graphY });
+        const framed = sigma.viewportToFramedGraph(viewport);
+        const cam = sigma.getCamera();
+        cam.animate({ x: framed.x, y: framed.y }, { duration: 250 });
+      } catch {
+        /* leave the minimap display-only if conversion is awkward */
+      }
+    },
+    [],
+  );
+
+  /* ── Export (PNG / CSV) ────────────────────────────────────────────────── */
+
+  const handleExportPNG = useCallback(() => {
+    const sigma = sigmaRef.current;
+    const container = containerRef.current;
+    if (!sigma || !container) return;
+    try {
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = container.clientWidth || 800;
+      const cssH = container.clientHeight || 600;
+
+      // Composite the sigma canvas layers in DOM order. Querying the container
+      // is renderer-agnostic and avoids guessing a sigma export method. Sigma's
+      // layer canvases already carry a dpr-scaled backing store, so size the
+      // output to that native resolution and draw 1:1 — drawing to a larger
+      // canvas would just upscale-blur the same pixels.
+      const layers = container.querySelectorAll('canvas');
+      const first = layers[0] as HTMLCanvasElement | undefined;
+      const outW = first?.width || Math.round(cssW * dpr);
+      const outH = first?.height || Math.round(cssH * dpr);
+
+      const out = document.createElement('canvas');
+      out.width = outW;
+      out.height = outH;
+      const ctx = out.getContext('2d');
+      if (!ctx) return;
+
+      // Theme background — sigma's layers are transparent.
+      ctx.fillStyle = isDark ? '#1e1e22' : '#ffffff';
+      ctx.fillRect(0, 0, outW, outH);
+
+      layers.forEach((layer) => {
+        try {
+          ctx.drawImage(layer, 0, 0, outW, outH);
+        } catch {
+          /* skip a layer that refuses to draw */
+        }
+      });
+
+      const url = out.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'process-map.png';
+      a.click();
+    } catch {
+      /* export failure must not crash the renderer */
+    }
+    setExportOpen(false);
+  }, [isDark]);
+
+  const handleExportCSV = useCallback(() => {
+    try {
+      const nodesCsv = buildNodesCsv(nodes);
+      const edgesCsv = buildEdgesCsv(edges);
+      const combined = '# Nodes\n' + nodesCsv + '\n\n# Edges\n' + edgesCsv;
+      triggerDownload(combined, 'process-map.csv', 'text/csv');
+    } catch {
+      /* ignore */
+    }
+    setExportOpen(false);
+  }, [nodes, edges]);
+
+  // Close the export menu on outside click.
+  useEffect(() => {
+    if (!exportOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [exportOpen]);
+
   const visibleCount = builtGraph.order;
 
   return (
@@ -310,6 +677,89 @@ const ProcessMapSigma: React.FC<ProcessMapSigmaProps> = ({
         <FlaskConical size={11} className="text-accent" />
         WebGL renderer (trial)
       </div>
+
+      {/* Export cluster (top-right) */}
+      {visibleCount > 0 && (
+        <div ref={exportMenuRef} className="absolute right-3 top-3 z-10">
+          <button
+            onClick={() => setExportOpen((o) => !o)}
+            className={clsx(
+              'flex items-center gap-1 rounded-md border border-line bg-surface-2/95 px-2 py-1 text-fg-muted backdrop-blur-md transition-colors',
+              'hover:bg-tint hover:text-fg',
+              exportOpen && 'bg-tint text-fg',
+            )}
+            title="Export"
+          >
+            <Download size={13} />
+            <ChevronDown
+              size={10}
+              className={clsx('transition-transform', exportOpen && 'rotate-180')}
+            />
+          </button>
+
+          {exportOpen && (
+            <div className="absolute right-0 top-full z-50 mt-1 min-w-[200px] overflow-hidden rounded-lg border border-line bg-surface-1 shadow-lg">
+              <button
+                onClick={handleExportPNG}
+                className="flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-tint"
+              >
+                <Image size={14} className="mt-0.5 shrink-0 text-fg-muted" />
+                <div>
+                  <p className="text-[12px] font-medium text-fg-secondary">Export as PNG</p>
+                  <p className="text-[10px] text-fg-faint">High-res raster image</p>
+                </div>
+              </button>
+              <button
+                onClick={handleExportCSV}
+                className="flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-tint"
+              >
+                <FileSpreadsheet size={14} className="mt-0.5 shrink-0 text-fg-muted" />
+                <div>
+                  <p className="text-[12px] font-medium text-fg-secondary">Export data as CSV</p>
+                  <p className="text-[10px] text-fg-faint">Nodes and edges table</p>
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Minimap (bottom-right) */}
+      {visibleCount > 0 && (
+        minimapOpen ? (
+          <div className="absolute bottom-3 right-3 z-10 overflow-hidden rounded-md border border-line bg-surface-2/95 backdrop-blur-md">
+            <div className="flex items-center justify-between border-b border-line px-2 py-1">
+              <span className="flex items-center gap-1 text-[9px] font-medium uppercase tracking-wide text-fg-faint">
+                <MapIcon size={9} />
+                Overview
+              </span>
+              <button
+                onClick={() => setMinimapOpen(false)}
+                className="rounded p-0.5 text-fg-muted transition-colors hover:bg-tint hover:text-fg"
+                title="Hide minimap"
+              >
+                <X size={10} />
+              </button>
+            </div>
+            <canvas
+              ref={minimapCanvasRef}
+              onClick={handleMinimapClick}
+              title="Click to recenter"
+              className="block cursor-pointer"
+              style={{ width: 180, height: 120 }}
+            />
+          </div>
+        ) : (
+          <button
+            onClick={() => setMinimapOpen(true)}
+            className="absolute bottom-3 right-3 z-10 flex items-center gap-1 rounded-md border border-line bg-surface-2/95 px-2 py-1 text-[10px] font-medium text-fg-muted backdrop-blur-md transition-colors hover:bg-tint hover:text-fg"
+            title="Show minimap"
+          >
+            <MapIcon size={11} />
+            Overview
+          </button>
+        )
+      )}
 
       {/* Empty state */}
       {visibleCount === 0 && (
