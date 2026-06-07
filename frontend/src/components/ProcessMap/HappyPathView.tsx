@@ -35,17 +35,29 @@ export default function HappyPathView({ eventLogId }: HappyPathViewProps) {
       .finally(() => setLoading(false));
   }, [eventLogId]);
 
-  if (loading) return <LoadingSpinner size="lg" text="Computing happy path…" />;
-  if (error) return <ErrorState message={error} />;
+  if (loading)
+    return (
+      <div className="flex h-full items-center justify-center">
+        <LoadingSpinner size="lg" text="Computing happy path…" />
+      </div>
+    );
+  if (error)
+    return (
+      <div className="flex h-full items-center justify-center">
+        <ErrorState message={error} />
+      </div>
+    );
 
   const variants = data?.variants ?? [];
   if (variants.length === 0) {
     return (
-      <EmptyState
-        icon={GitBranch}
-        title="No variants found"
-        description="Upload an event log with case and activity data to see happy paths."
-      />
+      <div className="flex h-full items-center justify-center">
+        <EmptyState
+          icon={GitBranch}
+          title="No variants found"
+          description="Upload an event log with case and activity data to see happy paths."
+        />
+      </div>
     );
   }
 
