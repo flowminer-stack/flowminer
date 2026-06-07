@@ -29,6 +29,9 @@ interface ProcessMapProps {
   complexity: number;
   onNodeClick?: (node: ProcessNode) => void;
   onEdgeClick?: (edge: ProcessEdge) => void;
+  // Tap on empty canvas — parent clears the current selection so the
+  // neighbourhood dimming clears (standard "click away to deselect").
+  onBackgroundTap?: () => void;
   selectedNode?: string;
   annotations?: Annotation[];
   layoutDirection?: 'TB' | 'LR';
@@ -469,6 +472,7 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
   complexity,
   onNodeClick,
   onEdgeClick,
+  onBackgroundTap,
   selectedNode,
   annotations,
   layoutDirection = 'TB',
@@ -792,6 +796,13 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
       if (edgeData && onEdgeClick) onEdgeClick(edgeData);
     };
 
+    // Tap on empty canvas → let the parent clear the selection (un-dim).
+    // cytoscape fires this generic 'tap' for every tap; we act only when the
+    // target is the core (i.e. background), so node/edge taps are unaffected.
+    const handleBackgroundTap = (evt: EventObject) => {
+      if (evt.target === cy && onBackgroundTap) onBackgroundTap();
+    };
+
     // Hover tooltip — mouseover/mouseout on nodes. We compute a
     // container-relative pixel position from the cy rendered position.
     const containerEl = cy.container();
@@ -823,6 +834,7 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
 
     cy.on('tap', 'node', handleNodeTap);
     cy.on('tap', 'edge', handleEdgeTap);
+    cy.on('tap', handleBackgroundTap);
     cy.on('mouseover', 'node', handleNodeHoverIn);
     cy.on('mouseout', 'node', handleNodeHoverOut);
     cy.on('cxttap', 'node', handleNodeCxt);
@@ -830,11 +842,12 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
     return () => {
       cy.off('tap', 'node', handleNodeTap);
       cy.off('tap', 'edge', handleEdgeTap);
+      cy.off('tap', handleBackgroundTap);
       cy.off('mouseover', 'node', handleNodeHoverIn);
       cy.off('mouseout', 'node', handleNodeHoverOut);
       cy.off('cxttap', 'node', handleNodeCxt);
     };
-  }, [onNodeClick, onEdgeClick, onAddActivityFilter, onContextMenu, showHoverTooltip, isReady]);
+  }, [onNodeClick, onEdgeClick, onBackgroundTap, onAddActivityFilter, onContextMenu, showHoverTooltip, isReady]);
 
   // Selection highlight (dimming only). Zoom-to-selection is handled in
   // the node-tap handler so only an explicit user click moves the camera,

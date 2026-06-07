@@ -1115,6 +1115,10 @@ export default function ProcessViewPage() {
                           onEdgeClick={(edge) =>
                             setSelectedEdge({ source: edge.source, target: edge.target })
                           }
+                          onBackgroundTap={() => {
+                            setSelectedNode(null);
+                            setSelectedEdge(null);
+                          }}
                           selectedNode={selectedNode ?? undefined}
                           cyRef={cyRef}
                         />

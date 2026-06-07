@@ -300,90 +300,120 @@ def get_activity_detail(engine, df: pd.DataFrame, activity_name: str) -> dict:
     frequency = int(len(activity_df))
     case_count = int(activity_df[CASE_COL].nunique())
 
-    # Compute duration (time to next event in same case)
-    from app.services.transition_cache import get_transitions
-    _t = get_transitions(df)
-    if _t is not None:
-        df["_duration"] = _t.duration_secs
-        df.loc[_t.is_last, "_duration"] = np.nan
-    else:
-        sorted_df = df.sort_values([CASE_COL, TIMESTAMP_COL]).copy()
-        sorted_df["_next_ts"] = sorted_df.groupby(CASE_COL)[TIMESTAMP_COL].shift(-1)
-        sorted_df["_duration"] = (sorted_df["_next_ts"] - sorted_df[TIMESTAMP_COL]).dt.total_seconds()
-        df = sorted_df
-
-    activity_rows = df[df[ACTIVITY_COL] == activity_name].dropna(subset=["_duration"])
-    durations = activity_rows["_duration"].tolist()
+    # Resource distribution — cheap, over this activity's own rows only.
+    resources_out: list[dict] = []
+    if RESOURCE_COL in df.columns:
+        res_counts = activity_df[RESOURCE_COL].dropna().astype(str).value_counts()
+        resources_out = [{"name": str(r), "count": int(c)} for r, c in res_counts.items()]
 
     avg_duration: float | None = None
     median_duration: float | None = None
     min_duration: float | None = None
     max_duration: float | None = None
     duration_histogram: list[dict] = []
+    predecessors: list[dict] = []
+    successors: list[dict] = []
+    is_start = False
+    is_end = False
 
-    if durations:
-        dur_series = pd.Series(durations)
-        avg_duration = float(dur_series.mean())
-        median_duration = float(dur_series.median())
-        min_duration = float(dur_series.min())
-        max_duration = float(dur_series.max())
-
-        counts, bin_edges = np.histogram(durations, bins=10)
+    def _fill_duration_stats(d: np.ndarray) -> None:
+        nonlocal avg_duration, median_duration, min_duration, max_duration, duration_histogram
+        if d.size == 0:
+            return
+        avg_duration = float(np.mean(d))
+        median_duration = float(np.median(d))
+        min_duration = float(np.min(d))
+        max_duration = float(np.max(d))
+        counts, bin_edges = np.histogram(d, bins=10)
         duration_histogram = [
-            {
-                "bin_start": float(bin_edges[i]),
-                "bin_end": float(bin_edges[i + 1]),
-                "count": int(counts[i]),
-            }
+            {"bin_start": float(bin_edges[i]), "bin_end": float(bin_edges[i + 1]), "count": int(counts[i])}
             for i in range(len(counts))
         ]
 
-    # Resource distribution
-    resources_out: list[dict] = []
-    if RESOURCE_COL in df.columns:
-        res_counts = (
-            activity_df[RESOURCE_COL]
-            .dropna()
-            .astype(str)
-            .value_counts()
+    from app.services.transition_cache import get_transitions
+    _t = get_transitions(df)
+
+    if _t is not None:
+        # FAST PATH — derive durations, predecessors/successors and start/end
+        # straight from the cached per-event transition arrays. This avoids
+        # rebuilding the entire DFG and re-scanning start/end activities on every
+        # click, which is what made this slow on large logs (e.g. BPIC).
+        labels = _t.act_labels
+        try:
+            a_idx = labels.index(activity_name)
+        except ValueError:
+            a_idx = -1
+        # Current-activity codes aligned to the same category order the cached
+        # next_act_code uses, so masks line up across the arrays.
+        cur = np.asarray(pd.Categorical(df[ACTIVITY_COL], categories=labels).codes)
+        nxt = _t.next_act_code
+        is_last = _t.is_last
+        n_labels = len(labels)
+
+        out_mask = (cur == a_idx) & (~is_last)
+        if a_idx >= 0 and out_mask.any():
+            _fill_duration_stats(_t.duration_secs[out_mask][np.isfinite(_t.duration_secs[out_mask])])
+            succ_codes = nxt[out_mask]
+            succ_codes = succ_codes[succ_codes >= 0]
+            if succ_codes.size:
+                sc = np.bincount(succ_codes, minlength=n_labels)
+                successors = [
+                    {"activity": labels[c], "frequency": int(sc[c])} for c in np.nonzero(sc)[0]
+                ]
+                successors.sort(key=lambda x: -x["frequency"])
+
+        if a_idx >= 0:
+            pred_mask = nxt == a_idx
+            if pred_mask.any():
+                pred_codes = cur[pred_mask]
+                pred_codes = pred_codes[pred_codes >= 0]
+                if pred_codes.size:
+                    pc = np.bincount(pred_codes, minlength=n_labels)
+                    predecessors = [
+                        {"activity": labels[c], "frequency": int(pc[c])} for c in np.nonzero(pc)[0]
+                    ]
+                    predecessors.sort(key=lambda x: -x["frequency"])
+
+            # In time-sorted order the first event of each case is the one right
+            # after a case-final event (plus index 0). Compare to this activity's
+            # codes — no second pm4py start/end scan.
+            sidx = _t.sorted_idx
+            last_sorted = is_last[sidx]
+            cur_sorted = cur[sidx]
+            first_sorted = np.empty_like(last_sorted)
+            first_sorted[0] = True
+            first_sorted[1:] = last_sorted[:-1]
+            is_start = bool(np.any((cur_sorted == a_idx) & first_sorted))
+            is_end = bool(np.any((cur_sorted == a_idx) & last_sorted))
+    else:
+        # FALLBACK (Rust accel unavailable) — pandas durations + a single DFG
+        # discovery + one start/end scan (still avoids the old double call).
+        sorted_df = df.sort_values([CASE_COL, TIMESTAMP_COL]).copy()
+        sorted_df["_next_ts"] = sorted_df.groupby(CASE_COL)[TIMESTAMP_COL].shift(-1)
+        sorted_df["_duration"] = (sorted_df["_next_ts"] - sorted_df[TIMESTAMP_COL]).dt.total_seconds()
+        _fill_duration_stats(
+            sorted_df.loc[sorted_df[ACTIVITY_COL] == activity_name, "_duration"].dropna().to_numpy()
         )
-        resources_out = [
-            {"name": str(r), "count": int(c)}
-            for r, c in res_counts.items()
-        ]
 
-    # Predecessor / successor from DFG
-    dfg_result = engine.discovery_service.discover_dfg(df)
-    edges = dfg_result.get("edges", [])
+        dfg_result = engine.discovery_service.discover_dfg(df)
+        node_label_to_id = {n["label"]: n["id"] for n in dfg_result.get("nodes", [])}
+        id_to_label = {n["id"]: n["label"] for n in dfg_result.get("nodes", [])}
+        act_id = node_label_to_id.get(activity_name, "")
+        for edge in dfg_result.get("edges", []):
+            if edge["target"] == act_id:
+                predecessors.append(
+                    {"activity": id_to_label.get(edge["source"], edge["source"]), "frequency": edge["frequency"]}
+                )
+            if edge["source"] == act_id:
+                successors.append(
+                    {"activity": id_to_label.get(edge["target"], edge["target"]), "frequency": edge["frequency"]}
+                )
+        predecessors.sort(key=lambda x: -x["frequency"])
+        successors.sort(key=lambda x: -x["frequency"])
 
-    predecessors: list[dict] = []
-    successors: list[dict] = []
-
-    # DFG edge source/target use sanitized IDs — rebuild a label→id mapping
-    node_label_to_id = {n["label"]: n["id"] for n in dfg_result.get("nodes", [])}
-    act_id = node_label_to_id.get(activity_name, "")
-
-    for edge in edges:
-        if edge["target"] == act_id:
-            # find label for source
-            src_label = next(
-                (n["label"] for n in dfg_result.get("nodes", []) if n["id"] == edge["source"]),
-                edge["source"],
-            )
-            predecessors.append({"activity": src_label, "frequency": edge["frequency"]})
-        if edge["source"] == act_id:
-            tgt_label = next(
-                (n["label"] for n in dfg_result.get("nodes", []) if n["id"] == edge["target"]),
-                edge["target"],
-            )
-            successors.append({"activity": tgt_label, "frequency": edge["frequency"]})
-
-    predecessors.sort(key=lambda x: -x["frequency"])
-    successors.sort(key=lambda x: -x["frequency"])
-
-    # Start / end
-    start_acts = set(engine.discovery_service._get_start_end_activities(df)[0].keys())
-    end_acts = set(engine.discovery_service._get_start_end_activities(df)[1].keys())
+        start_acts, end_acts = engine.discovery_service._get_start_end_activities(df)
+        is_start = activity_name in start_acts
+        is_end = activity_name in end_acts
 
     return {
         "activity": activity_name,
@@ -397,6 +427,6 @@ def get_activity_detail(engine, df: pd.DataFrame, activity_name: str) -> dict:
         "resources": resources_out,
         "predecessors": predecessors,
         "successors": successors,
-        "is_start": activity_name in start_acts,
-        "is_end": activity_name in end_acts,
+        "is_start": is_start,
+        "is_end": is_end,
     }
