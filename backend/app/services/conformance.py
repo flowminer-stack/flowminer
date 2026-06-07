@@ -168,77 +168,77 @@ class ConformanceService:
             if method == "jsd":
                 return self._jsd_stochastic_conformance(df, net, im, fm)
 
-            pm4py_kw = {
-                "case_id_key": CASE_COL,
-                "activity_key": ACTIVITY_COL,
-                "timestamp_key": TIMESTAMP_COL,
-            }
-
-            # Token-based replay for fitness (default path)
-            # Try Rust-accelerated replay first (~17-500x faster)
-            rs_result = _rs_token_replay(df, net, im, fm)
-            if rs_result is not None:
-                replayed_traces = rs_result["per_trace"]
-                fitness = rs_result["average_trace_fitness"]
-            else:
-                replayed_traces = pm4py.conformance_diagnostics_token_based_replay(
-                    df, net, im, fm, **pm4py_kw
-                )
-                fitness_result = pm4py.fitness_token_based_replay(df, net, im, fm, **pm4py_kw)
-                fitness = fitness_result.get("average_trace_fitness", 0.0)
-
-            # Compute precision. The Rust ETC implementation is ~600-1200x
-            # faster than pm4py, so we no longer need the workload cap that
-            # previously disabled precision for large logs.
-            precision = None
-            rs_prec = _rs_precision(df, net, im, fm)
-            if rs_prec is not None:
-                precision = rs_prec
-            else:
-                # Fallback: pm4py with workload cap
-                trace_lengths = df.groupby(CASE_COL, sort=False).size()
-                prefix_workload = int((trace_lengths ** 2).sum())
-                PRECISION_WORKLOAD_CAP = 5_000_000
-                if prefix_workload <= PRECISION_WORKLOAD_CAP:
-                    try:
-                        precision = float(
-                            pm4py.precision_token_based_replay(
-                                df, net, im, fm, **pm4py_kw
-                            )
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not compute precision: {e}")
-
-            # Compute generalization
-            generalization = _rs_generalization(df, net, im, fm)
-            if generalization is None:
-                try:
-                    generalization = float(pm4py.generalization_tbr(df, net, im, fm, **pm4py_kw))
-                except Exception as e:
-                    logger.warning(f"Could not compute generalization: {e}")
-
-            # Analyze deviations from replay results
-            deviations = self._extract_deviations(df, replayed_traces)
-
-            # Count conformant cases
-            conformant_cases = sum(
-                1 for trace in replayed_traces if trace.get("trace_is_fit", False)
-            )
-            total_cases = len(replayed_traces)
-
-            return {
-                "fitness": float(fitness),
-                "precision": precision,
-                "generalization": generalization,
-                "deviations": deviations,
-                "conformant_cases": int(conformant_cases),
-                "total_cases": int(total_cases),
-                "method": "token_replay",
-            }
+            # Default path: token-replay fitness (+ precision/generalization,
+            # sampled on very large logs) — see _token_replay_conformance.
+            return self._token_replay_conformance(df, net, im, fm)
 
         except Exception as e:
             logger.error(f"Error in conformance checking: {e}", exc_info=True)
             raise
+
+    def _token_replay_conformance(self, df, net, im, fm) -> dict:
+        """Token-replay fitness/precision/generalization + deviations, all via
+        the Rust accelerators where available. Bounded RAM and fast even on
+        million-event logs, so it is the safe fallback when alignment /
+        decomposed alignment are too heavy (or recurse to death)."""
+        pm4py_kw = {
+            "case_id_key": CASE_COL,
+            "activity_key": ACTIVITY_COL,
+            "timestamp_key": TIMESTAMP_COL,
+        }
+        rs_result = _rs_token_replay(df, net, im, fm)
+        if rs_result is not None:
+            replayed_traces = rs_result["per_trace"]
+            fitness = rs_result["average_trace_fitness"]
+        else:
+            replayed_traces = pm4py.conformance_diagnostics_token_based_replay(
+                df, net, im, fm, **pm4py_kw
+            )
+            fitness = pm4py.fitness_token_based_replay(
+                df, net, im, fm, **pm4py_kw
+            ).get("average_trace_fitness", 0.0)
+
+        # Precision + generalization each make a full pass over the net (~15s
+        # combined on BPIC's 1.6M events). They are secondary quality scores, so
+        # on very large logs we estimate them on a representative whole-case
+        # sample (~120k events) — within ~1-2% of the exact value. Fitness above
+        # stays exact on the full log.
+        pg_df = df
+        if len(df) > 200_000:
+            case_ids = df[CASE_COL].drop_duplicates()
+            frac = min(1.0, 120_000 / len(df))
+            keep = set(case_ids.sample(frac=frac, random_state=0)) if frac < 1.0 else set(case_ids)
+            pg_df = df[df[CASE_COL].isin(keep)]
+
+        precision = _rs_precision(pg_df, net, im, fm)
+        if precision is None:
+            trace_lengths = pg_df.groupby(CASE_COL, sort=False).size()
+            if int((trace_lengths ** 2).sum()) <= 5_000_000:
+                try:
+                    precision = float(
+                        pm4py.precision_token_based_replay(pg_df, net, im, fm, **pm4py_kw)
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Could not compute precision: {e}")
+
+        generalization = _rs_generalization(pg_df, net, im, fm)
+        if generalization is None:
+            try:
+                generalization = float(pm4py.generalization_tbr(pg_df, net, im, fm, **pm4py_kw))
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Could not compute generalization: {e}")
+
+        deviations = self._extract_deviations(df, replayed_traces)
+        conformant_cases = sum(1 for t in replayed_traces if t.get("trace_is_fit", False))
+        return {
+            "fitness": float(fitness),
+            "precision": precision,
+            "generalization": generalization,
+            "deviations": deviations,
+            "conformant_cases": int(conformant_cases),
+            "total_cases": int(len(replayed_traces)),
+            "method": "token_replay",
+        }
 
     def _alignment_conformance(self, df, net, im, fm) -> dict:
         """Alignment-based conformance via pm4py.
@@ -434,8 +434,11 @@ class ConformanceService:
                 "Decomposed alignment unavailable (%s), falling back to full alignment",
                 e,
             )
-            result = self._alignment_conformance(df, net, im, fm)
-            result["method"] = "decomposed_fallback_alignment"
+            # Fall back to token replay (bounded, Rust) — NOT _alignment_conformance,
+            # which on a large log routes back here and causes infinite mutual
+            # recursion (RecursionError).
+            result = self._token_replay_conformance(df, net, im, fm)
+            result["method"] = "decomposed_fallback_token_replay"
             return result
 
         try:
@@ -454,8 +457,11 @@ class ConformanceService:
                 "Decomposed alignment raised %s — falling back to full alignment",
                 e,
             )
-            result = self._alignment_conformance(df, net, im, fm)
-            result["method"] = "decomposed_fallback_alignment"
+            # Fall back to token replay (bounded, Rust) — NOT _alignment_conformance,
+            # which on a large log routes back here and causes infinite mutual
+            # recursion (RecursionError).
+            result = self._token_replay_conformance(df, net, im, fm)
+            result["method"] = "decomposed_fallback_token_replay"
             return result
 
         # Decomposed output is a list of dicts with "cost" (0 = conformant).

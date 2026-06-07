@@ -241,6 +241,14 @@ async def get_variants(
             detail=f"Variant analysis failed: {str(e)}",
         )
 
+    # Cap the returned variant list — a high-variant log (BPIC has ~27k distinct
+    # variants) otherwise yields a ~10 MB payload that is slow to transfer and
+    # render. total_variants still reports the true count.
+    MAX_VARIANTS_IN_RESPONSE = 1000
+    variants = result.get("variants")
+    if isinstance(variants, list) and len(variants) > MAX_VARIANTS_IN_RESPONSE:
+        result = {**result, "variants": variants[:MAX_VARIANTS_IN_RESPONSE]}
+
     _set_cached(event_log_id, "variants", result)
     return VariantResponse(**result)
 

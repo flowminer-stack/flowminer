@@ -262,7 +262,12 @@ def generate_insights(engine, df: pd.DataFrame, fte_hourly_rate: float | None = 
         pass
 
     # ── 7. Conformance insights ──────────────────────────────────────────
+    # Conformance discovers a model + replays the whole log (seconds on a large
+    # log). Insights is a fast at-a-glance overview, so skip this one on very
+    # large logs — the dedicated Conformance page still computes it on demand.
     try:
+        if len(df) > 150_000:
+            raise RuntimeError("large log — skip conformance in quick insights")
         conf_result = engine.run_conformance(df)
         fitness = conf_result.get('fitness', 1.0)
         if fitness < 0.8:

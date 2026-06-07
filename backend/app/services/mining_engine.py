@@ -163,7 +163,12 @@ class MiningEngine:
         # upper bound but 10-100x faster on wide nets.
         if method == "auto":
             event_count = len(df)
-            if event_count >= 50_000:
+            if event_count >= 150_000:
+                # Very large logs: token replay (Rust-accelerated, bounded RAM).
+                # Alignment / decomposed alignment OOM or recurse to death at
+                # this scale (e.g. BPIC's 1.6M events).
+                method = "token_replay"
+            elif event_count >= 50_000:
                 method = "decomposed"
             else:
                 method = "alignment"

@@ -27,6 +27,27 @@ from app.services.rust_accel import (
 logger = logging.getLogger(__name__)
 
 
+_MAX_TEMPORAL_DEVIATIONS = 500
+
+
+def _cap_temporal_deviations(result: dict) -> dict:
+    """Bound the per-case deviations list — on a large log it reaches tens of
+    thousands of entries (~10 MB JSON), which is slow to transfer/render and a
+    Cloudflare-520 risk. Keep the most severe ones + report the true total."""
+    devs = result.get("deviations") or []
+    total = len(devs)
+    if total > _MAX_TEMPORAL_DEVIATIONS:
+        def _sev(d: dict) -> float:
+            try:
+                return abs(float(d.get("actual", 0)) - float(d.get("expected", 0)))
+            except (TypeError, ValueError):
+                return 0.0
+        result["deviations"] = sorted(devs, key=_sev, reverse=True)[:_MAX_TEMPORAL_DEVIATIONS]
+        result["deviations_total"] = total
+        result["deviations_truncated"] = True
+    return result
+
+
 def get_temporal_profile(df: pd.DataFrame) -> dict:
     """
     Discover a temporal profile (mean/stdev of time between every
@@ -62,7 +83,7 @@ def get_temporal_profile(df: pd.DataFrame) -> dict:
     # Rust fast path
     rs_result = _rs_temporal(df)
     if rs_result is not None:
-        return rs_result
+        return _cap_temporal_deviations(rs_result)
 
     import math
     from collections import defaultdict
@@ -190,7 +211,7 @@ def get_temporal_profile(df: pd.DataFrame) -> dict:
                 seen_first[b] = tb
             seen_last[b] = tb
 
-    return {"profiles": profiles, "deviations": deviations}
+    return _cap_temporal_deviations({"profiles": profiles, "deviations": deviations})
 
 
 def get_batches(df: pd.DataFrame) -> dict:

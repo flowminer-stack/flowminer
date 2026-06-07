@@ -368,6 +368,11 @@ def get_declare(df: pd.DataFrame, support_threshold: float = 0.7) -> dict:
 
     pm4py_rules: list[dict] = []
     try:
+        if len(df) > 50_000:
+            # pm4py.discover_declare materialises multi-GB on large logs; the
+            # custom variant scan below covers the same templates (with richer
+            # narratives), so skip the pm4py phase here.
+            raise RuntimeError("large log — skipping pm4py declare phase")
         declare_model = _pm4py.discover_declare(
             df,
             activity_key=ACTIVITY_COL,
@@ -410,18 +415,23 @@ def get_declare(df: pd.DataFrame, support_threshold: float = 0.7) -> dict:
     except Exception as exc:
         logger.warning(f"pm4py.discover_declare failed, skipping pm4py phase: {exc}")
 
-    # ── Phase 2: custom O(n) scan for richer templates ───────────────────
-    # Derive per-case activity sequences
-    sorted_df = df.sort_values([CASE_COL, TIMESTAMP_COL])
-    cases: dict[str, list[str]] = {}
-    for case_id, grp in sorted_df.groupby(CASE_COL, sort=False):
-        cases[str(case_id)] = [str(a) for a in grp[ACTIVITY_COL].tolist()]
-
-    total_cases = len(cases)
+    # ── Phase 2: custom scan over UNIQUE VARIANTS (frequency-weighted) ────
+    # Working per-case would materialise one Python list per case (250k+ on
+    # BPIC ⇒ multi-GB RAM). Every Declare counter below is a case-count, so we
+    # instead iterate the far smaller set of distinct variant sequences and add
+    # each variant's frequency — mathematically identical, O(#variants) memory.
+    from app.services.variant_analysis import VariantAnalysisService
+    _var = VariantAnalysisService().analyze_variants(df)
+    variant_items: list[tuple[list[str], int]] = [
+        ([str(a) for a in v["activities"]], int(v["frequency"]))
+        for v in _var.get("variants", [])
+        if v.get("activities")
+    ]
+    total_cases = sum(f for _, f in variant_items)
     if total_cases == 0:
         return {"rules": pm4py_rules}
 
-    all_activities: set[str] = {a for seq in cases.values() for a in seq}
+    all_activities: set[str] = {a for seq, _ in variant_items for a in seq}
 
     # Per-activity counters
     act_cases: dict[str, int] = _dd(int)       # cases containing A
@@ -435,12 +445,11 @@ def get_declare(df: pd.DataFrame, support_threshold: float = 0.7) -> dict:
     pair_response: dict[tuple, int] = _dd(int)   # cases where after every A, B eventually follows
     pair_precedence: dict[tuple, int] = _dd(int) # cases where every B is preceded by A
 
-    for seq in cases.values():
-        # Single left-to-right pass: count occurrences and record the first
-        # and last position of each activity. This collapses the former
-        # O(k² · n²) per-case work (per pair: rebuild index lists + nested
-        # "is there a later/earlier match" scans) into O(n) for the scan plus
-        # O(k²) for the pair enumeration, giving identical counters.
+    for seq, freq in variant_items:
+        # One left-to-right pass per UNIQUE variant; counters are incremented by
+        # the variant's case frequency (identical to per-case counting). Records
+        # the first/last position of each activity, collapsing the former
+        # O(k²·n²) per-pair work into O(n) scan + O(k²) pair enumeration.
         act_counts = _dd(int)
         first_pos: dict[str, int] = {}
         last_pos: dict[str, int] = {}
@@ -450,16 +459,16 @@ def get_declare(df: pd.DataFrame, support_threshold: float = 0.7) -> dict:
                 first_pos[a] = i
             last_pos[a] = i
 
-        act_set = first_pos.keys()  # unique activities in the case
+        act_set = first_pos.keys()  # unique activities in the variant
 
         for a in act_set:
-            act_cases[a] += 1
+            act_cases[a] += freq
             if act_counts[a] == 1:
-                act_exactly_one[a] += 1
+                act_exactly_one[a] += freq
             if seq[0] == a:
-                act_init[a] += 1
+                act_init[a] += freq
             if seq[-1] == a:
-                act_end[a] += 1
+                act_end[a] += freq
 
         for a in act_set:
             fa, la = first_pos[a], last_pos[a]
@@ -467,22 +476,22 @@ def get_declare(df: pd.DataFrame, support_threshold: float = 0.7) -> dict:
                 if a == b:
                     continue
                 ab = (a, b)
-                pair_both[ab] += 1
+                pair_both[ab] += freq
 
                 # A before B: some occurrence of A precedes some occurrence of
                 # B ⟺ first(A) < last(B).
                 if fa < last_pos[b]:
-                    pair_a_before_b[ab] += 1
+                    pair_a_before_b[ab] += freq
 
                 # Response(A,B): every A is eventually followed by B ⟺ the last
                 # A has a B strictly after it ⟺ last(A) < last(B).
                 if la < last_pos[b]:
-                    pair_response[ab] += 1
+                    pair_response[ab] += freq
 
                 # Precedence(A,B): every B is preceded by A ⟺ the first B has an
                 # A strictly before it ⟺ first(A) < first(B).
                 if fa < first_pos[b]:
-                    pair_precedence[ab] += 1
+                    pair_precedence[ab] += freq
 
     _NARRATIVES = {
         "Existence":         lambda a, _: f"'{a}' occurs at least once in the case.",
