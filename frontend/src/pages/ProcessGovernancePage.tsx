@@ -3,6 +3,7 @@ import { FileCheck, Plus, Clock, GitPullRequest } from 'lucide-react';
 import clsx from 'clsx';
 import PageHeader from '@/components/common/PageHeader';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import { governance, type GovernanceEntry, type GovernanceStatus } from '@/api/client';
 import ChangeRequestsPanel from '@/components/Governance/ChangeRequestsPanel';
 import { useProjectsStore } from '@/store';
@@ -111,6 +112,19 @@ export default function ProcessGovernancePage() {
         description="Draft → review → approved → published → retired. Every promotion is audited with actor and comment."
       />
 
+      <FeatureGuide
+        storageKey="governance"
+        icon={FileCheck}
+        title="What process governance does"
+        lead="Governance gives every process model an approval lifecycle so the team knows which maps are official versus experimental. Each promotion is recorded with actor, time, and comment as an immutable audit trail for compliance."
+        steps={[
+          { label: 'Add a process entry', detail: 'Name the model you want to govern, e.g. Order-to-Cash v2.' },
+          { label: 'Promote it through the lifecycle', detail: 'Draft → Review → Approved → Published → Retired, with an optional comment each step.' },
+          { label: 'Inspect the trail', detail: 'Expand History on any entry to see who promoted what and when.' },
+          { label: 'Track change requests', detail: 'Propose and review changes to a published process in the Change requests tab.' },
+        ]}
+      />
+
       {/* Tab bar */}
       <div className="mt-5 flex items-center gap-1 border-b border-line">
         {TABS.map(({ value, label, icon: Icon }) => (
@@ -140,13 +154,38 @@ export default function ProcessGovernancePage() {
             </button>
           </div>
 
+          {/* Lifecycle legend */}
+          <div className="mt-4 flex flex-wrap items-center gap-1.5 rounded-lg border border-line bg-surface-0 px-4 py-2.5">
+            <span className="mr-1 text-[10px] font-semibold uppercase tracking-wide text-fg-faint">Lifecycle</span>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusColor['draft']}`}>Draft</span>
+            <span className="text-[10px] text-fg-faint">work in progress</span>
+            <span className="text-[10px] text-fg-faint mx-1">→</span>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusColor['review']}`}>Review</span>
+            <span className="text-[10px] text-fg-faint">under approval</span>
+            <span className="text-[10px] text-fg-faint mx-1">→</span>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusColor['approved']}`}>Approved</span>
+            <span className="text-[10px] text-fg-faint">signed off</span>
+            <span className="text-[10px] text-fg-faint mx-1">→</span>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusColor['published']}`}>Published</span>
+            <span className="text-[10px] text-fg-faint">official version</span>
+            <span className="text-[10px] text-fg-faint mx-1">→</span>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusColor['retired']}`}>Retired</span>
+            <span className="text-[10px] text-fg-faint">superseded</span>
+          </div>
+
           {loading ? (
             <LoadingSpinner fullPage text="Loading governance entries…" />
           ) : entries.length === 0 ? (
-            <div className="mt-12 rounded-lg border border-dashed border-line bg-surface-1 p-8 text-center">
-              <p className="text-[12px] text-fg-muted">
-                No governance entries yet. Add one to track a process model through its lifecycle.
+            <div className="mt-8 rounded-lg border border-dashed border-line bg-surface-1 px-8 py-10 text-center">
+              <FileCheck size={28} className="mx-auto mb-3 text-fg-faint" />
+              <p className="text-[13px] font-medium text-fg">No governance entries yet</p>
+              <p className="mt-1 text-[11px] text-fg-muted">
+                Track any process model — a BPMN map, an event log, a standard — through its official approval lifecycle. Every promotion is recorded for compliance.
               </p>
+              <button onClick={handleAdd} className="btn-primary mt-4 text-[11px]">
+                <Plus size={11} />
+                New process entry
+              </button>
             </div>
           ) : (
             <div className="mt-6 space-y-2">

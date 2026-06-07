@@ -23,6 +23,7 @@ import EmptyState from '@/components/common/EmptyState';
 import PageHeader from '@/components/common/PageHeader';
 import ProjectSubnav from '@/components/Project/ProjectSubnav';
 import Modal from '@/components/common/Modal';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import { useUIStore, useProjectsStore, useEventLogsStore } from '@/store';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -51,6 +52,127 @@ const METRIC_OPTIONS: KpiMetric[] = [
   'bottleneck_count',
   'median_case_duration',
   'custom_expression',
+];
+
+// Plain-English meaning of each metric, surfaced as helper text under the
+// metric selector so users understand what they're tracking and which way is
+// "good". `higherIsBetter` is undefined for metrics with no inherent direction.
+const METRIC_META: Record<
+  KpiMetric,
+  { description: string; unit?: string; higherIsBetter?: boolean }
+> = {
+  avg_case_duration: {
+    description: 'Mean time from the first to the last event in a case.',
+    unit: 's',
+    higherIsBetter: false,
+  },
+  case_count: {
+    description: 'Number of cases in the log (throughput).',
+    higherIsBetter: true,
+  },
+  event_count: {
+    description: 'Total number of events recorded across all cases.',
+  },
+  activity_count: {
+    description: 'Number of distinct activities — a process-complexity indicator.',
+    higherIsBetter: false,
+  },
+  rework_rate: {
+    description: 'Share of cases that repeat at least one activity.',
+    unit: '%',
+    higherIsBetter: false,
+  },
+  variant_count: {
+    description: 'Number of distinct paths through the process — a complexity indicator.',
+    higherIsBetter: false,
+  },
+  conformance_fitness: {
+    description: 'How well cases fit the reference model (replay fitness).',
+    unit: '%',
+    higherIsBetter: true,
+  },
+  bottleneck_count: {
+    description: 'Number of detected bottlenecks — a complexity / friction indicator.',
+    higherIsBetter: false,
+  },
+  median_case_duration: {
+    description: 'Median case duration — like the average, but robust to outliers.',
+    unit: 's',
+    higherIsBetter: false,
+  },
+  custom_expression: {
+    description: 'Your own arithmetic formula or filter over the base metrics.',
+  },
+};
+
+// Ready-made KPIs shown as chips at the top of the create modal. Clicking one
+// prefills name / metric / unit / description; thresholds are left blank so the
+// user sets the bands that matter to them.
+interface KpiTemplate {
+  label: string;
+  name: string;
+  metric: KpiMetric;
+  unit: string;
+  description: string;
+}
+
+const KPI_TEMPLATES: KpiTemplate[] = [
+  {
+    label: 'Average cycle time',
+    name: 'Average cycle time',
+    metric: 'avg_case_duration',
+    unit: 's',
+    description: METRIC_META.avg_case_duration.description,
+  },
+  {
+    label: 'Median cycle time',
+    name: 'Median cycle time',
+    metric: 'median_case_duration',
+    unit: 's',
+    description: METRIC_META.median_case_duration.description,
+  },
+  {
+    label: 'Throughput',
+    name: 'Throughput',
+    metric: 'case_count',
+    unit: 'cases',
+    description: METRIC_META.case_count.description,
+  },
+  {
+    label: 'Rework rate',
+    name: 'Rework rate',
+    metric: 'rework_rate',
+    unit: '%',
+    description: METRIC_META.rework_rate.description,
+  },
+  {
+    label: 'Conformance fitness',
+    name: 'Conformance fitness',
+    metric: 'conformance_fitness',
+    unit: '%',
+    description: METRIC_META.conformance_fitness.description,
+  },
+  {
+    label: 'Process variants',
+    name: 'Process variants',
+    metric: 'variant_count',
+    unit: '',
+    description: METRIC_META.variant_count.description,
+  },
+  {
+    label: 'Bottlenecks',
+    name: 'Bottlenecks',
+    metric: 'bottleneck_count',
+    unit: '',
+    description: METRIC_META.bottleneck_count.description,
+  },
+  {
+    label: 'Custom …',
+    name: '',
+    metric: 'custom_expression',
+    unit: '',
+    description: METRIC_META.custom_expression.description,
+  },
 ];
 
 function deriveStatus(kpi: CustomKpi): KpiStatus {
@@ -423,6 +545,23 @@ function KpiForm({ form, onChange, mode }: KpiFormProps) {
               </option>
             ))}
           </select>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-fg-faint">
+            {METRIC_META[form.metric].description}
+            {METRIC_META[form.metric].higherIsBetter !== undefined && (
+              <span
+                className={clsx(
+                  'ml-1 font-medium',
+                  METRIC_META[form.metric].higherIsBetter
+                    ? 'text-success'
+                    : 'text-warning',
+                )}
+              >
+                {METRIC_META[form.metric].higherIsBetter
+                  ? '· higher is better'
+                  : '· higher is worse'}
+              </span>
+            )}
+          </p>
         </div>
       )}
 
@@ -781,6 +920,27 @@ export default function KpisPage() {
           from the URL (/kpis/:id) or was picked via the selector on /kpis. */}
       {activeProjectId && <ProjectSubnav projectId={activeProjectId} active="kpis" />}
 
+      <FeatureGuide
+        storageKey="kpis"
+        icon={Target}
+        title="Track the metrics that matter"
+        lead="A custom KPI watches one number over your mined process (cycle time, throughput, rework, conformance) with a target plus warning/critical thresholds, so you see at a glance when a process drifts off target."
+        steps={[
+          {
+            label: 'Pick a metric or template',
+            detail: 'Start from a ready-made KPI or choose a base metric.',
+          },
+          {
+            label: 'Set a target and thresholds',
+            detail: 'Warning and critical fire when the value crosses them.',
+          },
+          {
+            label: 'Compute',
+            detail: 'Run it to see the live value and its status badge.',
+          },
+        ]}
+      />
+
       {/* Project + event log selectors */}
       <div className="mt-6 flex flex-wrap items-center gap-3">
         {!projectId && (
@@ -963,6 +1123,46 @@ export default function KpisPage() {
           </>
         }
       >
+        {/* Start-from-a-template chips — prefill name/metric/unit/description,
+            leaving thresholds for the user. Create-only. */}
+        <div className="mb-5">
+          <p className="text-[12px] font-medium text-fg-muted">Start from a template</p>
+          <p className="mt-0.5 text-[11px] text-fg-faint">
+            Pick one to prefill the fields, then set your own thresholds.
+          </p>
+          <div className="mt-2.5 flex flex-wrap gap-2">
+            {KPI_TEMPLATES.map((tpl) => {
+              const active =
+                createForm.metric === tpl.metric &&
+                createForm.name === tpl.name &&
+                createForm.unit === tpl.unit;
+              return (
+                <button
+                  key={tpl.label}
+                  type="button"
+                  onClick={() =>
+                    setCreateForm((f) => ({
+                      ...f,
+                      name: tpl.name,
+                      metric: tpl.metric,
+                      unit: tpl.unit,
+                      description: tpl.description,
+                    }))
+                  }
+                  className={clsx(
+                    'rounded-full border px-3 py-1 text-[12px] font-medium transition-colors',
+                    active
+                      ? 'border-accent bg-accent/10 text-accent'
+                      : 'border-line bg-surface-2 text-fg-muted hover:border-accent/40 hover:bg-tint hover:text-fg',
+                  )}
+                >
+                  {tpl.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <KpiForm form={createForm} onChange={setCreateForm} mode="create" />
       </Modal>
 

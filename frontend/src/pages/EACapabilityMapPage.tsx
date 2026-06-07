@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Grid3x3, Plus, Trash2, ChevronDown, ChevronRight, Search, FileText } from 'lucide-react';
 import PageHeader from '@/components/common/PageHeader';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import Modal from '@/components/common/Modal';
+import FeatureGuide from '@/components/common/FeatureGuide';
 import {
   governance,
   eventLogs as logsApi,
@@ -46,6 +47,10 @@ export default function EACapabilityMapPage() {
   const [linkTarget, setLinkTarget] = useState<Capability | null>(null);
   const [logSearch, setLogSearch] = useState('');
   const [projById, setProjById] = useState<Map<string, string>>(new Map());
+  // Name modal for add-root / add-child (replaces window.prompt).
+  const [nameTarget, setNameTarget] = useState<{ parentId: string | null } | null>(null);
+  const [nameValue, setNameValue] = useState('');
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const reload = () => {
     setLoading(true);
@@ -72,17 +77,26 @@ export default function EACapabilityMapPage() {
     [allLogs],
   );
 
-  const handleAddRoot = async () => {
-    const name = window.prompt('New capability name:');
-    if (!name) return;
-    await governance.createCapability({ name });
-    reload();
+  const openNameModal = (parentId: string | null) => {
+    setNameValue('');
+    setNameTarget({ parentId });
+    // Focus the input after the modal mounts.
+    setTimeout(() => nameInputRef.current?.focus(), 50);
   };
 
-  const handleAddChild = async (parentId: string) => {
-    const name = window.prompt('New sub-capability name:');
-    if (!name) return;
-    await governance.createCapability({ name, parent_id: parentId });
+  const handleAddRoot = () => openNameModal(null);
+  const handleAddChild = (parentId: string) => openNameModal(parentId);
+
+  const submitName = async () => {
+    const trimmed = nameValue.trim();
+    if (!trimmed || !nameTarget) return;
+    if (nameTarget.parentId) {
+      await governance.createCapability({ name: trimmed, parent_id: nameTarget.parentId });
+    } else {
+      await governance.createCapability({ name: trimmed });
+    }
+    setNameTarget(null);
+    setNameValue('');
     reload();
   };
 
@@ -220,6 +234,17 @@ export default function EACapabilityMapPage() {
         icon={Grid3x3}
         description="Bird's-eye grid of your business capabilities with live KPI badges — click a cell to drill into its process view"
       />
+      <FeatureGuide
+        storageKey="capability-map"
+        icon={Grid3x3}
+        title="What the capability map is"
+        lead="A capability map models what your business does as a hierarchy (e.g. Procurement, then Purchase Orders) and links each capability to the event log(s) that realise it — connecting strategy to the processes you have actually mined."
+        steps={[
+          { label: 'Build the tree', detail: 'Add a top-level capability, then sub-capabilities under it.' },
+          { label: 'Link an event log', detail: 'Attach the process that delivers a capability; its cases and events roll up as KPI badges.' },
+          { label: 'Drill in', detail: 'Click a linked log to jump straight to its process map.' },
+        ]}
+      />
       <div className="mt-6 flex items-center justify-end">
         <button onClick={handleAddRoot} className="btn-primary text-[11px]">
           <Plus size={11} />
@@ -230,14 +255,61 @@ export default function EACapabilityMapPage() {
         <LoadingSpinner fullPage text="Loading capability map…" />
       ) : tree.length === 0 ? (
         <div className="mt-12 rounded-lg border border-dashed border-line bg-surface-1 p-8 text-center">
-          <p className="text-[12px] text-fg-muted">
-            No capabilities defined yet. Create your first root capability to start
-            building a tree.
+          <Grid3x3 size={28} className="mx-auto mb-3 text-fg-faint" />
+          <p className="text-[13px] font-semibold text-fg">No capabilities defined yet</p>
+          <p className="mt-1 text-[12px] text-fg-muted">
+            A capability map links what your business does (Procurement, Fulfilment…) to the
+            process logs that deliver it — so you can see coverage at a glance.
           </p>
+          <button onClick={handleAddRoot} className="btn-primary mt-5 text-[11px]">
+            <Plus size={11} />
+            New root capability
+          </button>
         </div>
       ) : (
         <div className="mt-6">{tree.map((n) => renderNode(n))}</div>
       )}
+
+      {/* Name modal — add root / add sub-capability */}
+      <Modal
+        isOpen={!!nameTarget}
+        onClose={() => setNameTarget(null)}
+        title={nameTarget?.parentId ? 'Add sub-capability' : 'Add root capability'}
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-fg-muted">
+              Capability name
+            </label>
+            <input
+              ref={nameInputRef}
+              value={nameValue}
+              onChange={(e) => setNameValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submitName(); }}
+              placeholder="e.g. Purchase Orders"
+              className="w-full rounded-lg border border-line bg-surface-1 px-3 py-2 text-[12px] text-fg placeholder:text-fg-faint focus:border-accent focus:outline-none"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setNameTarget(null)}
+              className="rounded-lg border border-line bg-surface-0 px-3 py-1.5 text-[11px] text-fg-muted hover:text-fg"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={submitName}
+              disabled={!nameValue.trim()}
+              className="btn-primary text-[11px] disabled:opacity-40"
+            >
+              Create
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {linkTarget && (() => {
         const linked = new Set(linkTarget.linked_event_log_ids);
