@@ -505,7 +505,9 @@ const ProcessMap: React.FC<ProcessMapProps> = ({
   const minimapRef = useRef<HTMLDivElement>(null);
   const navInstanceRef = useRef<{ destroy(): void } | null>(null);
   const navInitedRef = useRef(false);
-  const [showMinimap, setShowMinimap] = useState(false);
+  // Default the minimap open so the bird's-eye view is there without the user
+  // having to discover the toggle (consistent across all graphs).
+  const [showMinimap, setShowMinimap] = useState(true);
 
   // Latest selection, readable from the element-update effect (which must
   // NOT depend on selectedNode, or it would re-run the layout on every

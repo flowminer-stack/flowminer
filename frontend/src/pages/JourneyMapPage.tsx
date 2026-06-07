@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Map, Plus, Trash2, Pencil, ChevronRight, X, GripVertical } from 'lucide-react';
 import PageHeader from '@/components/common/PageHeader';
+import ProjectSubnav from '@/components/Project/ProjectSubnav';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import Modal from '@/components/common/Modal';
 import { journeys as journeysApi } from '@/api/journeys';
@@ -585,6 +586,7 @@ export default function JourneyMapPage() {
           </button>
         }
       />
+      {projectId && <ProjectSubnav projectId={projectId} active="journeys" />}
 
       <div className="mt-6 flex flex-1 min-h-0 gap-5">
         {/* ── Sidebar list ──────────────────────────────────────────────── */}

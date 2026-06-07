@@ -1,8 +1,12 @@
-"""Sustainability / ESG metrics — emission, energy, and water proxies per process activity.
+"""Sustainability / ESG metrics — emission, energy, and water estimates per process activity.
 
-The rates below are *proxies* for transparent reporting. Each represents a
-reasonable public-domain mid-range value so customers can parameterize them
-to match their own disclosure methodology.
+IMPORTANT: the figures this module produces are ESTIMATES, not measurements.
+They multiply process activity durations by configurable per-minute factors.
+The defaults below are transparent placeholder proxies so the dashboard renders
+something sensible out of the box; replace them with your own audited
+conversion factors (via the `factors` request field or per-activity overrides)
+before using any of these numbers for external ESG disclosure. The response
+carries a `methodology` block so this is visible in-product, not buried here.
 """
 
 import logging
@@ -15,7 +19,10 @@ from app.services.ingestion import ACTIVITY_COL, CASE_COL, RESOURCE_COL, TIMESTA
 logger = logging.getLogger(__name__)
 
 
-# Default emission factors (editable per project)
+# Default emission factors — TRANSPARENT PROXY ESTIMATES, editable per request.
+# These are deliberately conservative mid-range placeholders, NOT audited values
+# for any specific organisation. Ground them in your own data before disclosure
+# (see FACTOR_METHODOLOGY["sources"] for where real factors come from).
 DEFAULT_FACTORS = {
     # grams of CO2-equivalent per minute spent executing the activity
     "co2_g_per_minute": 8.5,
@@ -27,6 +34,28 @@ DEFAULT_FACTORS = {
     "cost_per_kwh": 0.15,
     # flat emission per activity execution (shipping, dispatch, etc.)
     "co2_g_per_activity": 0.0,
+}
+
+# Returned to the client so the estimate's basis and limitations are visible in
+# the UI rather than implied to be precise measurements.
+FACTOR_METHODOLOGY = {
+    "estimate": True,
+    "disclaimer": (
+        "Estimated, not measured. Figures are derived from process activity "
+        "durations multiplied by configurable per-minute proxy factors. Replace "
+        "the default factors with your own audited conversion factors before "
+        "using these numbers for external ESG reporting."
+    ),
+    "basis": (
+        "emissions ≈ active duration × factor, where duration is the gap to the "
+        "next event in the same case (work-in-progress time, not wall-clock)."
+    ),
+    "sources": [
+        "GHG Protocol — Corporate Accounting & Reporting Standard (Scope 2/3)",
+        "UK DEFRA / BEIS greenhouse-gas conversion factors (published annually)",
+        "Cloud-provider carbon reports / regional grid intensity (e.g. ember-climate.org)",
+    ],
+    "editable": True,
 }
 
 
@@ -50,7 +79,16 @@ def compute_sustainability(
     overrides = activity_overrides or {}
 
     if df.empty or ACTIVITY_COL not in df.columns:
-        return {"totals": {}, "by_activity": [], "trend": []}
+        # Keep the response shape stable even with no data so the client always
+        # gets the methodology/factors transparency block.
+        return {
+            "totals": {},
+            "by_activity": [],
+            "trend": [],
+            "high_impact": [],
+            "factors": base,
+            "methodology": FACTOR_METHODOLOGY,
+        }
 
     # Compute time spent per activity per case as the gap to the next event.
     # FIX (1): when get_transitions returns non-None, the original code assigned
@@ -179,4 +217,5 @@ def compute_sustainability(
         "trend": trend_list,
         "high_impact": high_impact,
         "factors": base,
+        "methodology": FACTOR_METHODOLOGY,
     }

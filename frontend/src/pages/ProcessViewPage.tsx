@@ -52,7 +52,7 @@ import AnalysisHub from '@/components/AnalysisHub/AnalysisHub';
 import InsightsPanel from '@/components/InsightsPanel/InsightsPanel';
 import FilterPanel from '@/components/ProcessMap/FilterPanel';
 import ComplexityScoreBadge from '@/components/ProcessMap/ComplexityScoreBadge';
-import AnalysisDropdown from '@/components/ProcessMap/AnalysisDropdown';
+import AnalysisPalette from '@/components/ProcessMap/AnalysisPalette';
 import ExportWorkflowModal from '@/components/Scorecards/ExportWorkflowModal';
 import { algorithmOptions, detailLevels, type Algorithm } from '@/components/ProcessMap/mapControlsConfig';
 import { useProcessFilters } from '@/hooks/useProcessFilters';
@@ -491,8 +491,8 @@ export default function ProcessViewPage() {
           Ask AI
         </button>
 
-        {/* Analysis dropdown */}
-        <AnalysisDropdown eventLogId={eventLogId!} />
+        {/* Unified, searchable analysis palette (⌘K / Ctrl-K) */}
+        {eventLogId && <AnalysisPalette eventLogId={eventLogId} />}
       </div>
 
       {/* Scrollable stage. The active view keeps its full viewport height; the
@@ -1233,11 +1233,16 @@ export default function ProcessViewPage() {
         />
       )}
 
-      {/* Activity detail modal */}
+      {/* Activity detail modal.
+          `selectedNode` holds the DFG node's *sanitized* id (lowercased,
+          spaces/slashes → underscores) which is correct for selection
+          highlighting + node lookup, but the backend resolves activities by
+          their original name. Pass the original label so clicking a node
+          never 404s (falling back to the id if the node isn't in `discovery`). */}
       {eventLogId && selectedNode && (
         <ActivityDetailModal
           eventLogId={eventLogId}
-          activityName={selectedNode}
+          activityName={selectedNodeData?.label ?? selectedNode}
           isOpen={activityDetailOpen}
           onClose={() => setActivityDetailOpen(false)}
         />

@@ -24,6 +24,7 @@ import type { EventLog } from '@/types';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import Modal from '@/components/common/Modal';
 import PageHeader from '@/components/common/PageHeader';
+import ProjectSubnav from '@/components/Project/ProjectSubnav';
 import { useUIStore } from '@/store';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -537,6 +538,7 @@ export default function ScheduledReportsPage() {
           </button>
         }
       />
+      {projectId && <ProjectSubnav projectId={projectId} active="reports" />}
 
       {/* Stats row */}
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">

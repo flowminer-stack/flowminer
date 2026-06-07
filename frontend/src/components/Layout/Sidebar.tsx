@@ -19,14 +19,20 @@ import {
   Network,
   Workflow,
   Layers,
+  Users,
+  ClipboardList,
+  BarChart2,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore, useUIStore } from '@/store';
+import ProjectSwitcher from './ProjectSwitcher';
 
 interface NavItem {
   label: string;
   path: string;
   icon: React.ElementType;
+  /** If true, only show this item to users with role === 'admin' */
+  adminOnly?: boolean;
 }
 
 interface NavSection {
@@ -38,17 +44,17 @@ const navSections: NavSection[] = [
   {
     label: 'Workspace',
     items: [
-      { label: 'Projects', path: '/projects', icon: FolderKanban },
       { label: 'Overview', path: '/overview', icon: Home },
+      { label: 'Projects', path: '/projects', icon: FolderKanban },
       { label: 'Inbox', path: '/inbox', icon: Inbox },
       { label: 'Alerts', path: '/alerts', icon: Bell },
       { label: 'Action Rules', path: '/action-rules', icon: Workflow },
+      { label: 'Dashboards', path: '/dashboards', icon: LayoutDashboard },
     ],
   },
   {
     label: 'Analyze',
     items: [
-      { label: 'Dashboards', path: '/dashboards', icon: LayoutDashboard },
       { label: 'Benchmark', path: '/benchmark', icon: BarChart3 },
       { label: 'Initiatives', path: '/initiatives', icon: Target },
       { label: 'KPIs', path: '/kpis', icon: Activity },
@@ -59,7 +65,7 @@ const navSections: NavSection[] = [
     items: [
       { label: 'Governance', path: '/governance', icon: ShieldCheck },
       { label: 'Capability Map', path: '/capability-map', icon: Network },
-      { label: 'Object-Centric', path: '/ocpm', icon: Layers },
+      { label: 'Object-Centric (OCPM)', path: '/ocpm', icon: Layers },
       // Mission Control is scoped to /mission-control/:eventLogId — there is no
       // bare /mission-control route in App.tsx, so it must be reached from an
       // event-log detail page, not from a top-level sidebar link. Removed to
@@ -67,10 +73,13 @@ const navSections: NavSection[] = [
     ],
   },
   {
-    label: 'Configure',
+    label: 'Admin',
     items: [
       { label: 'Connectors', path: '/connectors', icon: Plug },
       { label: 'Templates', path: '/templates', icon: BookTemplate },
+      { label: 'Usage', path: '/admin/usage', icon: BarChart2, adminOnly: true },
+      { label: 'Audit', path: '/admin/audit', icon: ClipboardList, adminOnly: true },
+      { label: 'Users', path: '/admin/users', icon: Users, adminOnly: true },
       { label: 'Settings', path: '/settings', icon: Settings },
     ],
   },
@@ -83,6 +92,8 @@ export default function Sidebar() {
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
+
+  const isAdmin = user?.role === 'admin';
 
   const initials = user?.full_name
     ? user.full_name
@@ -138,65 +149,76 @@ export default function Sidebar() {
           </button>
         </div>
 
+        {/* Project context switcher */}
+        <ProjectSwitcher />
+
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto px-2 py-3">
-          {navSections.map((section, sIdx) => (
-            <div key={section.label} className={clsx(sIdx > 0 && 'mt-4')}>
-              <p
-                className={clsx(
-                  'px-2.5 pb-1 text-[10px] font-bold uppercase tracking-widest text-fg-faint transition-opacity duration-150',
-                  sidebarOpen ? 'opacity-100' : 'opacity-0 lg:opacity-0 max-lg:opacity-100',
-                )}
-              >
-                {section.label}
-              </p>
-              <div className="space-y-0.5">
-                {section.items.map((item) => {
-                  const isActive =
-                    location.pathname === item.path ||
-                    location.pathname.startsWith(item.path + '/');
+          {navSections.map((section, sIdx) => {
+            // Filter admin-only items for non-admin users
+            const visibleItems = section.items.filter(
+              (item) => !item.adminOnly || isAdmin,
+            );
+            if (visibleItems.length === 0) return null;
 
-                  return (
-                    <NavLink
-                      key={item.path}
-                      to={item.path}
-                      onClick={() => {
-                        if (window.innerWidth < 1024) setSidebarOpen(false);
-                      }}
-                      title={!sidebarOpen ? item.label : undefined}
-                      aria-current={isActive ? 'page' : undefined}
-                      className={clsx(
-                        'relative group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-all duration-100',
-                        isActive
-                          ? 'bg-accent/10 text-accent'
-                          : 'text-fg-muted hover:bg-surface-3 hover:text-fg',
-                      )}
-                    >
-                      {isActive && (
-                        <span
-                          className="absolute -left-2 top-2 bottom-2 w-[3px] rounded-r-full bg-accent"
-                          aria-hidden
-                        />
-                      )}
-                      <item.icon
-                        size={16}
-                        strokeWidth={isActive ? 2.2 : 1.8}
-                        className="shrink-0"
-                      />
-                      <span
+            return (
+              <div key={section.label} className={clsx(sIdx > 0 && 'mt-4')}>
+                <p
+                  className={clsx(
+                    'px-2.5 pb-1 text-[10px] font-bold uppercase tracking-widest text-fg-faint transition-opacity duration-150',
+                    sidebarOpen ? 'opacity-100' : 'opacity-0 lg:opacity-0 max-lg:opacity-100',
+                  )}
+                >
+                  {section.label}
+                </p>
+                <div className="space-y-0.5">
+                  {visibleItems.map((item) => {
+                    const isActive =
+                      location.pathname === item.path ||
+                      location.pathname.startsWith(item.path + '/');
+
+                    return (
+                      <NavLink
+                        key={item.path}
+                        to={item.path}
+                        onClick={() => {
+                          if (window.innerWidth < 1024) setSidebarOpen(false);
+                        }}
+                        title={!sidebarOpen ? item.label : undefined}
+                        aria-current={isActive ? 'page' : undefined}
                         className={clsx(
-                          'whitespace-nowrap transition-opacity duration-150',
-                          sidebarOpen ? 'opacity-100' : 'opacity-0 lg:opacity-0 max-lg:opacity-100',
+                          'relative group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-all duration-100',
+                          isActive
+                            ? 'bg-accent/10 text-accent'
+                            : 'text-fg-muted hover:bg-surface-3 hover:text-fg',
                         )}
                       >
-                        {item.label}
-                      </span>
-                    </NavLink>
-                  );
-                })}
+                        {isActive && (
+                          <span
+                            className="absolute -left-2 top-2 bottom-2 w-[3px] rounded-r-full bg-accent"
+                            aria-hidden
+                          />
+                        )}
+                        <item.icon
+                          size={16}
+                          strokeWidth={isActive ? 2.2 : 1.8}
+                          className="shrink-0"
+                        />
+                        <span
+                          className={clsx(
+                            'whitespace-nowrap transition-opacity duration-150',
+                            sidebarOpen ? 'opacity-100' : 'opacity-0 lg:opacity-0 max-lg:opacity-100',
+                          )}
+                        >
+                          {item.label}
+                        </span>
+                      </NavLink>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </nav>
 
         {/* Collapse toggle (desktop only) */}

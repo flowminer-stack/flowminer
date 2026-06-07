@@ -46,7 +46,10 @@ export default function SustainabilityPage() {
 
   if (loading) return <LoadingSpinner size="lg" text="Computing emissions..." fullPage />;
   if (error) return <ErrorState message={error} onRetry={retry} />;
-  if (!data || !data.totals) return <p className="py-10 text-center text-[12px] text-fg-muted">No data</p>;
+  // An empty/columnless log returns totals as {} (a truthy empty object), so
+  // check a required field — not just `data.totals` — before rendering metrics.
+  if (!data || !data.totals || data.totals.co2_kg == null)
+    return <p className="py-10 text-center text-[12px] text-fg-muted">No data</p>;
 
   const { totals, by_activity, trend, high_impact } = data;
   const top10 = (by_activity || []).slice(0, 10);
@@ -85,6 +88,25 @@ export default function SustainabilityPage() {
           value={`$${totals.energy_cost.toFixed(2)}`}
         />
       </div>
+
+      {data.methodology && (
+        <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-[11px] leading-relaxed text-fg-muted">
+          <p className="mb-1 font-semibold text-fg-secondary">How these numbers are estimated</p>
+          <p>{data.methodology.disclaimer}</p>
+          {data.methodology.basis && (
+            <p className="mt-1.5">
+              <span className="text-fg-faint">Basis: </span>
+              {data.methodology.basis}
+            </p>
+          )}
+          {Array.isArray(data.methodology.sources) && data.methodology.sources.length > 0 && (
+            <p className="mt-1.5">
+              <span className="text-fg-faint">Reference factors: </span>
+              {data.methodology.sources.join(' · ')}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="rounded-lg border border-line bg-surface-1 p-4">
         <h2 className="mb-3 text-[13px] font-semibold text-fg">CO₂ by activity (top 10)</h2>

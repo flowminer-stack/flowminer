@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Shield, Download, RefreshCw, Search } from 'lucide-react';
 import { format } from 'date-fns';
 import api from '@/api/client';
+import { useAuthStore } from '@/store';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 interface AuditEntry {
@@ -38,6 +39,14 @@ const ACTION_OPTIONS = ['', 'create', 'update', 'delete'];
 
 export default function AuditLogPage() {
   const navigate = useNavigate();
+  const currentUser = useAuthStore((s) => s.user);
+
+  // Admin guard — redirect non-admins immediately (defense-in-depth; the
+  // backend also enforces admin on these endpoints). Mirrors UsageAdminPage /
+  // UserManagementPage so all three /admin pages behave consistently.
+  useEffect(() => {
+    if (currentUser && currentUser.role !== 'admin') navigate('/projects');
+  }, [currentUser, navigate]);
 
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [summary, setSummary] = useState<AuditSummary | null>(null);

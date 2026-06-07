@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import CyMinimap from '@/components/common/CyMinimap';
 import { useParams } from 'react-router-dom';
 import cytoscape, { Core, EventObject, NodeSingular } from 'cytoscape';
 import dagre from 'cytoscape-dagre';
@@ -106,6 +107,8 @@ export default function CausalMapPage() {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
+  // Bumped after each (re)build so the minimap rebinds to the new core.
+  const [cyEpoch, setCyEpoch] = useState(0);
 
   const [data, setData] = useState<CausalDagResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -192,6 +195,7 @@ export default function CausalMapPage() {
     if (prevView) cy.viewport({ zoom: prevView.zoom, pan: prevView.pan });
     else if (cy.zoom() < 0.6) { cy.zoom(0.6); cy.center(); } // readable label floor
     cyRef.current = cy;
+    setCyEpoch((e) => e + 1);
 
     // Click an activity → highlight what causes it + what it causes; dim rest.
     cy.on('tap', 'node', (evt: EventObject) => {
@@ -288,6 +292,7 @@ export default function CausalMapPage() {
         ) : (
           <>
             <div ref={containerRef} className="h-full w-full" style={{ touchAction: 'none' }} />
+            <CyMinimap cyRef={cyRef} cyEpoch={cyEpoch} corner="top-right" />
             <button
               onClick={handleFit}
               className="absolute bottom-3 right-3 z-10 rounded-md border border-line bg-surface-2/95 p-2 text-fg-muted backdrop-blur-md transition-colors hover:text-fg"

@@ -21,6 +21,7 @@ import type { CustomKpi, KpiCreate, KpiUpdate, KpiStatus, KpiMetric } from '@/ty
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import EmptyState from '@/components/common/EmptyState';
 import PageHeader from '@/components/common/PageHeader';
+import ProjectSubnav from '@/components/Project/ProjectSubnav';
 import Modal from '@/components/common/Modal';
 import { useUIStore, useProjectsStore, useEventLogsStore } from '@/store';
 
@@ -775,6 +776,10 @@ export default function KpisPage() {
           </button>
         }
       />
+
+      {/* Show the project subnav whenever a project is active — whether it came
+          from the URL (/kpis/:id) or was picked via the selector on /kpis. */}
+      {activeProjectId && <ProjectSubnav projectId={activeProjectId} active="kpis" />}
 
       {/* Project + event log selectors */}
       <div className="mt-6 flex flex-wrap items-center gap-3">

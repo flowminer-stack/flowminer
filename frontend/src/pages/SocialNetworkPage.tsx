@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import CyMinimap from '@/components/common/CyMinimap';
 import { useParams } from 'react-router-dom';
 import { Users, ArrowRight, ArrowRightLeft, Maximize2 } from 'lucide-react';
 import PageHeader from '@/components/common/PageHeader';
@@ -40,6 +41,8 @@ export default function SocialNetworkPage() {
 
   const cyContainerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
+  // Bumped after each (re)build so the minimap rebinds to the new core.
+  const [cyEpoch, setCyEpoch] = useState(0);
 
   const retry = useCallback(() => {
     setError(null);
@@ -258,6 +261,7 @@ export default function SocialNetworkPage() {
     });
 
     cyRef.current = cy;
+    setCyEpoch((e) => e + 1);
 
     // Node click handler
     cy.on('tap', 'node', (evt) => {
@@ -333,6 +337,9 @@ export default function SocialNetworkPage() {
             className="h-full w-full"
             style={{ display: hasNoResources ? 'none' : undefined }}
           />
+          {data && data.nodes.length > 0 && (
+            <CyMinimap cyRef={cyRef} cyEpoch={cyEpoch} corner="top-right" />
+          )}
         </div>
 
         {/* Side panel */}

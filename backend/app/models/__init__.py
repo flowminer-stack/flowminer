@@ -74,4 +74,10 @@ __all__ = [
     "TASK_STATUSES",
     "TASK_PRIORITIES",
     "SystemSetting",
+    "LogType",
+    "GovernanceEntry",
+    "GovernanceTransition",
+    "GovernanceStatus",
+    "Capability",
+    "LogVersion",
 ]

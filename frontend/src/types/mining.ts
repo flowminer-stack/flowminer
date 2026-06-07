@@ -98,8 +98,6 @@ export interface OverviewResponse {
   };
   working_capital: {
     logs_with_cost: number;
-    total_cost: number | null;
-    cost_per_case: number | null;
     logs: Array<{
       id: string;
       name: string;

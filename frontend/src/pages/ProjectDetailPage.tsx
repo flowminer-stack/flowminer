@@ -29,6 +29,7 @@ import { useEventLogsStore, useUIStore, useProjectsStore, useAuthStore } from '@
 import type { Project, EventLog } from '@/types';
 import { Skeleton } from '@/components/common/LoadingSpinner';
 import PageHeader from '@/components/common/PageHeader';
+import ProjectSubnav from '@/components/Project/ProjectSubnav';
 
 const statusConfig = {
   ready: { label: 'Ready', color: 'badge-emerald', icon: CheckCircle2 },
@@ -239,6 +240,7 @@ export default function ProjectDetailPage() {
             </div>
           }
         />
+        <ProjectSubnav projectId={projectId!} active="logs" />
       </div>
 
       {/* Stats — three actually-useful tiles (dropped redundant "Event Logs" count) */}

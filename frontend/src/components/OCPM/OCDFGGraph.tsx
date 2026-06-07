@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Boxes, Maximize2 } from 'lucide-react';
 import cytoscape from 'cytoscape';
 import dagre from 'cytoscape-dagre';
@@ -8,6 +8,7 @@ import type { Core } from 'cytoscape';
 import { useUIStore } from '@/store';
 import type { OCELSummary, OCDFGResponse } from '@/types';
 import { getTypeColor, formatNumber } from './shared';
+import CyMinimap from '@/components/common/CyMinimap';
 
 // ─── OC-DFG Cytoscape graph ───────────────────────────────────────────────────
 
@@ -22,6 +23,8 @@ export default function OCDFGGraph({
   const isDark = theme === 'dark';
   const cyContainerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
+  // Bumped after each (re)build so the minimap rebinds to the new core.
+  const [cyEpoch, setCyEpoch] = useState(0);
 
   const buildGraph = useCallback(() => {
     if (!cyContainerRef.current) return;
@@ -148,6 +151,7 @@ export default function OCDFGGraph({
     if (prevView) cy.viewport({ zoom: prevView.zoom, pan: prevView.pan });
     else if (cy.zoom() < 0.6) { cy.zoom(0.6); cy.center(); } // readable label floor
     cyRef.current = cy;
+    setCyEpoch((e) => e + 1);
   }, [data, summary, isDark]);
 
   useEffect(() => {
@@ -172,6 +176,7 @@ export default function OCDFGGraph({
   return (
     <div className="relative h-full">
       <div ref={cyContainerRef} className="h-full w-full" />
+      <CyMinimap cyRef={cyRef} cyEpoch={cyEpoch} corner="bottom-right" />
       <button
         onClick={() => cyRef.current?.fit(undefined, 50)}
         className="btn-ghost absolute right-3 top-3 text-[11px]"

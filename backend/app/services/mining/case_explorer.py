@@ -280,7 +280,22 @@ def get_activity_detail(engine, df: pd.DataFrame, activity_name: str) -> dict:
 
     activity_df = df[df[ACTIVITY_COL] == activity_name]
     if activity_df.empty:
-        raise ValueError(f"Activity '{activity_name}' not found in event log")
+        # The DFG view identifies nodes by a *sanitized* id (lowercased, with
+        # spaces/slashes collapsed to underscores). If the exact name doesn't
+        # match, resolve that sanitized id back to the original activity name so
+        # clicking a node never 404s. Only accept an unambiguous match.
+        from app.services.discovery import _sanitize_id
+
+        target = _sanitize_id(activity_name)
+        candidates = [
+            a for a in df[ACTIVITY_COL].dropna().unique()
+            if _sanitize_id(a) == target
+        ]
+        if len(candidates) == 1:
+            activity_name = candidates[0]
+            activity_df = df[df[ACTIVITY_COL] == activity_name]
+        if activity_df.empty:
+            raise ValueError(f"Activity '{activity_name}' not found in event log")
 
     frequency = int(len(activity_df))
     case_count = int(activity_df[CASE_COL].nunique())

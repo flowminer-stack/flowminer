@@ -3,8 +3,8 @@ Executive Overview endpoint.
 
 Aggregates cross-project KPIs for the current user into a single payload
 used by the /overview frontend page. The goal is a one-glance view of
-cases, alerts, initiatives, cycle time, and value impact without the user
-needing to open individual projects.
+cases, alerts, initiatives, throughput density, and value impact without the
+user needing to open individual projects.
 """
 
 from __future__ import annotations
@@ -48,13 +48,19 @@ async def get_overview(
     Return an executive overview payload aggregated across every project the
     current user can see:
 
-    - totals: projects, event logs, cases, events, activities
-    - cycle_time: weighted average case duration (seconds) across ready logs
+    - totals: projects, event logs, cases, events, activities, and
+      avg_events_per_case (a throughput-density proxy — see note below)
     - alerts: total, active, triggered in the last 24h
     - initiatives: total, active, achieved, realized savings
-    - working_capital: only populated when any log has a `cost_column`
-      mapped — then total_cost + cost_per_case are rolled up
+    - working_capital: which logs have a `cost_column` mapped (a pointer to
+      cost-tracked projects — per-case dollar rollups are computed lazily by
+      the Initiatives cost calculator, not here)
     - recent_event_logs: the 5 most recently created logs with their project
+
+    NOTE: this endpoint intentionally never loads an event-log dataframe, so it
+    reports `avg_events_per_case` (events ÷ cases) as a cheap density metric.
+    That is NOT case cycle time (first-to-last event duration) — real cycle
+    time lives on the per-log Bottlenecks / Performance views.
     """
 
     proj_filter = _visible_project_filter(current_user)
@@ -88,11 +94,11 @@ async def get_overview(
         for a in (l.activities_list or []):
             activity_union.add(str(a))
 
-    # --- Cycle time: weighted average of case-level duration ---
-    # We don't want to load every CSV, so we rely on cached summary stats
-    # stored on the EventLog row. Avg case duration isn't stored directly,
-    # so we read off total_events/total_cases as a rough density metric
-    # and fall back to `None` when nothing is available.
+    # --- Throughput density (NOT cycle time) ---
+    # Real case cycle time needs per-case durations, which would mean loading
+    # every CSV. To keep this endpoint dataframe-free we report events ÷ cases —
+    # a cheap density proxy the UI labels honestly as "Throughput density".
+    # Cycle time proper is on the per-log Bottlenecks view.
     avg_events_per_case = (
         total_events / total_cases if total_cases > 0 else 0.0
     )
@@ -123,14 +129,13 @@ async def get_overview(
     cost_logs = [l for l in ready_logs if l.cost_column]
     working_capital: Optional[dict] = None
     if cost_logs:
-        # Without loading the dataframe we can't actually sum costs — but we
-        # can at least announce that cost is tracked on N logs so the UI
-        # renders the tile. The per-log dollar rollup is computed by the
-        # Initiatives cost-per-case calculator when requested.
+        # Pointer only: we never load dataframes here, so rather than promise a
+        # dollar figure we can't compute (the old payload returned total_cost /
+        # cost_per_case = null on every call) we report *which* logs have a cost
+        # column mapped. The per-case dollar rollup is computed on demand by the
+        # Initiatives cost-per-case calculator.
         working_capital = {
             "logs_with_cost": len(cost_logs),
-            "total_cost": None,
-            "cost_per_case": None,
             "logs": [
                 {
                     "id": str(l.id),
