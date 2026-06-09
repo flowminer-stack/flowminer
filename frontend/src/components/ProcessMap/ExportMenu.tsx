@@ -3,6 +3,7 @@ import { type Core } from 'cytoscape';
 import { Download, Image, FileCode2, FileSpreadsheet, ChevronDown } from 'lucide-react';
 import clsx from 'clsx';
 import type { ProcessNode, ProcessEdge } from '@/types';
+import { useUIStore } from '@/store';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -102,8 +103,11 @@ const ExportMenu: React.FC<ExportMenuProps> = ({ cyRef, nodes, edges, isDark }) 
       const svgContent = (cy as any).svg({ full: true, scale: 1 });
       triggerDownload(svgContent, 'process-map.svg', 'image/svg+xml');
     } catch {
-      // Fallback: notify user
-      console.warn('SVG export requires cytoscape-svg plugin.');
+      useUIStore.getState().addNotification({
+        type: 'error',
+        title: 'SVG export unavailable',
+        message: 'This build does not include the SVG exporter — use PNG export instead.',
+      });
     }
     setOpen(false);
   };

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 import { Markdown } from '@/components/common/Markdown';
 import {
   AlertCircle,
@@ -176,6 +177,8 @@ function ExplainDrawer({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  useEscapeKey(onClose);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -209,6 +212,9 @@ function ExplainDrawer({
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Improvement finding explanation"
         className="flex h-full w-full max-w-md flex-col border-l border-line bg-surface-0 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >

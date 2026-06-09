@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Sparkles, X, Clock, User as UserIcon, ArrowRight } from 'lucide-react';
 import { ai as aiApi } from '@/api/client';
 import type { VariantExplanation } from '@/api/client';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 
 interface VariantExplainDrawerProps {
   eventLogId: string;
@@ -27,6 +28,8 @@ export default function VariantExplainDrawer({
   const [data, setData] = useState<VariantExplanation | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  useEscapeKey(onClose);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,6 +72,9 @@ export default function VariantExplainDrawer({
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Variant explanation"
         className="flex h-full w-full max-w-md flex-col border-l border-line bg-surface-0 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >

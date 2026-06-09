@@ -14,6 +14,7 @@ import {
 import api from '@/api/http';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import { useUIStore } from '@/store';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -157,7 +158,8 @@ function ApiKeysPanel() {
   };
 
   const handleRevoke = async (id: string, name: string) => {
-    if (!window.confirm(`Revoke key "${name}"? This cannot be undone.`)) return;
+    const ok = await confirmDialog({ title: `Revoke API key "${name}"?`, message: 'This key will stop working immediately and cannot be restored.', confirmLabel: 'Revoke key', danger: true });
+    if (!ok) return;
     try {
       await api.delete(`/api-keys/${id}`);
       setKeys((prev) => prev.filter((k) => k.id !== id));

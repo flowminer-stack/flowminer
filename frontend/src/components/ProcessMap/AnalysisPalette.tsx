@@ -335,9 +335,27 @@ export default function AnalysisPalette({ eventLogId }: AnalysisPaletteProps) {
     })).filter((g) => g.items.length > 0);
   }, [query]);
 
+  // With no query, float the recommended analyses into a "Start here" group at
+  // the top — so ⌘K → Enter lands on the best first analysis for this log's
+  // shape rather than whatever group happens to be declared first.
+  const displayGroups = useMemo(() => {
+    if (query.trim()) return filteredGroups;
+    const isRec = (item: PaletteItem) => {
+      const key = item.kind === 'hub' ? item.id : item.path;
+      if (hints) return hints.isRecommended(key) && !hints.disabledReason(key);
+      return item.kind === 'hub' && !!HUB_BY_ID[item.id]?.recommended;
+    };
+    const recItems = PALETTE_GROUPS.flatMap((g) => g.items)
+      .filter(isRec)
+      // Re-keyed so they don't collide with their originals further down.
+      .map((it) => ({ ...it, key: `rec-${it.key}` }) as PaletteItem);
+    if (recItems.length === 0) return filteredGroups;
+    return [{ label: 'Start here', items: recItems }, ...filteredGroups];
+  }, [filteredGroups, query, hints]);
+
   // Flat result list for keyboard navigation, plus key → flat-index lookup so
   // grouped rendering can highlight the active row.
-  const flatItems = useMemo(() => filteredGroups.flatMap((g) => g.items), [filteredGroups]);
+  const flatItems = useMemo(() => displayGroups.flatMap((g) => g.items), [displayGroups]);
   const flatIndexByKey = useMemo(() => {
     const m = new Map<string, number>();
     flatItems.forEach((it, idx) => m.set(`${it.kind}-${it.key}`, idx));
@@ -462,12 +480,12 @@ export default function AnalysisPalette({ eventLogId }: AnalysisPaletteProps) {
                 </div>
               ) : (
                 <>
-                {filteredGroups.length === 0 && !showAsk && (
+                {displayGroups.length === 0 && !showAsk && (
                   <div className="px-3 py-10 text-center">
                     <p className="text-[12px] text-fg-muted">No analyses match “{query}”.</p>
                   </div>
                 )}
-                {filteredGroups.map((group) => (
+                {displayGroups.map((group) => (
                   <div key={group.label} className="mb-1.5 last:mb-0">
                     <p className="px-2.5 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-fg-faint">
                       {group.label}
@@ -529,8 +547,8 @@ export default function AnalysisPalette({ eventLogId }: AnalysisPaletteProps) {
                 ))}
                 {/* Search-first Ask: the typed query, askable as a question. */}
                 {showAsk && (
-                  <div className={clsx(filteredGroups.length > 0 && 'mt-1 border-t border-line pt-1.5')}>
-                    {filteredGroups.length === 0 && (
+                  <div className={clsx(displayGroups.length > 0 && 'mt-1 border-t border-line pt-1.5')}>
+                    {displayGroups.length === 0 && (
                       <p className="px-2.5 pb-1 pt-2 text-[11px] text-fg-muted">
                         No analyses match — ask it as a question instead:
                       </p>

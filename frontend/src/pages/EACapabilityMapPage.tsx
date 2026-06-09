@@ -12,6 +12,7 @@ import {
   type Capability,
 } from '@/api/client';
 import type { EventLog, Project } from '@/types';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 // Mavim-style EA capability map backed by the ``capabilities`` table.
 // Users build a tree of business capabilities (each with a parent),
@@ -101,7 +102,8 @@ export default function EACapabilityMapPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm('Delete this capability and all its children?')) return;
+    const ok = await confirmDialog({ title: 'Delete this capability?', message: 'This capability and all its children will be permanently removed.', confirmLabel: 'Delete capability', danger: true });
+    if (!ok) return;
     await governance.deleteCapability(id);
     reload();
   };

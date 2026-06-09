@@ -22,6 +22,7 @@ import { useEventLogData } from '@/hooks/useProcessMining';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
 import InsightBanner from '@/components/common/InsightBanner';
+import FilterScopeNotice from '@/components/common/FilterScopeNotice';
 import { formatDuration } from '@/utils/format';
 
 export default function RootCausePage() {
@@ -70,6 +71,8 @@ export default function RootCausePage() {
         description="Attributes that correlate with longer or shorter case durations. Significant correlations suggest factors affecting performance."
         subtitle={`${eventLog?.name ?? 'Event Log'} — identifying factors affecting process performance`}
       />
+
+      <FilterScopeNotice eventLogId={eventLogId} />
 
       <FeatureGuide
         storageKey="root-cause"

@@ -21,6 +21,7 @@ import { connectors as connectorsApi } from '@/api/client';
 import type { Connector } from '@/types';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import Modal from '@/components/common/Modal';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 import PageHeader from '@/components/common/PageHeader';
 import ConnectorForm from '@/components/Connectors/ConnectorForm';
 import ExtractionCopilot from '@/components/Connectors/ExtractionCopilot';
@@ -123,7 +124,13 @@ export default function ConnectorsPage() {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`Delete connector "${name}"?`)) return;
+    const ok = await confirmDialog({
+      title: `Delete connector "${name}"?`,
+      message: 'Scheduled syncs stop immediately. Event logs already imported are kept.',
+      confirmLabel: 'Delete connector',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await connectorsApi.delete(id);
       setConnectorList((prev) => prev.filter((c) => c.id !== id));
@@ -323,6 +330,9 @@ export default function ConnectorsPage() {
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
         size="xl"
+        // 15+ fields across a 3-step wizard — a stray outside click must not
+        // destroy the user's input. Esc / X still close.
+        disableBackdropClose
       >
         <ConnectorForm
           onSave={handleCreateConnector}

@@ -8,6 +8,7 @@ import Modal from '@/components/common/Modal';
 import { journeys as journeysApi } from '@/api/journeys';
 import { useUIStore } from '@/store';
 import type { Journey, JourneyStage, JourneyCreate, JourneyUpdate } from '@/types/journey';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -342,7 +343,8 @@ function StageMap({ journey, onStagesChange }: StageMapProps) {
   };
 
   const handleDeleteStage = async (stageId: string) => {
-    if (!confirm('Remove this stage?')) return;
+    const ok = await confirmDialog({ title: 'Remove this stage?', message: 'The stage and its touchpoints will be permanently deleted from this journey.', confirmLabel: 'Remove stage', danger: true });
+    if (!ok) return;
     await persistStages(journey.stages.filter((s) => s.id !== stageId));
   };
 
@@ -536,7 +538,9 @@ export default function JourneyMapPage() {
   };
 
   const handleDeleteJourney = async (id: string) => {
-    if (!confirm('Delete this journey and all its stages?')) return;
+    const journeyName = list.find((j) => j.id === id)?.name ?? 'this journey';
+    const ok = await confirmDialog({ title: `Delete "${journeyName}"?`, message: 'All stages in this journey will be permanently removed.', confirmLabel: 'Delete journey', danger: true });
+    if (!ok) return;
     try {
       await journeysApi.delete(id);
       setList((prev) => prev.filter((j) => j.id !== id));

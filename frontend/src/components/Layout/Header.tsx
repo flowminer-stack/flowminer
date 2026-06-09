@@ -421,11 +421,13 @@ export default function Header() {
         )}
       </div>
 
-      {/* Ask AI toggle */}
+      {/* Ask AI toggle — the single global entry point for the AI chat (the
+          process-view toolbar duplicate was removed); also the tour anchor. */}
       <button
         onClick={() => useUIStore.getState().toggleAiChat()}
         className="flex items-center gap-1.5 rounded-lg border border-accent/30 px-2.5 py-1 text-[11px] font-semibold text-accent transition-colors hover:bg-accent/10"
         title="Ask AI about this event log"
+        data-tour="ask-ai"
       >
         <Sparkles size={13} aria-hidden />
         <span className="hidden sm:inline">Ask AI</span>

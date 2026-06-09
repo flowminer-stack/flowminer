@@ -3,6 +3,7 @@ import CyMinimap from '@/components/common/CyMinimap';
 import { useParams } from 'react-router-dom';
 import { Users, ArrowRight, ArrowRightLeft, Maximize2 } from 'lucide-react';
 import PageHeader from '@/components/common/PageHeader';
+import FilterScopeNotice from '@/components/common/FilterScopeNotice';
 import cytoscape from 'cytoscape';
 import type { Core } from 'cytoscape';
 import { useEventLogData } from '@/hooks/useProcessMining';
@@ -316,6 +317,8 @@ export default function SocialNetworkPage() {
           ) : undefined
         }
       />
+
+      <FilterScopeNotice eventLogId={eventLogId} />
 
       {/* Main content */}
       <div className="mt-4 flex flex-1 gap-4 overflow-hidden">

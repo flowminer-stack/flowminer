@@ -28,6 +28,7 @@ import LoadingSpinner from '@/components/common/LoadingSpinner';
 import PageHeader from '@/components/common/PageHeader';
 import { projects as projectsApi, eventLogs as eventLogsApi } from '@/api/client';
 import OnboardingWizard from '@/components/Onboarding/OnboardingWizard';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 import { markOnboardingStep } from '@/utils/onboarding';
 
 // ─── Filters ──────────────────────────────────────────────────────────────
@@ -149,11 +150,13 @@ export default function ProjectsPage() {
     }
     return counts;
   }, [projects]);
-  // Onboarding is minimized (not destroyed) on dismiss, so it can be reopened
-  // from the "Getting started" affordance — no more dismiss-forever dead end.
-  const [showOnboarding, setShowOnboarding] = useState(() => {
-    return !localStorage.getItem('flowminer-onboarding-minimized');
-  });
+  // Onboarding visibility is tri-state: null = automatic (open only while the
+  // workspace is empty — once projects exist it stops burying them below the
+  // fold), true/false = the user's explicit choice via dismiss / "Getting
+  // started". An explicit minimize persists across sessions.
+  const [onboardingChoice, setOnboardingChoice] = useState<boolean | null>(() =>
+    localStorage.getItem('flowminer-onboarding-minimized') ? false : null,
+  );
   const onboardingHandled = useRef(false);
 
   useEffect(() => {
@@ -232,7 +235,13 @@ export default function ProjectsPage() {
   };
 
   const handleDelete = async (projectId: string, projectName: string) => {
-    if (!window.confirm(`Delete "${projectName}"? This cannot be undone.`)) return;
+    const ok = await confirmDialog({
+      title: `Delete project "${projectName}"?`,
+      message: 'All of its event logs, analyses, dashboards and KPIs are permanently removed. This cannot be undone.',
+      confirmLabel: 'Delete project',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await deleteProject(projectId);
       addNotification({ type: 'success', title: 'Project deleted' });
@@ -301,13 +310,15 @@ export default function ProjectsPage() {
     return <LoadingSpinner size="lg" text="Loading projects…" fullPage />;
   }
 
+  const showOnboarding = onboardingChoice ?? projects.length === 0;
+
   return (
     <div>
       {showOnboarding ? (
         <div className="mb-6">
           <OnboardingWizard
             onDismiss={() => {
-              setShowOnboarding(false);
+              setOnboardingChoice(false);
               localStorage.setItem('flowminer-onboarding-minimized', '1');
             }}
             onNavigate={(path) => navigate(path)}
@@ -316,7 +327,7 @@ export default function ProjectsPage() {
       ) : (
         <button
           onClick={() => {
-            setShowOnboarding(true);
+            setOnboardingChoice(true);
             localStorage.removeItem('flowminer-onboarding-minimized');
           }}
           className="mb-6 inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-1 px-3 py-1.5 text-[12px] font-medium text-fg-muted transition-colors hover:border-line-strong hover:text-fg"

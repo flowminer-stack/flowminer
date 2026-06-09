@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { GitBranch, Plus, Trash2, Download } from 'lucide-react';
 import { governance, type LogVersion } from '@/api/client';
 import { useFilterStore } from '@/store/filterStore';
+import { confirmDialog, promptDialog } from '@/components/common/ConfirmDialog';
 
 // Apromore-style log version tree. Users snapshot the current filter
 // state as a named version, optionally branched off a parent. The
@@ -47,9 +48,17 @@ export default function LogVersionTree({ eventLogId }: { eventLogId: string }) {
   const tree = useMemo(() => buildVersionTree(versions), [versions]);
 
   const handleSnapshot = async () => {
-    const name = window.prompt('Version name:');
-    if (!name) return;
-    const description = window.prompt('Optional description:') ?? undefined;
+    const result = await promptDialog({
+      title: 'Save snapshot',
+      confirmLabel: 'Save snapshot',
+      fields: [
+        { key: 'name', label: 'Snapshot name', required: true },
+        { key: 'description', label: 'Description (optional)' },
+      ],
+    });
+    if (!result) return;
+    const name = result.name;
+    const description = result.description || undefined;
     const filterJson = serialise();
     try {
       await governance.createLogVersion({
@@ -72,8 +81,8 @@ export default function LogVersionTree({ eventLogId }: { eventLogId: string }) {
   };
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm('Delete this version? Child branches will become roots.'))
-      return;
+    const ok = await confirmDialog({ title: 'Delete this version?', message: 'Child branches will become roots and will not be deleted.', confirmLabel: 'Delete version', danger: true });
+    if (!ok) return;
     await governance.deleteLogVersion(id);
     reload();
   };

@@ -25,6 +25,7 @@ import ProjectSubnav from '@/components/Project/ProjectSubnav';
 import Modal from '@/components/common/Modal';
 import FeatureGuide from '@/components/common/FeatureGuide';
 import { useUIStore, useProjectsStore, useEventLogsStore } from '@/store';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -844,7 +845,13 @@ export default function KpisPage() {
   };
 
   const handleDelete = async (kpi: CustomKpi) => {
-    if (!window.confirm(`Delete KPI "${kpi.name}"?`)) return;
+    const ok = await confirmDialog({
+      title: `Delete KPI "${kpi.name}"?`,
+      message: 'This KPI definition and all its historical values will be permanently removed.',
+      confirmLabel: 'Delete KPI',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await kpisApi.delete(kpi.id);
       setKpis((prev) => prev.filter((k) => k.id !== kpi.id));

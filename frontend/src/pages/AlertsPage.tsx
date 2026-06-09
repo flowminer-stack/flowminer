@@ -22,6 +22,7 @@ import Modal from '@/components/common/Modal';
 import PageHeader from '@/components/common/PageHeader';
 import AlertConfig from '@/components/Alerts/AlertConfig';
 import { useUIStore } from '@/store';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 const channelIcons: Record<string, typeof Mail> = {
   email: Mail,
@@ -81,7 +82,13 @@ export default function AlertsPage() {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`Delete alert "${name}"?`)) return;
+    const ok = await confirmDialog({
+      title: `Delete alert "${name}"?`,
+      message: 'This alert rule and all its notification history will be permanently removed.',
+      confirmLabel: 'Delete alert',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await alertsApi.delete(id);
       setAlertList((prev) => prev.filter((a) => a.id !== id));

@@ -12,6 +12,7 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { ProductTour } from '@/components/Onboarding/ProductTour';
 import FloatingAIChat from '@/components/AI/FloatingAIChat';
 import AnalysisPalette from '@/components/ProcessMap/AnalysisPalette';
+import ConfirmDialogHost from '@/components/common/ConfirmDialog';
 
 const notificationIcons = {
   success: CheckCircle,
@@ -78,6 +79,9 @@ export default function Layout() {
       {/* One global analysis palette (⌘K) — opened from the sidebar trigger,
           the process-view toolbar, and the active-log quick links. */}
       <AnalysisPalette />
+      {/* Styled confirm/prompt dialogs (window.confirm replacement) — host for
+          the imperative confirmDialog()/promptDialog() API. */}
+      <ConfirmDialogHost />
 
       {/* Toast notifications */}
       <div className="fixed bottom-5 right-5 z-[100] flex flex-col gap-2">

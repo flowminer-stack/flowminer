@@ -17,6 +17,7 @@ import { formatDistanceToNow } from 'date-fns';
 import clsx from 'clsx';
 import { tasks as tasksApi } from '@/api/client';
 import { useProjectsStore, useUIStore } from '@/store';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 import type { Task, TaskStatus, TaskPriority, TaskSummary } from '@/types';
 import PageHeader from '@/components/common/PageHeader';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
@@ -133,7 +134,13 @@ export default function InboxPage() {
   };
 
   const deleteTask = async (task: Task) => {
-    if (!window.confirm(`Delete task "${task.title}"? This cannot be undone.`)) return;
+    const ok = await confirmDialog({
+      title: `Delete task "${task.title}"?`,
+      message: 'This task and any associated comments or attachments will be permanently removed.',
+      confirmLabel: 'Delete task',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await tasksApi.delete(task.id);
       setTaskList((prev) => prev.filter((t) => t.id !== task.id));

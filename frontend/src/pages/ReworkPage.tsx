@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Repeat, RefreshCw, IterationCw, Target } from 'lucide-react';
 import PageHeader from '@/components/common/PageHeader';
+import FilterScopeNotice from '@/components/common/FilterScopeNotice';
 import HintTooltip from '@/components/common/Tooltip';
 import {
   BarChart,
@@ -179,6 +180,8 @@ export default function ReworkPage() {
         description="Activities repeated within the same case. Rework often indicates errors, rejections, or quality issues."
         subtitle={eventLog?.name ?? 'Event Log'}
       />
+
+      <FilterScopeNotice eventLogId={eventLogId} />
 
       {error ? (
         <ErrorState message={error} onRetry={retry} />

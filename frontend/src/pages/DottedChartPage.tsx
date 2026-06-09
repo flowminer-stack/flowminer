@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { ScatterChart as ScatterIcon, Calendar, Hash } from 'lucide-react';
 import PageHeader from '@/components/common/PageHeader';
+import FilterScopeNotice from '@/components/common/FilterScopeNotice';
 import EmptyState from '@/components/common/EmptyState';
 import clsx from 'clsx';
 import {
@@ -199,6 +200,8 @@ export default function DottedChartPage() {
         description="Each dot represents one event. Columns are time; rows are cases, resources, or activities depending on the selected Y-axis mode."
         subtitle={eventLog?.name ?? 'Event Log'}
       />
+
+      <FilterScopeNotice eventLogId={eventLogId} />
 
       {/* Stats bar */}
       {data && (

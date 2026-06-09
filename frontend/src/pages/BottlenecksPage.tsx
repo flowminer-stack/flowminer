@@ -7,6 +7,7 @@ import HintTooltip from '@/components/common/Tooltip';
 import clsx from 'clsx';
 import ExportButtons from '@/components/common/ExportButtons';
 import PageHeader from '@/components/common/PageHeader';
+import FilterScopeNotice from '@/components/common/FilterScopeNotice';
 import EmptyState from '@/components/common/EmptyState';
 import RelatedAnalyses from '@/components/common/RelatedAnalyses';
 import {
@@ -154,6 +155,8 @@ export default function BottlenecksPage() {
         }
         actions={eventLogId && <ExportButtons eventLogId={eventLogId} analysis="bottlenecks" />}
       />
+
+      <FilterScopeNotice eventLogId={eventLogId} />
 
       {/* Summary cards */}
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">

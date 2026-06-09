@@ -14,6 +14,7 @@ import clsx from 'clsx';
 import { systemSettings } from '@/api/client';
 import type { LLMConfigResponse } from '@/api/client';
 import { useAuthStore, useUIStore } from '@/store';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 export default function AISettingsTab() {
   const user = useAuthStore((s) => s.user);
@@ -111,9 +112,8 @@ export default function AISettingsTab() {
 
   const handleClearApiKey = async () => {
     if (!canEditLLM) return;
-    if (!confirm('Clear the stored API key? The backend will fall back to environment variables.')) {
-      return;
-    }
+    const ok = await confirmDialog({ title: 'Clear stored API key?', message: 'The backend will fall back to environment variables if set.', confirmLabel: 'Clear key' });
+    if (!ok) return;
     setSaving(true);
     try {
       const next = await systemSettings.updateLLMConfig({ api_key: '' });

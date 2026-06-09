@@ -15,7 +15,9 @@ import { getActiveLogId } from '@/utils/activeLog';
 // the core catalog is one click away — no drilling into the process view and
 // hunting the Analysis tab. "All analyses" opens the full ⌘K palette.
 const QUICK_LINKS: { label: string; icon: React.ElementType; to: (id: string) => string }[] = [
-  { label: 'Process Map', icon: Map, to: (id) => `/process/${id}` },
+  // ?tab=map: a link that says "Process Map" must open the 2D map, never the
+  // City tab that large logs otherwise auto-land on.
+  { label: 'Process Map', icon: Map, to: (id) => `/process/${id}?tab=map` },
   { label: 'Variants', icon: GitBranch, to: (id) => `/variants/${id}` },
   { label: 'Bottlenecks', icon: AlertTriangle, to: (id) => `/bottlenecks/${id}` },
   { label: 'Conformance', icon: CheckCircle2, to: (id) => `/conformance/${id}` },
@@ -53,8 +55,8 @@ export default function ActiveLogNav() {
       <div className="space-y-0.5">
         {QUICK_LINKS.map(({ label, icon: Icon, to }) => {
           const path = to(logId);
-          const isActive =
-            location.pathname === path || location.pathname.startsWith(path + '?');
+          // Compare without the query string — pathname never includes it.
+          const isActive = location.pathname === path.split('?')[0];
           return (
             <NavLink
               key={label}

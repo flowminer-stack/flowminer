@@ -9,6 +9,7 @@ import LoadingSpinner from '@/components/common/LoadingSpinner';
 import Modal from '@/components/common/Modal';
 import { useUIStore } from '@/store';
 import type { ValueCalculator } from '@/types/analytics';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 // Zod schema — validation runs on submit and on blur, with field-level
 // error messages rendered inline. We keep the number fields as plain
@@ -231,7 +232,8 @@ export default function InitiativesPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this initiative?')) return;
+    const ok = await confirmDialog({ title: 'Delete this initiative?', message: 'This initiative and all its measurements will be permanently removed.', confirmLabel: 'Delete initiative', danger: true });
+    if (!ok) return;
     try {
       await initiativesApi.delete(id);
       await load();

@@ -26,6 +26,7 @@ import Modal from '@/components/common/Modal';
 import PageHeader from '@/components/common/PageHeader';
 import ProjectSubnav from '@/components/Project/ProjectSubnav';
 import { useUIStore } from '@/store';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -444,7 +445,13 @@ export default function ScheduledReportsPage() {
   };
 
   const handleDelete = async (report: ScheduledReport) => {
-    if (!window.confirm(`Delete "${report.name}"? This cannot be undone.`)) return;
+    const ok = await confirmDialog({
+      title: `Delete "${report.name}"?`,
+      message: 'This scheduled report and all its delivery history will be permanently removed.',
+      confirmLabel: 'Delete report',
+      danger: true,
+    });
+    if (!ok) return;
     setDeletingId(report.id);
     try {
       await reportsApi.delete(report.id);

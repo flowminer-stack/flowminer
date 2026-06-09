@@ -653,16 +653,24 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
           />
         )}
 
-        {/* Test connection */}
+        {/* Test connection — only a SAVED connector can actually be tested
+            (the test endpoint runs against the stored config), so during
+            creation the button is honestly disabled instead of faking a
+            "Connection successful" result. */}
         <div className="flex items-center gap-3">
           <button
             onClick={handleTest}
-            disabled={testStatus === 'testing'}
+            disabled={testStatus === 'testing' || !connector?.id}
+            title={
+              !connector?.id
+                ? 'Save the connector first — the test runs against the saved configuration'
+                : undefined
+            }
             className={clsx(
               'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border transition-all',
               testStatus === 'testing'
                 ? 'bg-surface-1 text-fg-faint border-line cursor-wait'
-                : 'btn-secondary'
+                : 'btn-secondary disabled:cursor-not-allowed disabled:opacity-50'
             )}
           >
             {testStatus === 'testing' ? (
@@ -672,6 +680,12 @@ const ConnectorForm: React.FC<ConnectorFormProps> = ({
             )}
             Test Connection
           </button>
+
+          {!connector?.id && (
+            <p className="text-[11px] text-fg-faint">
+              Available after the first save — then you can validate connectivity here.
+            </p>
+          )}
 
           {testStatus === 'success' && (
             <div className="flex items-center gap-1.5 text-xs font-medium text-success bg-success/10 px-3 py-1.5 rounded-lg">

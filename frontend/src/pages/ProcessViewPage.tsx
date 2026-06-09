@@ -110,7 +110,7 @@ export default function ProcessViewPage() {
     () => (supportsNoise && noiseThreshold > 0 ? { threshold: noiseThreshold } : undefined),
     [supportsNoise, noiseThreshold],
   );
-  const { discovery, loading: mapLoading, refetch } = useProcessMap(eventLogId, algorithm, hasFilters ? stableFilters : undefined, stableParams);
+  const { discovery, loading: mapLoading, error: mapError, refetch } = useProcessMap(eventLogId, algorithm, hasFilters ? stableFilters : undefined, stableParams);
 
   const gatewayCount = useMemo(() => {
     if (!discovery?.nodes || !discovery?.edges) return 0;
@@ -145,6 +145,10 @@ export default function ProcessViewPage() {
       !tabParam &&
       tab !== 'city' &&
       discovery.edges.length >= LARGE_EDGE_THRESHOLD &&
+      // Genuine scale only: a small-but-dense log (e.g. sepsis — 16 activities,
+      // 100+ edges) is far better served by the 2D map + Clean View than by an
+      // unlabeled 3D skyline. Edge count alone over-triggers on density.
+      discovery.nodes.length >= 30 &&
       isWebGLAvailable()
     ) {
       setTab('city');
@@ -551,17 +555,9 @@ export default function ProcessViewPage() {
           )}
         </div>
 
-        {/* Ask AI — scoped to the current event log. Placed next to
-            Quality and Report because all three are per-log actions. */}
-        <button
-          onClick={() => useUIStore.getState().toggleAiChat()}
-          className="flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent px-3 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-accent/90"
-          title="Ask AI about this event log"
-          data-tour="ask-ai"
-        >
-          <Sparkles size={13} />
-          Ask AI
-        </button>
+        {/* Ask AI deliberately NOT duplicated here — the global header button
+            (data-tour="ask-ai") opens the same chat; two identical buttons in
+            one viewport read as two different features. */}
 
         {/* Opens the global, searchable analysis palette (⌘K / Ctrl-K). */}
         <AnalysisPaletteButton />
@@ -1199,6 +1195,20 @@ export default function ProcessViewPage() {
                         />
                       )}
                     </div>
+                  </div>
+                ) : mapError ? (
+                  // Failure must look like failure — discovery can time out on
+                  // big logs, and the empty-state placeholder used to swallow it.
+                  <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+                    <AlertTriangle size={32} className="mb-2 text-danger" />
+                    <p className="text-[13px] font-semibold text-fg">Process discovery failed</p>
+                    <p className="mt-1 max-w-sm text-[12px] text-fg-muted">{mapError}</p>
+                    <button
+                      onClick={() => refetch(algorithm)}
+                      className="btn-secondary mt-3 text-[12px]"
+                    >
+                      Retry discovery
+                    </button>
                   </div>
                 ) : (
                   <div className="flex h-full flex-col items-center justify-center">

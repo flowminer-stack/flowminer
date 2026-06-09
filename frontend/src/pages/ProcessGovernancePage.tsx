@@ -7,6 +7,7 @@ import FeatureGuide from '@/components/common/FeatureGuide';
 import { governance, type GovernanceEntry, type GovernanceStatus } from '@/api/client';
 import ChangeRequestsPanel from '@/components/Governance/ChangeRequestsPanel';
 import { useProjectsStore } from '@/store';
+import { promptDialog } from '@/components/common/ConfirmDialog';
 
 // ARIS Flows-style governance lifecycle. Backed by ``governance_entries``
 // + ``governance_transitions`` so every promotion is recorded with
@@ -86,8 +87,14 @@ export default function ProcessGovernancePage() {
     if (!e) return;
     const n = nextState[e.status];
     if (!n) return;
-    const comment = window.prompt(`Promoting "${e.name}" to ${n}. Optional comment:`);
-    await governance.promoteEntry(id, n, comment || undefined);
+    const result = await promptDialog({
+      title: `Promote "${e.name}" to ${n}`,
+      message: 'This action will be recorded in the audit trail.',
+      confirmLabel: 'Promote',
+      fields: [{ key: 'comment', label: 'Comment (optional)', multiline: true }],
+    });
+    if (!result) return;
+    await governance.promoteEntry(id, n, result.comment || undefined);
     reload();
   };
 

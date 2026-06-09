@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { FileSpreadsheet, FileText } from 'lucide-react';
 import clsx from 'clsx';
 import { mining } from '@/api/client';
+import { useUIStore } from '@/store';
 
 interface ExportButtonsProps {
   eventLogId: string;
@@ -19,8 +20,12 @@ export default function ExportButtons({ eventLogId, analysis }: ExportButtonsPro
       } else {
         await mining.exportExcel(eventLogId, analysis);
       }
-    } catch {
-      // silently fail
+    } catch (err) {
+      useUIStore.getState().addNotification({
+        type: 'error',
+        title: `${format === 'csv' ? 'CSV' : 'Excel'} export failed`,
+        message: err instanceof Error ? err.message : 'The download could not be generated. Try again.',
+      });
     } finally {
       setExporting(null);
     }

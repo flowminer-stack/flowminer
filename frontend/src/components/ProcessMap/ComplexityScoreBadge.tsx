@@ -44,8 +44,8 @@ const ComplexityScoreBadge: React.FC<ComplexityScoreBadgeProps> = ({
         )}
       >
         {score < 40 && <AlertTriangle size={11} className="shrink-0" />}
-        <span className="font-mono text-[11px] font-semibold tabular-nums">
-          Comprehensibility: {score}
+        <span className="text-[11px] font-semibold tabular-nums">
+          Readability {score}/100
         </span>
       </span>
     </HintTooltip>

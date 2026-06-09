@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { X, Layers, Grid3x3 } from 'lucide-react';
 import { competitive } from '@/api/client';
 import type { ActivityTreemapResponse } from '@/api/client';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 
 // ABBYY Timeline-style mid-map treemap drill-down. When a user asks
 // "break this activity down by X", we fetch the attribute split and
@@ -93,6 +94,8 @@ export default function ActivityTreemapDrawer({ eventLogId, activity, onClose }:
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  useEscapeKey(onClose);
+
   useEffect(() => {
     setLoading(true);
     setError(null);
@@ -119,6 +122,9 @@ export default function ActivityTreemapDrawer({ eventLogId, activity, onClose }:
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Activity breakdown"
         className="flex h-full w-full max-w-xl flex-col border-l border-line bg-surface-0 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -138,6 +144,7 @@ export default function ActivityTreemapDrawer({ eventLogId, activity, onClose }:
             type="button"
             onClick={onClose}
             className="shrink-0 rounded p-1 text-fg-muted hover:bg-tint hover:text-fg"
+            aria-label="Close Activity breakdown"
           >
             <X size={14} />
           </button>

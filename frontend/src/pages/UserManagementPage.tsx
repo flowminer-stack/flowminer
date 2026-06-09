@@ -11,6 +11,7 @@ import { admin as adminApi } from '@/api/client';
 import { useAuthStore, useUIStore } from '@/store';
 import type { User } from '@/types';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 const ROLES = ['admin', 'analyst', 'viewer'] as const;
 type Role = (typeof ROLES)[number];
@@ -78,12 +79,13 @@ export default function UserManagementPage() {
   };
 
   const handleDelete = async (user: User) => {
-    if (
-      !window.confirm(
-        `Are you sure you want to delete "${user.full_name}"? This cannot be undone.`,
-      )
-    )
-      return;
+    const ok = await confirmDialog({
+      title: `Delete user "${user.full_name}"?`,
+      message: "The user's account and all workspace access will be permanently revoked.",
+      confirmLabel: 'Delete user',
+      danger: true,
+    });
+    if (!ok) return;
 
     setUpdatingId(user.id);
     try {

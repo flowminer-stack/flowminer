@@ -67,8 +67,14 @@ _DF_CACHE_LOCK = threading.Lock()
 # the source. The sidecar is keyed by the column mapping (a re-mapping produces
 # a different sidecar) and invalidated by source mtime, so it can never serve a
 # frame that doesn't match the current mapping.
+# Bump when load_event_log's normalization semantics change, so stale parquet
+# sidecars regenerate. v2: rows with a null case id are dropped instead of
+# becoming a ghost "nan" case.
+_NORM_VERSION = 2
+
+
 def _normalized_sidecar_path(file_path: str, mapping_key: tuple) -> str:
-    h = hashlib.sha1(repr(mapping_key).encode("utf-8", "replace")).hexdigest()[:12]
+    h = hashlib.sha1(repr((_NORM_VERSION, mapping_key)).encode("utf-8", "replace")).hexdigest()[:12]
     return f"{file_path}.{h}.norm.parquet"
 
 

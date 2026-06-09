@@ -14,6 +14,7 @@ import Modal from '@/components/common/Modal';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import PageHeader from '@/components/common/PageHeader';
 import { useUIStore, useProjectsStore } from '@/store';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 export default function DashboardsPage() {
   const navigate = useNavigate();
@@ -75,7 +76,13 @@ export default function DashboardsPage() {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`Delete dashboard "${name}"?`)) return;
+    const ok = await confirmDialog({
+      title: `Delete dashboard "${name}"?`,
+      message: 'All widgets and shared links for this dashboard will be permanently removed.',
+      confirmLabel: 'Delete dashboard',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await dashboardsApi.delete(id);
       setDashboardList((prev) => prev.filter((d) => d.id !== id));

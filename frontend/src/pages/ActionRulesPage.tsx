@@ -25,6 +25,7 @@ import PageHeader from '@/components/common/PageHeader';
 import EmptyState from '@/components/common/EmptyState';
 import { useUIStore, useProjectsStore } from '@/store';
 import { formatRelativeTime } from '@/utils/format';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 // ─── Domain constants ─────────────────────────────────────────────────────────
 // Mirror the backend action_engine: condition metrics/operators and the action
@@ -648,7 +649,8 @@ export default function ActionRulesPage() {
   };
 
   const handleDelete = async (rule: ActionRule) => {
-    if (!window.confirm(`Delete rule "${rule.name}"?`)) return;
+    const ok = await confirmDialog({ title: `Delete rule "${rule.name}"?`, message: 'This will permanently remove the rule and stop any future automated actions it would trigger.', confirmLabel: 'Delete rule', danger: true });
+    if (!ok) return;
     try {
       await actionRulesApi.delete(rule.id);
       setRules((prev) => prev.filter((r) => r.id !== rule.id));

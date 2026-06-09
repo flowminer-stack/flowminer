@@ -398,23 +398,28 @@ function getFilteredElements(
   const cyEdges = connectedEdges.map((edge) => {
     // Thinner edges: 1-4px instead of 1-8px
     const w = scaleValue(edge.frequency, minEdgeFreq, maxEdgeFreq, 1, 4);
-    const color = softenColor(edge.performance_color || '', isDark);
     const label =
       labelMode === 'relative'
         ? `${((edge.frequency / totalEdgeFreq) * 100).toFixed(1)}%`
         : formatNumber(edge.frequency);
 
-    return {
-      data: {
-        id: `${edge.source}->${edge.target}`,
-        source: edge.source,
-        target: edge.target,
-        label,
-        width: w,
-        color,
-        edgeData: edge,
-      },
+    const data: Record<string, unknown> = {
+      id: `${edge.source}->${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      label,
+      width: w,
+      edgeData: edge,
     };
+    // Performance heat-coloring is opt-in via the "slow" toggle. Unconditional
+    // red/yellow edges made every dense log read as an alarm before the user
+    // asked any performance question — neutral is the honest default.
+    if (highlightSlow) {
+      const color = softenColor(edge.performance_color || '', isDark);
+      if (color) data.color = color;
+    }
+
+    return { data };
   });
 
   return { cyNodes, cyEdges, visibleNodeCount: visibleNodes.length, visibleEdgeCount: connectedEdges.length };

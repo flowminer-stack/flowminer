@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import PageHeader from '@/components/common/PageHeader';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import ErrorState from '@/components/common/ErrorState';
 import {
   mining as miningApi,
   competitive,
@@ -49,6 +50,8 @@ export default function MissionControlPage() {
   const [items, setItems] = useState<PriorityItem[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [allFailed, setAllFailed] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
   const [topCost, setTopCost] = useState<number>(0);
   const [sla, setSla] = useState<SlaSummary | null>(null);
   const [slaDays, setSlaDays] = useState(7);
@@ -63,6 +66,9 @@ export default function MissionControlPage() {
       miningApi.getCases(eventLogId).catch(() => null),
     ])
       .then(([ins, autoc, narr, cases]) => {
+        // Each call is individually optional, but if every one failed this is
+        // an outage, not a healthy-but-quiet process — don't render "all clear".
+        setAllFailed(!ins && !autoc && !narr && !cases);
         const combined: PriorityItem[] = [];
         if (ins) {
           for (const i of (ins as InsightsResponse).insights) {
@@ -118,9 +124,18 @@ export default function MissionControlPage() {
         }
       })
       .finally(() => setLoading(false));
-  }, [eventLogId, slaDays]);
+  }, [eventLogId, slaDays, retryTick]);
 
   if (loading) return <LoadingSpinner fullPage text="Assembling mission control…" />;
+
+  if (allFailed) {
+    return (
+      <ErrorState
+        message="Mission Control couldn't load any data — the server may be unreachable."
+        onRetry={() => setRetryTick((t) => t + 1)}
+      />
+    );
+  }
 
   const critical = items.filter((i) => i.severity === 'critical').length;
   const warnings = items.filter((i) => i.severity === 'warning').length;

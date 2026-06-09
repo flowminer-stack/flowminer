@@ -12,6 +12,7 @@ import {
   Activity,
 } from 'lucide-react';
 import PageHeader from '@/components/common/PageHeader';
+import FilterScopeNotice from '@/components/common/FilterScopeNotice';
 import EmptyState from '@/components/common/EmptyState';
 import HintTooltip from '@/components/common/Tooltip';
 import ComplianceMatrix from '@/components/Conformance/ComplianceMatrix';
@@ -259,6 +260,8 @@ export default function ConformancePage() {
           ) : undefined
         }
       />
+
+      <FilterScopeNotice eventLogId={eventLogId} />
 
       {/* Tab switcher */}
       <div className="mt-6 flex gap-1 border-b border-line">

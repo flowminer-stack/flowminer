@@ -28,6 +28,7 @@ import { projects as projectsApi, eventLogs as eventLogsApi } from '@/api/client
 import { useEventLogsStore, useUIStore, useProjectsStore, useAuthStore } from '@/store';
 import type { Project, EventLog } from '@/types';
 import { Skeleton } from '@/components/common/LoadingSpinner';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 import PageHeader from '@/components/common/PageHeader';
 import ProjectSubnav from '@/components/Project/ProjectSubnav';
 
@@ -208,6 +209,36 @@ export default function ProjectDetailPage() {
     fetchEventLogs(projectId);
   }, [projectId, fetchEventLogs, setCurrentProject, addNotification, navigate]);
 
+  // While any log is processing, poll so the badge updates on its own —
+  // and announce the flip to ready/error instead of leaving the user to
+  // reload the page on a hunch. (eventLogs deliberately not in deps: its
+  // identity changes every poll; the initial statuses are snapshotted.)
+  const hasProcessing = eventLogs.some((el) => el.status === 'processing');
+  useEffect(() => {
+    if (!projectId || !hasProcessing) return;
+    const prev = new Map(useEventLogsStore.getState().eventLogs.map((el) => [el.id, el.status]));
+    const interval = setInterval(async () => {
+      await fetchEventLogs(projectId);
+      for (const el of useEventLogsStore.getState().eventLogs) {
+        if (prev.get(el.id) === 'processing' && el.status === 'ready') {
+          addNotification({
+            type: 'success',
+            title: `"${el.name}" is ready`,
+            message: 'Processing finished — open it to explore the process map.',
+          });
+        } else if (prev.get(el.id) === 'processing' && el.status === 'error') {
+          addNotification({
+            type: 'error',
+            title: `"${el.name}" failed to process`,
+            message: el.error_message ?? undefined,
+          });
+        }
+        prev.set(el.id, el.status);
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [projectId, hasProcessing, fetchEventLogs, addNotification]);
+
   if (loading || !project) {
     return <ProjectDetailSkeleton />;
   }
@@ -375,7 +406,13 @@ export default function ProjectDetailPage() {
                   )
                 }
                 onDelete={async () => {
-                  if (!window.confirm(`Delete "${eventLog.name}"? This cannot be undone.`)) return;
+                  const ok = await confirmDialog({
+                    title: `Delete "${eventLog.name}"?`,
+                    message: 'All process mining analyses and results derived from this log will be permanently lost.',
+                    confirmLabel: 'Delete event log',
+                    danger: true,
+                  });
+                  if (!ok) return;
                   try {
                     await eventLogsApi.delete(eventLog.id);
                     removeEventLog(eventLog.id);
@@ -436,7 +473,9 @@ function EventLogCard({
   const quickActions =
     eventLog.status === 'ready' && eventLog.log_type !== 'ocel'
       ? [
-          { label: 'Process Map', icon: Activity, path: `/process/${eventLog.id}` },
+          // ?tab=map: a button that says "Process Map" must open the 2D map —
+          // never the City tab that large logs otherwise auto-land on.
+          { label: 'Process Map', icon: Activity, path: `/process/${eventLog.id}?tab=map` },
           { label: 'Variants', icon: GitBranch, path: `/variants/${eventLog.id}` },
           { label: 'Bottlenecks', icon: AlertTriangle, path: `/bottlenecks/${eventLog.id}` },
           { label: 'Concept Drift', icon: TrendingUp, path: `/drift/${eventLog.id}` },

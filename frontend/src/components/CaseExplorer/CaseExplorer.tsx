@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 import { type ColumnDef } from '@tanstack/react-table';
 import {
   X,
@@ -198,6 +199,8 @@ const CaseExplorer: React.FC<CaseExplorerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
 
+  useEscapeKey(onClose, isOpen && !embedded);
+
   useEffect(() => {
     if (!isOpen) return;
     setLoading(true);
@@ -387,6 +390,9 @@ const CaseExplorer: React.FC<CaseExplorerProps> = ({
         onClick={onClose}
       />
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Case Explorer"
         className={clsx(
           'relative z-50 flex h-full w-full max-w-5xl shadow-2xl',
           'animate-in slide-in-from-right duration-200',
@@ -405,6 +411,7 @@ const CaseExplorer: React.FC<CaseExplorerProps> = ({
             <button
               onClick={onClose}
               className="rounded-md p-1.5 text-fg-muted transition-colors hover:bg-tint hover:text-fg"
+              aria-label="Close Case Explorer"
             >
               <X size={16} />
             </button>

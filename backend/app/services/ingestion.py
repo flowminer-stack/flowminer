@@ -97,7 +97,9 @@ class IngestionService:
     # so we don't hold two full copies (raw + parsed) of a multi-GB log in RAM.
     _STREAM_CSV_THRESHOLD_BYTES = 100 * 1024 * 1024  # 100 MB
 
-    def _read_csv_chunked(self, file_path: str, encoding: str) -> pd.DataFrame:
+    def _read_csv_chunked(
+        self, file_path: str, encoding: str, converters: dict | None = None
+    ) -> pd.DataFrame:
         """Stream-read a large CSV in chunks and concat at the end.
 
         Still produces a single DataFrame at the end (pm4py needs one), but
@@ -105,22 +107,35 @@ class IngestionService:
         chunks — cutting peak memory by ~40% on large files in practice.
         """
         chunks = []
-        for chunk in pd.read_csv(file_path, encoding=encoding, chunksize=100_000):
+        for chunk in pd.read_csv(
+            file_path, encoding=encoding, chunksize=100_000, converters=converters
+        ):
             chunks.append(chunk)
         return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
 
-    def _load_raw_dataframe(self, file_path: str) -> pd.DataFrame:
+    def _load_raw_dataframe(
+        self, file_path: str, preserve_str_cols: list | None = None
+    ) -> pd.DataFrame:
         """Load a file into a raw pandas DataFrame without normalization.
 
         For large CSVs (>100 MB) we switch to chunked reading to reduce peak
         memory. Other formats still load in one shot because pyarrow/openpyxl
         already stream internally.
+
+        ``preserve_str_cols`` names id-like columns (case id, activity) that
+        must be read verbatim as strings: pandas' default NA parsing otherwise
+        eats legitimate ids like "NA" or "null" (the sepsis demo log has a
+        patient case literally named "NA"), corrupting case counts.
         """
         ext = self._detect_file_type(file_path)
         path = Path(file_path)
 
         if not path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
+
+        # Converters bypass NA parsing for just these columns; pandas ignores
+        # entries for columns that don't exist in the file.
+        converters = {c: str for c in preserve_str_cols or []} or None
 
         try:
             if ext == ".csv":
@@ -132,9 +147,9 @@ class IngestionService:
                     try:
                         if chunked:
                             logger.info("Streaming CSV (%d bytes) with %s", size, encoding)
-                            df = self._read_csv_chunked(file_path, encoding)
+                            df = self._read_csv_chunked(file_path, encoding, converters)
                         else:
-                            df = pd.read_csv(file_path, encoding=encoding)
+                            df = pd.read_csv(file_path, encoding=encoding, converters=converters)
                         break
                     except UnicodeDecodeError:
                         continue
@@ -151,7 +166,7 @@ class IngestionService:
             elif ext == ".parquet":
                 df = pd.read_parquet(file_path)
             elif ext in (".xlsx", ".xls"):
-                df = pd.read_excel(file_path)
+                df = pd.read_excel(file_path, converters=converters)
             else:
                 raise ValueError(f"Unsupported file type: {ext}")
         except Exception as e:
@@ -196,7 +211,14 @@ class IngestionService:
         Returns:
             dict with total_cases, total_events, total_activities, activities_list.
         """
-        df = self._load_raw_dataframe(file_path)
+        df = self._load_raw_dataframe(
+            file_path,
+            preserve_str_cols=[
+                c
+                for c in (mapping.get("case_id_column"), mapping.get("activity_column"))
+                if c
+            ],
+        )
 
         # Validate required columns exist
         required_mappings = {
@@ -225,6 +247,12 @@ class IngestionService:
 
         case_col = mapping["case_id_column"]
         activity_col = mapping["activity_column"]
+
+        # Events with a genuinely missing case id can't belong to any case —
+        # exclude them from ALL stats, matching load_event_log's normalization.
+        # (Ids like "NA" are protected by preserve_str_cols above; this only
+        # drops truly empty values.)
+        df = df[df[case_col].notna() & (df[case_col].astype(str).str.strip() != "")]
 
         total_cases = df[case_col].nunique()
         total_events = len(df)
@@ -263,7 +291,9 @@ class IngestionService:
         Returns:
             pd.DataFrame with standardized column names and parsed timestamps.
         """
-        df = self._load_raw_dataframe(file_path)
+        df = self._load_raw_dataframe(
+            file_path, preserve_str_cols=[case_id_col, activity_col]
+        )
 
         # Build rename mapping
         rename_map = {
@@ -291,6 +321,12 @@ class IngestionService:
         # for consistency with pm4py
         if df[TIMESTAMP_COL].dt.tz is not None:
             df[TIMESTAMP_COL] = df[TIMESTAMP_COL].dt.tz_convert("UTC")
+
+        # Events with a genuinely missing case id can't belong to any case —
+        # drop them instead of letting astype(str) materialise a ghost "nan"
+        # case. Real ids like "NA" survive via preserve_str_cols above. This is
+        # what made live statistics disagree with the stored ingest totals.
+        df = df[df[CASE_COL].notna() & (df[CASE_COL].astype(str).str.strip() != "")]
 
         # Ensure case ID is string
         df[CASE_COL] = df[CASE_COL].astype(str)

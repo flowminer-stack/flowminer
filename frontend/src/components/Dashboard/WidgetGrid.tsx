@@ -26,6 +26,7 @@ import type {
   ProcessStatistics,
   TimelineResponse,
 } from '@/types';
+import { confirmDialog } from '@/components/common/ConfirmDialog';
 
 interface WidgetConfig {
   id: string;
@@ -605,10 +606,9 @@ const WidgetGrid: React.FC<WidgetGridProps> = ({
                 <Settings className="h-3.5 w-3.5" />
               </button>
               <button
-                onClick={() => {
-                  if (window.confirm(`Delete widget "${widget.title}"? This cannot be undone.`)) {
-                    onWidgetDelete(widget.id);
-                  }
+                onClick={async () => {
+                  const ok = await confirmDialog({ title: `Delete widget "${widget.title}"?`, message: 'This widget will be permanently removed from the dashboard.', confirmLabel: 'Delete widget', danger: true });
+                  if (ok) onWidgetDelete(widget.id);
                 }}
                 className="rounded p-1 text-fg-faint transition-colors hover:bg-danger/10 hover:text-danger"
                 title="Delete widget"

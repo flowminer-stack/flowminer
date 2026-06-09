@@ -9,6 +9,12 @@ interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl';
+  /**
+   * Don't close on backdrop click — for multi-field forms where a stray click
+   * outside would silently destroy the user's input. Esc and the X button
+   * still close.
+   */
+  disableBackdropClose?: boolean;
 }
 
 const sizeClasses = {
@@ -33,6 +39,7 @@ export default function Modal({
   children,
   footer,
   size = 'md',
+  disableBackdropClose = false,
 }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
@@ -112,7 +119,7 @@ export default function Modal({
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div
         className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in"
-        onClick={onClose}
+        onClick={disableBackdropClose ? undefined : onClose}
         aria-hidden="true"
       />
       <div

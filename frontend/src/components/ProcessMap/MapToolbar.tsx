@@ -140,7 +140,7 @@ export default function MapToolbar({
             ? 'border-warning bg-warning/10 text-warning'
             : 'border-line bg-surface-1 text-fg-muted hover:text-fg',
         )}
-        title="Highlight activities slower than the median"
+        title="Performance heat: color activities and hand-offs slower than the median (green/yellow/red)"
       >
         <Flame size={10} />
         slow
