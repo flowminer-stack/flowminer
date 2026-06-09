@@ -10,6 +10,7 @@ import PageHeader from '@/components/common/PageHeader';
 import { useUIStore, useEventLogsStore, useAuthStore } from '@/store';
 import DataQualityCard from '@/components/DataQuality/DataQualityCard';
 import ColumnMapper from '@/components/ColumnMapper/ColumnMapper';
+import { markOnboardingStep } from '@/utils/onboarding';
 
 type Step = 'upload' | 'mapping' | 'done';
 
@@ -59,6 +60,7 @@ export default function UploadPage() {
     setEventLogId(log.id);
     setUploadedLogType(log.log_type ?? 'standard');
     addEventLog(log);
+    markOnboardingStep('upload');
 
     // OCEL files skip column mapping — they're self-describing
     if (log.log_type === 'ocel') {

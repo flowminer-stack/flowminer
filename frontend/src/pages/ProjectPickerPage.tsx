@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FolderKanban, ArrowRight, type LucideIcon } from 'lucide-react';
-import { useProjectsStore } from '@/store';
+import { useProjectsStore, useUIStore } from '@/store';
 import PageHeader from '@/components/common/PageHeader';
 import EmptyState from '@/components/common/EmptyState';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
@@ -25,19 +25,26 @@ export default function ProjectPickerPage({
   const projects = useProjectsStore((s) => s.projects);
   const loading = useProjectsStore((s) => s.loading);
   const fetchProjects = useProjectsStore((s) => s.fetchProjects);
+  const lastProjectId = useUIStore((s) => s.lastProjectId);
 
   useEffect(() => {
     fetchProjects();
   }, [fetchProjects]);
 
-  // Auto-skip the picker when there is exactly one project — no flicker
-  // because the spinner is still showing at that point, and replace:true
-  // prevents a back-button trap.
+  // Auto-continue when the choice is obvious — the project the user was just
+  // working in (KPIs-page pattern), or the only project there is. The picker
+  // only renders when there is genuinely no context to go on; switching
+  // projects explicitly goes through the sidebar project switcher.
+  const autoTarget = !loading
+    ? projects.find((p) => p.id === lastProjectId)?.id ??
+      (projects.length === 1 ? projects[0].id : null)
+    : null;
+
   useEffect(() => {
-    if (!loading && projects.length === 1) {
-      navigate(nextPathTemplate.replace(':projectId', projects[0].id), { replace: true });
+    if (autoTarget) {
+      navigate(nextPathTemplate.replace(':projectId', autoTarget), { replace: true });
     }
-  }, [loading, projects, nextPathTemplate, navigate]);
+  }, [autoTarget, nextPathTemplate, navigate]);
 
   const go = (projectId: string) => {
     navigate(nextPathTemplate.replace(':projectId', projectId));
@@ -47,9 +54,9 @@ export default function ProjectPickerPage({
     return <LoadingSpinner size="lg" text="Loading projects…" fullPage />;
   }
 
-  // Still rendering the spinner while the single-project redirect is pending
+  // Still rendering the spinner while the auto-continue redirect is pending
   // (loading finished but the navigate call hasn't flushed yet).
-  if (!loading && projects.length === 1) {
+  if (autoTarget) {
     return <LoadingSpinner size="lg" text="Loading projects…" fullPage />;
   }
 

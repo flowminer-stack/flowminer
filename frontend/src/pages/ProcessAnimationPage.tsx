@@ -227,10 +227,10 @@ export default function ProcessAnimationPage() {
   return (
     <div className="flex h-[calc(100vh-120px)] flex-col gap-3">
       <PageHeader
-        title="Process Animation"
+        title="Animation Theater"
         icon={Play}
-        backTo={-1}
-        description="Replay the event log through the discovered process map. Nodes and edges brighten as events flow through them over time."
+        backTo={eventLogId ? `/process/${eventLogId}` : -1}
+        description="Full-screen replay of the event log through the discovered map — nodes and edges brighten as events flow through them. For a quick inline replay while you work, use the Replay button on the process map instead."
         subtitle={eventLog?.name ?? 'Event Log'}
         actions={
           <span className="text-[11px] text-fg-muted">

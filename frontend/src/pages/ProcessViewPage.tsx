@@ -22,6 +22,10 @@ import {
   FileDown,
   Search,
   Layers,
+  AlertTriangle,
+  ShieldAlert,
+  SlidersHorizontal,
+  ChevronDown,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEventLogData, useProcessMap } from '@/hooks/useProcessMining';
@@ -53,9 +57,10 @@ import HappyPathView from '@/components/ProcessMap/HappyPathView';
 import DataQualityCard from '@/components/DataQuality/DataQualityCard';
 import AnalysisHub from '@/components/AnalysisHub/AnalysisHub';
 import InsightsPanel from '@/components/InsightsPanel/InsightsPanel';
+import QuickSnapshot from '@/components/ProcessMap/QuickSnapshot';
 import FilterPanel from '@/components/ProcessMap/FilterPanel';
 import ComplexityScoreBadge from '@/components/ProcessMap/ComplexityScoreBadge';
-import AnalysisPalette from '@/components/ProcessMap/AnalysisPalette';
+import { AnalysisPaletteButton } from '@/components/ProcessMap/AnalysisPalette';
 import ExportWorkflowModal from '@/components/Scorecards/ExportWorkflowModal';
 import { algorithmOptions, detailLevels, type Algorithm } from '@/components/ProcessMap/mapControlsConfig';
 import { useProcessFilters } from '@/hooks/useProcessFilters';
@@ -158,6 +163,10 @@ export default function ProcessViewPage() {
 
   // ── Export as Code (workflow engine codegen) ─────────────────────
   const [exportCodeOpen, setExportCodeOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  // Progressive disclosure for the map strip: algorithm/layout/noise/renderer
+  // are set-once choices, not per-session toggles — they live in a popover.
+  const [mapOptionsOpen, setMapOptionsOpen] = useState(false);
 
   // ── Download DMN (decision rules) ────────────────────────────────
   const [downloadingDmn, setDownloadingDmn] = useState(false);
@@ -474,48 +483,73 @@ export default function ProcessViewPage() {
           Quality
         </button>
 
-        {/* Report */}
-        <button
-          onClick={handleExportReport}
-          disabled={exportingReport}
-          className="btn-secondary text-[12px]"
-          title="Generate PDF report"
-        >
-          {exportingReport ? (
-            <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-line-strong border-t-fg-secondary" />
-          ) : (
-            <FileCode2 size={13} />
+        {/* Export menu — Report / workflow code / DMN are occasional outputs,
+            not daily controls, so they share one trigger instead of three
+            (progressive disclosure: the top bar was rated cognitive-overload). */}
+        <div className="relative">
+          <button
+            onClick={() => setExportMenuOpen((o) => !o)}
+            className={clsx(
+              'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-semibold transition-colors',
+              exportMenuOpen ? 'bg-accent/10 text-accent' : 'btn-secondary',
+            )}
+            title="Export: PDF report, workflow code, decision rules"
+          >
+            {exportingReport || downloadingDmn ? (
+              <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-line-strong border-t-fg-secondary" />
+            ) : (
+              <FileDown size={13} />
+            )}
+            Export
+            <ChevronDown size={11} className={clsx('transition-transform', exportMenuOpen && 'rotate-180')} />
+          </button>
+          {exportMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-20" onClick={() => setExportMenuOpen(false)} />
+              <div className="absolute right-0 top-full z-30 mt-1 w-64 overflow-hidden rounded-lg border border-line bg-surface-1 py-1 shadow-xl">
+                {[
+                  {
+                    icon: FileCode2,
+                    label: 'PDF report',
+                    detail: 'Full analysis report of this log',
+                    busy: exportingReport,
+                    run: handleExportReport,
+                  },
+                  {
+                    icon: Code2,
+                    label: 'Workflow code',
+                    detail: 'Happy path as Temporal / n8n / Airflow',
+                    busy: false,
+                    run: () => setExportCodeOpen(true),
+                  },
+                  {
+                    icon: FileDown,
+                    label: 'Decision rules (DMN)',
+                    detail: 'DMN 1.4 XML for Camunda / Trisotech',
+                    busy: downloadingDmn,
+                    run: handleDownloadDmn,
+                  },
+                ].map((item) => (
+                  <button
+                    key={item.label}
+                    onClick={() => {
+                      setExportMenuOpen(false);
+                      item.run();
+                    }}
+                    disabled={item.busy}
+                    className="flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-tint disabled:opacity-50"
+                  >
+                    <item.icon size={13} className="mt-0.5 shrink-0 text-fg-muted" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[12px] font-medium text-fg">{item.label}</span>
+                      <span className="block text-[10.5px] text-fg-faint">{item.detail}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
           )}
-          Report
-        </button>
-
-        {/* Export as Code — turn the mined happy path into runnable
-            orchestration code (Temporal / n8n / Airflow). Opens the
-            self-contained ExportWorkflowModal. */}
-        <button
-          onClick={() => setExportCodeOpen(true)}
-          className="btn-secondary text-[12px]"
-          title="Export the mined process as runnable workflow code"
-        >
-          <Code2 size={13} />
-          Export as Code
-        </button>
-
-        {/* Download DMN — export discovered decision rules as a DMN 1.4
-            XML file for Camunda / Trisotech. Triggers a blob download. */}
-        <button
-          onClick={handleDownloadDmn}
-          disabled={downloadingDmn}
-          className="btn-secondary text-[12px]"
-          title="Download discovered decision rules as a DMN 1.4 file"
-        >
-          {downloadingDmn ? (
-            <div className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-line-strong border-t-fg-secondary" />
-          ) : (
-            <FileDown size={13} />
-          )}
-          Download DMN
-        </button>
+        </div>
 
         {/* Ask AI — scoped to the current event log. Placed next to
             Quality and Report because all three are per-log actions. */}
@@ -529,8 +563,8 @@ export default function ProcessViewPage() {
           Ask AI
         </button>
 
-        {/* Unified, searchable analysis palette (⌘K / Ctrl-K) */}
-        {eventLogId && <AnalysisPalette eventLogId={eventLogId} />}
+        {/* Opens the global, searchable analysis palette (⌘K / Ctrl-K). */}
+        <AnalysisPaletteButton />
       </div>
 
       {/* Scrollable stage. The active view keeps its full viewport height; the
@@ -559,7 +593,10 @@ export default function ProcessViewPage() {
           it never shrinks when the Quality panel is open above it. */}
       <div className="flex h-full min-h-0 flex-col">
 
-      {/* ── Insights panel (map tab only) ───────────────────────────────── */}
+      {/* ── Quick snapshot + insights (map tab only) ────────────────────── */}
+      {tab === 'map' && eventLogId && discovery && (
+        <QuickSnapshot eventLogId={eventLogId} />
+      )}
       {tab === 'map' && eventLogId && discovery && (
         <InsightsPanel eventLogId={eventLogId} />
       )}
@@ -634,21 +671,97 @@ export default function ProcessViewPage() {
           <div className="mt-3 rounded-xl border border-line bg-surface-2 px-3 py-2" style={{ boxShadow: 'var(--shadow-xs)' }}>
             <div className="flex flex-wrap items-center gap-2 md:gap-3">
 
-              {/* Algorithm group */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-fg-faint w-8 shrink-0">Algo</span>
-                <div className="segment-group">
-                  {algorithmOptions.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => handleAlgorithmChange(opt.value)}
-                      title={opt.help}
-                      className={clsx('segment-btn', algorithm === opt.value && 'segment-btn-active')}
-                    >
-                      {opt.short}
-                    </button>
-                  ))}
-                </div>
+              {/* Map options popover — algorithm, layout, noise and renderer
+                  are configured rarely; folding them away cuts the strip from
+                  ~10 control groups to the handful people actually touch. */}
+              <div className="relative">
+                <button
+                  onClick={() => setMapOptionsOpen((o) => !o)}
+                  className={clsx(
+                    'flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-all duration-100',
+                    mapOptionsOpen
+                      ? 'border-accent/40 bg-accent/10 text-accent'
+                      : 'border-line bg-surface-1 text-fg-muted hover:border-line-strong hover:text-fg',
+                  )}
+                  title="Mining algorithm, layout, noise filter and renderer"
+                >
+                  <SlidersHorizontal size={11} />
+                  Map options
+                  <ChevronDown size={10} className={clsx('transition-transform', mapOptionsOpen && 'rotate-180')} />
+                </button>
+                {mapOptionsOpen && (
+                  <>
+                    <div className="fixed inset-0 z-20" onClick={() => setMapOptionsOpen(false)} />
+                    <div className="absolute left-0 top-full z-30 mt-1 w-[300px] rounded-lg border border-line bg-surface-1 p-3 shadow-xl space-y-3">
+                      <div>
+                        <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-fg-faint">Algorithm</p>
+                        <div className="segment-group">
+                          {algorithmOptions.map((opt) => (
+                            <button
+                              key={opt.value}
+                              onClick={() => handleAlgorithmChange(opt.value)}
+                              title={opt.help}
+                              className={clsx('segment-btn', algorithm === opt.value && 'segment-btn-active')}
+                            >
+                              {opt.short}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {supportsNoise && (
+                        <div>
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-fg-faint">Noise filter</p>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="range"
+                              min={0}
+                              max={0.5}
+                              step={0.05}
+                              value={noiseThreshold}
+                              onChange={(e) => setNoiseThreshold(parseFloat(e.target.value))}
+                              className="flex-1 accent-accent cursor-pointer"
+                              title={`Noise filter threshold: ${(noiseThreshold * 100).toFixed(0)}% — filters infrequent edges from the model`}
+                            />
+                            <span className="w-8 text-[10px] tabular-nums text-fg-faint">{(noiseThreshold * 100).toFixed(0)}%</span>
+                          </div>
+                        </div>
+                      )}
+                      <div>
+                        <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-fg-faint">Layout</p>
+                        <div className="segment-group">
+                          {(['dagre', 'breadthfirst', 'circle', 'concentric', 'grid'] as const).map((l) => (
+                            <button
+                              key={l}
+                              onClick={() => setMapLayout(l)}
+                              className={clsx('segment-btn', mapLayout === l && 'segment-btn-active')}
+                            >
+                              {l === 'dagre' ? 'Hierarchy' : l === 'breadthfirst' ? 'Tree' : l.charAt(0).toUpperCase() + l.slice(1)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-fg-faint">Renderer</p>
+                        <div className="segment-group">
+                          <button
+                            onClick={() => setRenderEngine('cytoscape')}
+                            title="Classic graph renderer — minimap, replay, export"
+                            className={clsx('segment-btn', renderEngine !== 'sigma' && 'segment-btn-active')}
+                          >
+                            Graph
+                          </button>
+                          <button
+                            onClick={() => setRenderEngine('sigma')}
+                            title="WebGL renderer — stays smooth on very large maps (trial)"
+                            className={clsx('segment-btn', renderEngine === 'sigma' && 'segment-btn-active')}
+                          >
+                            Sigma (WebGL)
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="h-4 w-px bg-line hidden sm:block" />
@@ -714,45 +827,6 @@ export default function ProcessViewPage() {
                     What does this map mean?
                   </button>
                 )}
-              </div>
-
-              {/* Noise filter — inductive / heuristic only */}
-              {supportsNoise && (
-                <>
-                  <div className="h-4 w-px bg-line hidden sm:block" />
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-fg-faint w-10 shrink-0">Noise</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={0.5}
-                      step={0.05}
-                      value={noiseThreshold}
-                      onChange={(e) => setNoiseThreshold(parseFloat(e.target.value))}
-                      className="w-24 accent-accent cursor-pointer"
-                      title={`Noise filter threshold: ${(noiseThreshold * 100).toFixed(0)}% — filters infrequent edges from the model`}
-                    />
-                    <span className="text-[10px] tabular-nums text-fg-faint w-6">{(noiseThreshold * 100).toFixed(0)}%</span>
-                  </div>
-                </>
-              )}
-
-              <div className="h-4 w-px bg-line hidden md:block" />
-
-              {/* Layout group */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-fg-faint w-12 shrink-0 hidden md:inline">Layout</span>
-                <div className="segment-group">
-                  {(['dagre', 'breadthfirst', 'circle', 'concentric', 'grid'] as const).map((l) => (
-                    <button
-                      key={l}
-                      onClick={() => setMapLayout(l)}
-                      className={clsx('segment-btn', mapLayout === l && 'segment-btn-active')}
-                    >
-                      {l === 'dagre' ? 'Hierarchy' : l === 'breadthfirst' ? 'Tree' : l.charAt(0).toUpperCase() + l.slice(1)}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               {/* Spacer */}
@@ -1037,6 +1111,9 @@ export default function ProcessViewPage() {
                       className="flex items-center gap-2 border-b border-line bg-surface-1/50 px-2 py-1.5"
                       data-tour="process-map-toolbar"
                     >
+                      {/* Renderer toggle moved into the "Map options" popover
+                          on the control strip — omitting setRenderEngine here
+                          hides MapToolbar's duplicate toggle. */}
                       <MapToolbar
                         nodes={discovery.nodes}
                         labelMode={labelMode}
@@ -1045,8 +1122,6 @@ export default function ProcessViewPage() {
                         setHighlightSlow={setHighlightSlow}
                         hiddenActivities={hiddenActivities}
                         setHiddenActivities={setHiddenActivities}
-                        renderEngine={renderEngine}
-                        setRenderEngine={setRenderEngine}
                       />
                     </div>
                     {/* Apromore-style filter expression bar + chip
@@ -1180,6 +1255,40 @@ export default function ProcessViewPage() {
                       </div>
                     ))}
                   </div>
+
+                  {/* Explain: turn this activity into a doorway to the analyses
+                      that explain it — not just a stats readout. */}
+                  {eventLogId && (
+                    <div className="mt-3 border-t border-line pt-2.5">
+                      <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-fg-faint">
+                        Explain this step
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          onClick={() =>
+                            navigate(
+                              `/bottlenecks/${eventLogId}?activity=${encodeURIComponent(selectedNodeData.label)}`,
+                            )
+                          }
+                          className="inline-flex items-center gap-1 rounded-md border border-line bg-surface-1 px-2 py-1 text-[10px] font-medium text-fg-muted transition-colors hover:border-accent/60 hover:text-accent"
+                        >
+                          <AlertTriangle size={11} /> Bottleneck
+                        </button>
+                        <button
+                          onClick={() => navigate(`/root-cause/${eventLogId}`)}
+                          className="inline-flex items-center gap-1 rounded-md border border-line bg-surface-1 px-2 py-1 text-[10px] font-medium text-fg-muted transition-colors hover:border-accent/60 hover:text-accent"
+                        >
+                          <Search size={11} /> Root cause
+                        </button>
+                        <button
+                          onClick={() => navigate(`/cases-at-risk/${eventLogId}`)}
+                          className="inline-flex items-center gap-1 rounded-md border border-line bg-surface-1 px-2 py-1 text-[10px] font-medium text-fg-muted transition-colors hover:border-accent/60 hover:text-accent"
+                        >
+                          <ShieldAlert size={11} /> At risk
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   <button
                     onClick={() => setActivityDetailOpen(true)}

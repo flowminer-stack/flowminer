@@ -22,15 +22,19 @@ import {
   Users,
   ClipboardList,
   BarChart2,
+  Search,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore, useUIStore } from '@/store';
 import ProjectSwitcher from './ProjectSwitcher';
+import ActiveLogNav from './ActiveLogNav';
 
 interface NavItem {
   label: string;
   path: string;
   icon: React.ElementType;
+  /** Plain-language "what is this?" shown as the hover tooltip. */
+  hint?: string;
   /** If true, only show this item to users with role === 'admin' */
   adminOnly?: boolean;
 }
@@ -40,6 +44,9 @@ interface NavSection {
   items: NavItem[];
 }
 
+// Labels are outcome-first plain language — the audit flagged the jargon ones
+// ("Benchmark", "Initiatives", "Capability Map", "OCPM") as unguessable. Each
+// renamed item keeps a hover hint explaining what's behind it.
 const navSections: NavSection[] = [
   {
     label: 'Workspace',
@@ -48,24 +55,59 @@ const navSections: NavSection[] = [
       { label: 'Projects', path: '/projects', icon: FolderKanban },
       { label: 'Inbox', path: '/inbox', icon: Inbox },
       { label: 'Alerts', path: '/alerts', icon: Bell },
-      { label: 'Action Rules', path: '/action-rules', icon: Workflow },
+      {
+        label: 'Automations',
+        path: '/action-rules',
+        icon: Workflow,
+        hint: 'When-this-then-that rules that watch your processes and act',
+      },
       { label: 'Dashboards', path: '/dashboards', icon: LayoutDashboard },
     ],
   },
   {
     label: 'Analyze',
     items: [
-      { label: 'Benchmark', path: '/benchmark', icon: BarChart3 },
-      { label: 'Initiatives', path: '/initiatives', icon: Target },
-      { label: 'KPIs', path: '/kpis', icon: Activity },
+      {
+        label: 'Compare Logs',
+        path: '/benchmark',
+        icon: BarChart3,
+        hint: 'Benchmark KPIs across your event logs side by side',
+      },
+      {
+        label: 'Savings Tracker',
+        path: '/initiatives',
+        icon: Target,
+        hint: 'Track improvement initiatives and the savings they realize',
+      },
+      {
+        label: 'KPIs',
+        path: '/kpis',
+        icon: Activity,
+        hint: 'Define custom KPIs with targets and track their status',
+      },
+      {
+        label: 'Object-Centric',
+        path: '/ocpm',
+        icon: Layers,
+        hint: 'Mine processes that span linked objects — orders, items, invoices (OCEL)',
+      },
     ],
   },
   {
     label: 'Govern',
     items: [
-      { label: 'Governance', path: '/governance', icon: ShieldCheck },
-      { label: 'Capability Map', path: '/capability-map', icon: Network },
-      { label: 'Object-Centric (OCPM)', path: '/ocpm', icon: Layers },
+      {
+        label: 'Governance',
+        path: '/governance',
+        icon: ShieldCheck,
+        hint: 'Process ownership, approvals and change requests',
+      },
+      {
+        label: 'Process Landscape',
+        path: '/capability-map',
+        icon: Network,
+        hint: 'Map business capabilities to the processes that support them',
+      },
       // Mission Control is scoped to /mission-control/:eventLogId — there is no
       // bare /mission-control route in App.tsx, so it must be reached from an
       // event-log detail page, not from a top-level sidebar link. Removed to
@@ -92,6 +134,7 @@ export default function Sidebar() {
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
+  const openPalette = useUIStore((s) => s.openPalette);
 
   const isAdmin = user?.role === 'admin';
 
@@ -154,6 +197,41 @@ export default function Sidebar() {
 
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto px-2 py-3">
+          {/* Global analysis search — makes the ⌘K palette discoverable from
+              every page, not just from inside a process map. */}
+          <button
+            onClick={() => {
+              if (!sidebarOpen) setSidebarOpen(true);
+              openPalette();
+            }}
+            title={!sidebarOpen ? 'Search analyses (⌘K)' : undefined}
+            className={clsx(
+              'mb-3 flex w-full items-center gap-2 rounded-lg border border-line/60 bg-surface-2 px-2.5 py-2 text-[12px] text-fg-faint transition-colors hover:border-line-strong hover:text-fg-muted',
+              !sidebarOpen && 'justify-center lg:justify-center max-lg:justify-start',
+            )}
+          >
+            <Search size={14} className="shrink-0" />
+            <span
+              className={clsx(
+                'flex-1 text-left whitespace-nowrap transition-opacity duration-150',
+                sidebarOpen ? 'opacity-100' : 'opacity-0 lg:hidden max-lg:inline max-lg:opacity-100',
+              )}
+            >
+              Search analyses…
+            </span>
+            <kbd
+              className={clsx(
+                'rounded border border-line bg-surface-1 px-1 py-px text-[9px] font-medium',
+                sidebarOpen ? 'inline-block' : 'hidden max-lg:inline-block',
+              )}
+            >
+              ⌘K
+            </kbd>
+          </button>
+
+          {/* Context-aware quick links to the active log's analyses. */}
+          <ActiveLogNav />
+
           {navSections.map((section, sIdx) => {
             // Filter admin-only items for non-admin users
             const visibleItems = section.items.filter(
@@ -184,7 +262,7 @@ export default function Sidebar() {
                         onClick={() => {
                           if (window.innerWidth < 1024) setSidebarOpen(false);
                         }}
-                        title={!sidebarOpen ? item.label : undefined}
+                        title={!sidebarOpen ? item.label : item.hint}
                         aria-current={isActive ? 'page' : undefined}
                         className={clsx(
                           'relative group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-medium transition-all duration-100',

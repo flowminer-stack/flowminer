@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { AlertTriangle, Clock, BarChart3, ArrowRight, Search, X, Activity, Target, ChevronDown, ChevronUp, FlaskConical } from 'lucide-react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { AlertTriangle, Clock, BarChart3, ArrowRight, Search, X, Activity, Target, ChevronDown, ChevronUp, FlaskConical, ShieldAlert, Gauge } from 'lucide-react';
 import type { DBSMScore } from '@/types';
 import ExplainButton from '@/components/AI/ExplainButton';
 import HintTooltip from '@/components/common/Tooltip';
@@ -8,6 +8,7 @@ import clsx from 'clsx';
 import ExportButtons from '@/components/common/ExportButtons';
 import PageHeader from '@/components/common/PageHeader';
 import EmptyState from '@/components/common/EmptyState';
+import RelatedAnalyses from '@/components/common/RelatedAnalyses';
 import {
   BarChart,
   Bar,
@@ -60,12 +61,20 @@ export default function BottlenecksPage() {
   const [search, setSearch] = useState('');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [dbsmSort, setDbsmSort] = useState<'desc' | 'asc' | null>(null);
+  const [searchParams] = useSearchParams();
 
   useEffect(() => {
     if (eventLogId) {
       fetchBottlenecks(eventLogId);
     }
   }, [eventLogId, fetchBottlenecks]);
+
+  // Deep-link focus: ?activity=<name> (e.g. from a process-map node's "Explain"
+  // chip) pre-filters the list to that activity.
+  useEffect(() => {
+    const activity = searchParams.get('activity');
+    if (activity) setSearch(activity);
+  }, [searchParams]);
 
   const bottleneckItems = bottlenecks?.bottlenecks ?? [];
   const waitingTimes = bottlenecks?.waiting_times ?? [];
@@ -691,6 +700,32 @@ export default function BottlenecksPage() {
               ))}
           </div>
         </div>
+      )}
+
+      {/* Cross-links: from "where it's slow" to "why" and "what to do". */}
+      {eventLogId && (
+        <RelatedAnalyses
+          items={[
+            {
+              label: 'Root Cause',
+              hint: 'Find the case attributes that predict slow cases',
+              icon: Search,
+              to: `/root-cause/${eventLogId}`,
+            },
+            {
+              label: 'Cases at Risk',
+              hint: 'See which in-flight cases are about to breach SLA',
+              icon: ShieldAlert,
+              to: `/cases-at-risk/${eventLogId}`,
+            },
+            {
+              label: 'Mission Control',
+              hint: 'Drill into priorities, the at-risk feed and ROI',
+              icon: Gauge,
+              to: `/mission-control/${eventLogId}`,
+            },
+          ]}
+        />
       )}
     </div>
   );

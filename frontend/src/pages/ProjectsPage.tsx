@@ -18,6 +18,7 @@ import {
   Filter as FilterIcon,
   Download,
   Upload,
+  Sparkles,
 } from 'lucide-react';
 import type { Project, ProjectExportManifest } from '@/types';
 import { format } from 'date-fns';
@@ -25,8 +26,9 @@ import { useProjectsStore, useUIStore, useAuthStore } from '@/store';
 import Modal from '@/components/common/Modal';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import PageHeader from '@/components/common/PageHeader';
-import { projects as projectsApi } from '@/api/client';
+import { projects as projectsApi, eventLogs as eventLogsApi } from '@/api/client';
 import OnboardingWizard from '@/components/Onboarding/OnboardingWizard';
+import { markOnboardingStep } from '@/utils/onboarding';
 
 // ─── Filters ──────────────────────────────────────────────────────────────
 
@@ -147,8 +149,10 @@ export default function ProjectsPage() {
     }
     return counts;
   }, [projects]);
+  // Onboarding is minimized (not destroyed) on dismiss, so it can be reopened
+  // from the "Getting started" affordance — no more dismiss-forever dead end.
   const [showOnboarding, setShowOnboarding] = useState(() => {
-    return !localStorage.getItem('flowminer-onboarding-dismissed');
+    return !localStorage.getItem('flowminer-onboarding-minimized');
   });
   const onboardingHandled = useRef(false);
 
@@ -200,12 +204,25 @@ export default function ProjectsPage() {
     setSeedingLoading(true);
     try {
       const project = await projectsApi.seedSample();
+      markOnboardingStep('sample');
       await fetchProjects();
       addNotification({
         type: 'success',
         title: 'Sample project loaded',
         message: `"${project.name}" is ready to explore.`,
       });
+      // Land the user on a rendered process map — not an empty-feeling project
+      // page — so the very first thing they see is a mined process.
+      try {
+        const logs = await eventLogsApi.list(project.id);
+        const ready = logs.find((l) => l.status === 'ready') ?? logs[0];
+        if (ready) {
+          navigate(`/process/${ready.id}`);
+          return;
+        }
+      } catch {
+        /* fall back to the project page below */
+      }
       navigate(`/projects/${project.id}`);
     } catch {
       addNotification({ type: 'error', title: 'Failed to load sample data' });
@@ -286,16 +303,27 @@ export default function ProjectsPage() {
 
   return (
     <div>
-      {showOnboarding && (
+      {showOnboarding ? (
         <div className="mb-6">
           <OnboardingWizard
             onDismiss={() => {
               setShowOnboarding(false);
-              localStorage.setItem('flowminer-onboarding-dismissed', '1');
+              localStorage.setItem('flowminer-onboarding-minimized', '1');
             }}
             onNavigate={(path) => navigate(path)}
           />
         </div>
+      ) : (
+        <button
+          onClick={() => {
+            setShowOnboarding(true);
+            localStorage.removeItem('flowminer-onboarding-minimized');
+          }}
+          className="mb-6 inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-1 px-3 py-1.5 text-[12px] font-medium text-fg-muted transition-colors hover:border-line-strong hover:text-fg"
+        >
+          <Sparkles size={13} className="text-accent" />
+          Getting started
+        </button>
       )}
 
       {/* Page header */}

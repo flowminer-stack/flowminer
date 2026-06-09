@@ -17,6 +17,7 @@ import ErrorState from '@/components/common/ErrorState';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import HintTooltip from '@/components/common/Tooltip';
 import RiskExplanationCard from '@/components/Predictive/RiskExplanationCard';
+import InsightBanner from '@/components/common/InsightBanner';
 import { predictive } from '@/api/predictive';
 import type {
   CasesAtRiskResponse,
@@ -199,6 +200,35 @@ export default function CasesAtRiskPage() {
           { label: 'Act early', detail: 'escalate or reassign the cases most likely to breach' },
         ]}
       />
+
+      {/* Smart-narrative: the headline risk, in one sentence, above the table. */}
+      {data && data.count > 0 && (() => {
+        const counts = new Map<string, number>();
+        for (const c of data.cases_at_risk) {
+          counts.set(c.last_activity, (counts.get(c.last_activity) ?? 0) + 1);
+        }
+        let topAct = '';
+        let topN = 0;
+        counts.forEach((n, a) => {
+          if (n > topN) {
+            topN = n;
+            topAct = a;
+          }
+        });
+        return (
+          <InsightBanner icon={ShieldAlert} tone="danger">
+            <strong className="text-fg">{data.count.toLocaleString()}</strong> open case
+            {data.count === 1 ? ' is' : 's are'} predicted to breach the{' '}
+            <strong className="text-fg">{slaHours}h</strong> SLA
+            {topAct ? (
+              <>
+                {' '}— most are currently stuck at <strong className="text-fg">“{topAct}”</strong>
+              </>
+            ) : null}
+            . The list is sorted by breach probability — act on the top cases first.
+          </InsightBanner>
+        );
+      })()}
 
       {/* Controls */}
       <div className="card mt-6 flex flex-wrap items-end gap-5 p-4">

@@ -1,10 +1,12 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Send, Sparkles, Zap, User as UserIcon, Bot } from 'lucide-react';
 import Markdown from '@/components/common/Markdown';
 import clsx from 'clsx';
 import { ai as aiApi } from '@/api/client';
 import type { ChatToolStartEvent, ChatToolResultEvent } from '@/api/client';
 import { useFilterStore } from '@/store/filterStore';
+import { useEventLogData } from '@/hooks/useProcessMining';
 import {
   ToolResultRender,
   type ToolCallState,
@@ -26,15 +28,6 @@ interface Message {
 
 type Mode = 'chat' | 'agent';
 
-const SUGGESTIONS = [
-  'Which activities are the biggest bottleneck and why?',
-  'What are the top 3 variants, and how different are they?',
-  'Where should we focus automation first?',
-  'Summarize the health of this process in 3 bullets.',
-  'Are there any compliance or 4-eyes violations?',
-  'What would a good KPI dashboard for this process look like?',
-];
-
 let _msgCounter = 0;
 
 export default function AskAI({ eventLogId }: Props) {
@@ -47,6 +40,53 @@ export default function AskAI({ eventLogId }: Props) {
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
+
+  // Example questions + autocomplete seeded from the log's REAL activity and
+  // resource metadata (ThoughtSpot pattern) — generic prompts teach nothing;
+  // a question naming the user's own activities shows what Ask can do.
+  const { eventLog } = useEventLogData(eventLogId);
+  const suggestions = useMemo(() => {
+    const acts = eventLog?.activities_list ?? [];
+    const s: string[] = [];
+    if (acts[0]) s.push(`Why do cases spend so long at "${acts[0]}"?`);
+    s.push('Which activities are the biggest bottleneck and why?');
+    s.push('What are the top 3 variants, and how different are they?');
+    if (acts[1]) s.push(`How often is "${acts[1]}" repeated or skipped?`);
+    if (eventLog?.resource_column) {
+      s.push('Who handles the most cases, and where does work pile up between people?');
+    }
+    s.push('Where should we focus automation first?');
+    s.push('Summarize the health of this process in 3 bullets.');
+    return s.slice(0, 6);
+  }, [eventLog]);
+  const autocomplete = useMemo(() => {
+    const acts = (eventLog?.activities_list ?? []).slice(0, 10);
+    return [
+      ...suggestions,
+      ...acts.map((a) => `How long does "${a}" take on average?`),
+      ...acts.map((a) => `Which cases pass through "${a}"?`),
+    ];
+  }, [eventLog, suggestions]);
+
+  // Hand-off from the global ⌘K palette / deep links: ?q=<question> asks
+  // immediately, then strips the param so refresh/remount can't re-ask it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const handledQ = useRef<string | null>(null);
+  useEffect(() => {
+    const q = searchParams.get('q');
+    if (!q || handledQ.current === q) return;
+    handledQ.current = q;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('q');
+        return next;
+      },
+      { replace: true },
+    );
+    ask(q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const ask = async (q: string) => {
     const text = q.trim();
@@ -192,7 +232,7 @@ export default function AskAI({ eventLogId }: Props) {
 
       {messages.length === 0 ? (
         <div className="flex flex-wrap gap-1.5">
-          {SUGGESTIONS.map((s) => (
+          {suggestions.map((s) => (
             <button
               key={s}
               onClick={() => ask(s)}
@@ -214,8 +254,16 @@ export default function AskAI({ eventLogId }: Props) {
       )}
 
       <div className="flex gap-2">
+        {/* Native autocomplete seeded with questions built from the log's own
+            activity names — start typing and real, runnable questions appear. */}
+        <datalist id={`ask-autocomplete-${eventLogId}`}>
+          {autocomplete.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
         <input
           type="text"
+          list={`ask-autocomplete-${eventLogId}`}
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && ask(question)}

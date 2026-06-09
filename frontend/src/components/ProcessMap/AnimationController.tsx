@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { type Core } from 'cytoscape';
-import { Play, Pause, SkipBack, Gauge, Calendar } from 'lucide-react';
+import { Play, Pause, SkipBack, Gauge, Calendar, Maximize2 } from 'lucide-react';
 import clsx from 'clsx';
 import { format, parseISO } from 'date-fns';
 import { mining } from '@/api/client';
@@ -320,6 +321,18 @@ const AnimationController: React.FC<AnimationControllerProps> = ({
               {events.length.toLocaleString()}
             </span>
           </div>
+
+          {/* The full-screen Animation Theater is the richer version of this
+              inline replay (windowed heatmap, finer scrubbing) — cross-linked
+              so the two replay surfaces explain each other. */}
+          <Link
+            to={`/animation/${eventLogId}`}
+            className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium text-fg-muted transition-colors hover:bg-tint hover:text-fg"
+            title="Open the full-screen Animation Theater"
+          >
+            <Maximize2 size={11} />
+            Theater
+          </Link>
         </>
       )}
     </div>

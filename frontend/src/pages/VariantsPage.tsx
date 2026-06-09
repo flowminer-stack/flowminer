@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowRight, GitBranch, Clock, Hash, Search, X, Sparkles, Target, List, Workflow, Dna } from 'lucide-react';
+import { ArrowRight, GitBranch, Clock, Hash, Search, X, Sparkles, Target, List, Workflow, Dna, CheckCircle2, TrendingUp, AlertTriangle } from 'lucide-react';
 import Tooltip from '@/components/common/Tooltip';
 import clsx from 'clsx';
 import { useMiningStore } from '@/store';
@@ -10,6 +10,7 @@ import ErrorState from '@/components/common/ErrorState';
 import ExportButtons from '@/components/common/ExportButtons';
 import PageHeader from '@/components/common/PageHeader';
 import EmptyState from '@/components/common/EmptyState';
+import RelatedAnalyses from '@/components/common/RelatedAnalyses';
 import VariantExplainDrawer from '@/components/Variants/VariantExplainDrawer';
 import VariantEvolution from '@/components/Variants/VariantEvolution';
 import VariantSankey from '@/components/Variants/VariantSankey';
@@ -388,6 +389,32 @@ export default function VariantsPage() {
             totalCases={variants?.total_cases ?? 0}
           />
         </div>
+      )}
+
+      {/* Cross-links: turn this page into a doorway, not a dead end. */}
+      {eventLogId && (
+        <RelatedAnalyses
+          items={[
+            {
+              label: 'Conformance',
+              hint: 'See which of these paths violate your reference model',
+              icon: CheckCircle2,
+              to: `/conformance/${eventLogId}`,
+            },
+            {
+              label: 'Concept Drift',
+              hint: 'Check whether the path mix is shifting over time',
+              icon: TrendingUp,
+              to: `/drift/${eventLogId}`,
+            },
+            {
+              label: 'Bottlenecks',
+              hint: 'Find the slowest steps inside these variants',
+              icon: AlertTriangle,
+              to: `/bottlenecks/${eventLogId}`,
+            },
+          ]}
+        />
       )}
 
       {/* AI explain drawer (conditional) -- available from List tab */}

@@ -9,34 +9,20 @@ import {
   Gauge,
   Share2,
   GitBranch,
+  Wrench,
+  BarChart3,
+  Target,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { projects as projectsApi } from '@/api/projects';
 import { eventLogs as eventLogsApi } from '@/api/eventLogs';
 import type { Project } from '@/types';
 import { useUIStore } from '@/store';
-
-// Routes where the 2nd path segment is a :projectId.
-// NOTE: keep these two sets in sync with the parameterized routes in App.tsx —
-// a project/log route missing here means the switcher silently won't render.
-const PROJECT_ID_PARAM_ROUTES = new Set([
-  'kpis', 'journeys', 'scheduled-reports', 'builder', 'benchmark', 'task-mining',
-  'initiatives', 'upload', 'projects',
-]);
-
-// Routes where the 2nd path segment is an :eventLogId (log-scoped views)
-const LOG_ID_PARAM_ROUTES = new Set([
-  'process', 'variants', 'bottlenecks', 'drift', 'conformance', 'root-cause',
-  'dotted-chart', 'social-network', 'rework', 'comparison', 'simulate',
-  'sustainability', 'automation-roi', 'health', 'cases-at-risk', 'causal-map',
-  'pulse', 'process-city', 'animation', 'mission-control', 'lineage', 'ocpm',
-]);
-
-function secondSegment(pathname: string, routes: Set<string>): string | null {
-  const segments = pathname.split('/').filter(Boolean);
-  if (segments.length >= 2 && routes.has(segments[0])) return segments[1];
-  return null;
-}
+import {
+  PROJECT_ID_PARAM_ROUTES,
+  LOG_ID_PARAM_ROUTES,
+  secondSegment,
+} from '@/utils/activeLog';
 
 interface SwitcherLink {
   label: string;
@@ -48,6 +34,14 @@ const PROJECT_LINKS: SwitcherLink[] = [
   { label: 'Workspace', icon: FolderKanban, to: (id) => `/projects/${id}` },
   { label: 'KPIs', icon: Activity, to: (id) => `/kpis/${id}` },
   { label: 'Journeys', icon: Map, to: (id) => `/journeys/${id}` },
+  // Compare Logs / Savings Tracker project routes — this is also the explicit
+  // "switch project" path now that their bare sidebar routes auto-continue
+  // with the last active project instead of always showing an interstitial.
+  { label: 'Compare Logs', icon: BarChart3, to: (id) => `/benchmark/${id}` },
+  { label: 'Savings Tracker', icon: Target, to: (id) => `/initiatives/${id}` },
+  // Log Builder otherwise has no nav entry — surface it here so the multi-table
+  // ETL builder is reachable, not just URL-only.
+  { label: 'Log Builder', icon: Wrench, to: (id) => `/builder/${id}` },
   { label: 'Reports', icon: FileText, to: (id) => `/scheduled-reports/${id}` },
 ];
 
@@ -64,6 +58,7 @@ export default function ProjectSwitcher() {
   const params = useParams<{ projectId?: string; eventLogId?: string }>();
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
+  const setLastProjectId = useUIStore((s) => s.setLastProjectId);
 
   const [project, setProject] = useState<Project | null>(null);
   const [logName, setLogName] = useState<string | null>(null);
@@ -102,6 +97,12 @@ export default function ProjectSwitcher() {
     }
     return () => { cancelled = true; };
   }, [directProjectId, logId]);
+
+  // Remember the active project so project-scoped destinations (Benchmark,
+  // Initiatives, the picker page) can skip their "pick a project" interstitial.
+  useEffect(() => {
+    if (projectId) setLastProjectId(projectId);
+  }, [projectId, setLastProjectId]);
 
   // Close dropdown on outside click
   useEffect(() => {

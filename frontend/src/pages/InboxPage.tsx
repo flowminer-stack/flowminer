@@ -22,6 +22,7 @@ import PageHeader from '@/components/common/PageHeader';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import EmptyState from '@/components/common/EmptyState';
 import Modal from '@/components/common/Modal';
+import WhatsChangedDigest from '@/components/Inbox/WhatsChangedDigest';
 
 const STATUS_TABS: Array<{
   value: TaskStatus | 'all';
@@ -198,6 +199,11 @@ export default function InboxPage() {
           </button>
         }
       />
+
+      {/* Proactive "what changed since your last visit" digest. */}
+      <div className="mt-6">
+        <WhatsChangedDigest />
+      </div>
 
       {/* Status tabs */}
       <div className="mt-6 flex flex-wrap items-center gap-2 border-b border-line pb-3">

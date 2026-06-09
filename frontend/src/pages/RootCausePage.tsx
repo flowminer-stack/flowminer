@@ -21,6 +21,7 @@ import { useMiningStore } from '@/store';
 import { useEventLogData } from '@/hooks/useProcessMining';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
+import InsightBanner from '@/components/common/InsightBanner';
 import { formatDuration } from '@/utils/format';
 
 export default function RootCausePage() {
@@ -81,6 +82,23 @@ export default function RootCausePage() {
           { label: 'Confirm on a slice', detail: 'filter to a driver and check the process for that segment' },
         ]}
       />
+
+      {/* Smart-narrative: the headline driver, in one sentence, above the charts. */}
+      {rootCause?.factors?.[0] && (() => {
+        const f = rootCause.factors[0];
+        const pct =
+          f.avg_duration_normal > 0
+            ? Math.round(((f.avg_duration_affected - f.avg_duration_normal) / f.avg_duration_normal) * 100)
+            : 0;
+        return (
+          <InsightBanner icon={Search} tone={pct >= 0 ? 'warning' : 'accent'}>
+            Cases where <strong className="text-fg">{f.attribute} = “{f.value}”</strong> run about{' '}
+            <strong className="text-fg">{Math.abs(pct)}% {pct >= 0 ? 'longer' : 'shorter'}</strong>{' '}
+            than the rest ({f.case_count.toLocaleString()} cases) — the strongest attribute driver of
+            case duration in this log.
+          </InsightBanner>
+        );
+      })()}
 
       {rootCause && (
         <>

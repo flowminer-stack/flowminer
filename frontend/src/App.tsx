@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, type ReactNode } from 'react';
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Target as TargetIcon, BarChart3 as BarChartIcon } from 'lucide-react';
 import { useAuthStore } from '@/store';
 import Layout from '@/components/Layout/Layout';
@@ -50,7 +50,6 @@ const AutomationRoiPage = lazy(() => import('@/pages/AutomationRoiPage'));
 const ProcessHealthPage = lazy(() => import('@/pages/ProcessHealthPage'));
 const CausalMapPage = lazy(() => import('@/pages/CausalMapPage'));
 const ProcessPulsePage = lazy(() => import('@/pages/ProcessPulsePage'));
-const ProcessCityPage = lazy(() => import('@/pages/ProcessCityPage'));
 const CasesAtRiskPage = lazy(() => import('@/pages/CasesAtRiskPage'));
 const ActionRulesPage = lazy(() => import('@/pages/ActionRulesPage'));
 const LineagePage = lazy(() => import('@/pages/LineagePage'));
@@ -125,6 +124,15 @@ const LazyFallback = (
     <LoadingSpinner size="md" />
   </div>
 );
+
+// Process City lives as the "City" tab on the process view (one canonical
+// experience, with the full toolbar/filter context). Old /process-city deep
+// links — bookmarks, palette entries — land on that tab instead of a
+// duplicate stripped-down page.
+function ProcessCityRedirect() {
+  const { eventLogId } = useParams<{ eventLogId: string }>();
+  return <Navigate to={`/process/${eventLogId}?tab=city`} replace />;
+}
 
 // ─── App ─────────────────────────────────────────────────────────────────────
 
@@ -241,7 +249,7 @@ export default function App() {
           <Route path="/cases-at-risk/:eventLogId" element={<CasesAtRiskPage />} />
           <Route path="/causal-map/:eventLogId" element={<CausalMapPage />} />
           <Route path="/pulse/:eventLogId" element={<ProcessPulsePage />} />
-          <Route path="/process-city/:eventLogId" element={<ProcessCityPage />} />
+          <Route path="/process-city/:eventLogId" element={<ProcessCityRedirect />} />
           <Route
             path="/benchmark"
             element={

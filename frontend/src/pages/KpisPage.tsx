@@ -746,10 +746,13 @@ export default function KpisPage() {
     fetchProjects();
   }, [fetchProjects]);
 
-  // On first load, default to first project if not provided via route
+  // On first load, default to the project the user was just working in
+  // (same context rule as the Benchmark/Initiatives auto-continue), falling
+  // back to the first project, if none was provided via route.
   useEffect(() => {
     if (!activeProjectId && projects.length > 0) {
-      setActiveProjectId(projects[0].id);
+      const last = useUIStore.getState().lastProjectId;
+      setActiveProjectId(projects.find((p) => p.id === last)?.id ?? projects[0].id);
     }
   }, [projects, activeProjectId]);
 

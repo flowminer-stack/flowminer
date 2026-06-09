@@ -11,6 +11,7 @@ import ShortcutsModal from '@/components/common/ShortcutsModal';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { ProductTour } from '@/components/Onboarding/ProductTour';
 import FloatingAIChat from '@/components/AI/FloatingAIChat';
+import AnalysisPalette from '@/components/ProcessMap/AnalysisPalette';
 
 const notificationIcons = {
   success: CheckCircle,
@@ -74,6 +75,9 @@ export default function Layout() {
       <ShortcutsModal />
       <ProductTour />
       <FloatingAIChat />
+      {/* One global analysis palette (⌘K) — opened from the sidebar trigger,
+          the process-view toolbar, and the active-log quick links. */}
+      <AnalysisPalette />
 
       {/* Toast notifications */}
       <div className="fixed bottom-5 right-5 z-[100] flex flex-col gap-2">
