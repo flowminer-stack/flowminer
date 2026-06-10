@@ -49,7 +49,7 @@ _ISSUE_TIMELINE_ACTIVITIES = {
 class GitHubConnector(BaseConnector):
     """Connector for GitHub — extracts PR and issue lifecycle events."""
 
-    meta = ConnectorMeta(id="github", label="GitHub", category="devops", mapping_mode="auto")
+    meta = ConnectorMeta(id="github", label="GitHub", category="devops", mapping_mode="auto", supports_write_back=True, write_back_label="Create GitHub issue")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -340,6 +340,40 @@ class GitHubConnector(BaseConnector):
             f"GitHubConnector: saved {len(df)} events to {dest_path}"
         )
         return dest_path
+
+    async def create_record(self, config: dict, payload: dict) -> dict:
+        """Create a GitHub issue and return its external reference."""
+        from app.services.connectors.http_base import request_with_retries
+
+        owner = config["owner"]
+        repo = config["repo"]
+        url = f"{_GH_API}/repos/{owner}/{repo}/issues"
+        headers = self._headers(config)
+
+        body: dict = {
+            "title": payload["title"],
+            "body": payload["description"],
+        }
+        fields = payload.get("fields") or {}
+        if fields.get("labels"):
+            body["labels"] = fields["labels"]
+        if fields.get("assignees"):
+            body["assignees"] = fields["assignees"]
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await request_with_retries(client, "POST", url, headers=headers, json=body)
+
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"GitHubConnector.create_record failed — HTTP {resp.status_code}: {resp.text[:300]}"
+            )
+
+        data = resp.json()
+        return {
+            "external_id": f"#{data['number']}",
+            "url": data["html_url"],
+            "raw": data,
+        }
 
     async def get_schema(self, config: dict) -> dict:
         """Return the fixed column schema for GitHub event exports."""

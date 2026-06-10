@@ -35,6 +35,10 @@ export interface ConnectorRegistryEntry {
   mapping_mode: 'auto' | 'manual' | 'none';
   supports_incremental: boolean;
   config_schema: Record<string, unknown>;
+  // Write-back (close-the-loop): whether this connector type can create a
+  // ticket/issue/case in the external system, and a human label for it.
+  supports_write_back?: boolean;
+  write_back_label?: string | null;
 }
 
 export interface Connector {

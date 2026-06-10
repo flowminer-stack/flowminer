@@ -43,7 +43,14 @@ def _basic_auth_header(email: str, api_token: str) -> str:
 class ZendeskConnector(BaseConnector):
     """Connector for Zendesk Support — extracts ticket audit events."""
 
-    meta = ConnectorMeta(id="zendesk", label="Zendesk", category="itsm", mapping_mode="auto")
+    meta = ConnectorMeta(
+        id="zendesk",
+        label="Zendesk",
+        category="itsm",
+        mapping_mode="auto",
+        supports_write_back=True,
+        write_back_label="Create Zendesk ticket",
+    )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -273,4 +280,67 @@ class ZendeskConnector(BaseConnector):
                     "columns": columns,
                 }
             ]
+        }
+
+    async def create_record(self, config: dict, payload: dict) -> dict:
+        """
+        Create a Zendesk ticket from a process-mining action payload.
+
+        Required config keys: subdomain, email, api_token
+        Payload keys used: title, description, priority (low|medium|high|urgent|None),
+                           case_id, case, fields, rule_id
+        Returns: {"external_id": str, "url": str, "raw": dict}
+        """
+        from app.services.connectors.http_base import request_with_retries
+
+        for key in ("subdomain", "email", "api_token"):
+            if not config.get(key):
+                raise ValueError(f"Config must include '{key}'.")
+
+        base = f"https://{config['subdomain']}.zendesk.com"
+        url = f"{base}/api/v2/tickets.json"
+
+        headers = {
+            "Authorization": _basic_auth_header(config["email"], config["api_token"]),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        # Map generic priority to Zendesk priority values.
+        _priority_map = {
+            "urgent": "urgent",
+            "high": "high",
+            "medium": "normal",
+            "low": "low",
+        }
+        ticket_body: dict = {
+            "subject": payload["title"],
+            "comment": {"body": payload["description"]},
+        }
+        raw_priority = payload.get("priority")
+        if raw_priority:
+            mapped = _priority_map.get(str(raw_priority).lower())
+            if mapped:
+                ticket_body["priority"] = mapped
+
+        # Apply any connector-specific field overrides from the payload.
+        overrides = payload.get("fields") or {}
+        ticket_body.update(overrides)
+
+        body = {"ticket": ticket_body}
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await request_with_retries(client, "POST", url, headers=headers, json=body)
+
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"Zendesk create_record failed with HTTP {resp.status_code}: {resp.text[:300]}"
+            )
+
+        data = resp.json()
+        t = data["ticket"]
+        return {
+            "external_id": str(t["id"]),
+            "url": f"{base}/agent/tickets/{t['id']}",
+            "raw": data,
         }

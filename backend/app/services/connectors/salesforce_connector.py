@@ -19,6 +19,7 @@ import httpx
 import pandas as pd
 
 from app.services.connectors.base import BaseConnector, ConnectorMeta
+from app.services.connectors.http_base import request_with_retries
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
@@ -26,7 +27,7 @@ UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
 
 class SalesforceConnector(BaseConnector):
 
-    meta = ConnectorMeta(id="salesforce", label="Salesforce", category="crm", mapping_mode="auto")
+    meta = ConnectorMeta(id="salesforce", label="Salesforce", category="crm", mapping_mode="auto", supports_write_back=True, write_back_label="Create Salesforce record")
 
     def _get_token(self, config: dict) -> tuple[str, str]:
         """Get access token, refreshing if needed."""
@@ -126,3 +127,51 @@ class SalesforceConnector(BaseConnector):
                 "resource_column": "OwnerId",
             }
         return None
+
+    async def create_record(self, config: dict, payload: dict) -> dict:
+        """Write-back: create a Salesforce record (default: Case) from a process-mining action."""
+        instance_url, token = self._get_token(config)
+
+        object_type = payload.get("fields", {}).get("object_type") or config.get("object_type") or "Case"
+
+        body: dict = {
+            "Subject": payload["title"],
+            "Description": payload["description"],
+        }
+
+        priority = payload.get("priority")
+        if priority and object_type == "Case":
+            priority_map = {
+                "urgent": "High",
+                "high": "High",
+                "medium": "Medium",
+                "low": "Low",
+            }
+            mapped = priority_map.get(priority)
+            if mapped:
+                body["Priority"] = mapped
+
+        record_fields = payload.get("fields", {}).get("record_fields") or {}
+        body.update(record_fields)
+
+        url = f"{instance_url}/services/data/v59.0/sobjects/{object_type}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await request_with_retries(client, "POST", url, headers=headers, json=body)
+
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"Salesforce create_record failed for object '{object_type}': "
+                f"{resp.status_code}: {resp.text[:300]}"
+            )
+
+        data = resp.json()
+        return {
+            "external_id": data["id"],
+            "url": f"{instance_url}/lightning/r/{object_type}/{data['id']}/view",
+            "raw": data,
+        }

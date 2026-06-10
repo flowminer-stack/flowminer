@@ -14,11 +14,13 @@ import {
   XCircle,
   Save,
   AlertTriangle,
+  ExternalLink,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { actionRules as actionRulesApi } from '@/api/actionRules';
+import { connectors as connectorsApi } from '@/api/connectors';
 import { eventLogs as eventLogsApi } from '@/api/client';
-import type { EventLog } from '@/types';
+import type { Connector, ConnectorRegistryEntry, EventLog } from '@/types';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import Modal from '@/components/common/Modal';
 import PageHeader from '@/components/common/PageHeader';
@@ -78,6 +80,7 @@ const ACTION_TYPES = [
   { value: 'notify_webhook', label: 'Notify webhook' },
   { value: 'escalate', label: 'Escalate' },
   { value: 'tag_case', label: 'Tag case' },
+  { value: 'create_external_record', label: 'Create external ticket / record' },
 ] as const;
 
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'] as const;
@@ -116,6 +119,11 @@ interface RuleFormState {
   webhookUrl: string;
   escalateLevel: string;
   tag: string;
+  // create_external_record params
+  connectorId: string;
+  extTitle: string;
+  extDescription: string;
+  extPriority: string;
 }
 
 function emptyForm(): RuleFormState {
@@ -136,6 +144,10 @@ function emptyForm(): RuleFormState {
     webhookUrl: '',
     escalateLevel: 'manager',
     tag: 'flagged',
+    connectorId: '',
+    extTitle: '',
+    extDescription: '',
+    extPriority: 'medium',
   };
 }
 
@@ -160,18 +172,32 @@ function formFromRule(r: ActionRule): RuleFormState {
     webhookUrl: p.url ?? '',
     escalateLevel: p.level ?? 'manager',
     tag: p.tag ?? 'flagged',
+    connectorId: p.connector_id ?? '',
+    extTitle: p.title ?? '',
+    extDescription: p.description ?? '',
+    extPriority: p.priority ?? 'medium',
   };
 }
 
 interface RuleFormProps {
   initial?: ActionRule;
   eventLogs: EventLog[];
+  connectors: Connector[];
+  registry: ConnectorRegistryEntry[];
   saving: boolean;
   onSave: (body: any) => void;
   onCancel: () => void;
 }
 
-function RuleForm({ initial, eventLogs, saving, onSave, onCancel }: RuleFormProps) {
+function RuleForm({
+  initial,
+  eventLogs,
+  connectors,
+  registry,
+  saving,
+  onSave,
+  onCancel,
+}: RuleFormProps) {
   const [f, setF] = useState<RuleFormState>(() =>
     initial ? formFromRule(initial) : emptyForm(),
   );
@@ -182,6 +208,26 @@ function RuleForm({ initial, eventLogs, saving, onSave, onCancel }: RuleFormProp
 
   const isActivityMetric = f.metric === 'current_activity';
 
+  // Only connector types whose registry entry advertises write-back can create
+  // an external record. Keep their write_back_label handy for the hint.
+  const writeBackTypes = useMemo(() => {
+    const m = new Map<string, ConnectorRegistryEntry>();
+    for (const e of registry) {
+      if (e.supports_write_back) m.set(e.id, e);
+    }
+    return m;
+  }, [registry]);
+
+  const writeBackConnectors = useMemo(
+    () => connectors.filter((c) => writeBackTypes.has(c.connector_type)),
+    [connectors, writeBackTypes],
+  );
+
+  const selectedConnector = connectors.find((c) => c.id === f.connectorId);
+  const selectedWriteBackLabel = selectedConnector
+    ? writeBackTypes.get(selectedConnector.connector_type)?.write_back_label
+    : null;
+
   const validate = (): boolean => {
     const e: Record<string, string> = {};
     if (!f.name.trim()) e.name = 'Name is required';
@@ -189,6 +235,8 @@ function RuleForm({ initial, eventLogs, saving, onSave, onCancel }: RuleFormProp
     if (!String(f.value).trim()) e.value = 'A comparison value is required';
     if (f.actionType === 'notify_webhook' && !f.webhookUrl.trim())
       e.webhookUrl = 'Webhook URL is required';
+    if (f.actionType === 'create_external_record' && !f.connectorId.trim())
+      e.connectorId = 'A connector is required to create the external record';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -221,6 +269,11 @@ function RuleForm({ initial, eventLogs, saving, onSave, onCancel }: RuleFormProp
       params.level = f.escalateLevel.trim() || 'manager';
     } else if (f.actionType === 'tag_case') {
       params.tag = f.tag.trim() || 'flagged';
+    } else if (f.actionType === 'create_external_record') {
+      params.connector_id = f.connectorId;
+      if (f.extTitle.trim()) params.title = f.extTitle.trim();
+      if (f.extDescription.trim()) params.description = f.extDescription.trim();
+      if (f.extPriority) params.priority = f.extPriority;
     }
 
     onSave({
@@ -497,6 +550,95 @@ function RuleForm({ initial, eventLogs, saving, onSave, onCancel }: RuleFormProp
                 />
               </div>
             )}
+
+            {f.actionType === 'create_external_record' && (
+              <>
+                <div>
+                  <label className="block text-[11px] font-medium text-fg-faint mb-2">
+                    Connector
+                  </label>
+                  {writeBackConnectors.length === 0 ? (
+                    <p className="text-[12px] text-fg-muted">
+                      No write-back-capable connectors yet. Create a Jira,
+                      ServiceNow, GitHub, Zendesk, or Salesforce connector first,
+                      then come back to point this rule at it.
+                    </p>
+                  ) : (
+                    <>
+                      <select
+                        value={f.connectorId}
+                        onChange={(e) => set('connectorId', e.target.value)}
+                        className={clsx(
+                          'select w-full',
+                          errors.connectorId && 'border-danger/50',
+                        )}
+                      >
+                        <option value="">Select connector...</option>
+                        {writeBackConnectors.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} ({c.connector_type})
+                          </option>
+                        ))}
+                      </select>
+                      {errors.connectorId && (
+                        <p className="mt-1 text-xs text-danger">
+                          {errors.connectorId}
+                        </p>
+                      )}
+                      {selectedWriteBackLabel && (
+                        <p className="mt-1.5 text-[11px] text-fg-faint">
+                          Creates a {selectedWriteBackLabel} in the connected
+                          system for each matching case.
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-fg-faint mb-2">
+                    Title <span className="font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={f.extTitle}
+                    onChange={(e) => set('extTitle', e.target.value)}
+                    placeholder="e.g., Stuck case {case_id} at {current_activity}"
+                    className="input w-full"
+                  />
+                  <p className="mt-1.5 text-[11px] text-fg-faint">
+                    Use {'{case_id}'} and {'{current_activity}'} placeholders.
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-fg-faint mb-2">
+                    Description <span className="font-normal">(optional)</span>
+                  </label>
+                  <textarea
+                    value={f.extDescription}
+                    onChange={(e) => set('extDescription', e.target.value)}
+                    placeholder="What needs attention? Supports {case_id} / {current_activity}."
+                    rows={3}
+                    className="input w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-fg-faint mb-2">
+                    Priority
+                  </label>
+                  <select
+                    value={f.extPriority}
+                    onChange={(e) => set('extPriority', e.target.value)}
+                    className="select w-full max-w-xs capitalize"
+                  >
+                    {PRIORITIES.map((p) => (
+                      <option key={p} value={p} className="capitalize">
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -561,6 +703,8 @@ export default function ActionRulesPage() {
   const [projectId, setProjectId] = useState('');
   const [rules, setRules] = useState<ActionRule[]>([]);
   const [logs, setLogs] = useState<EventLog[]>([]);
+  const [connectorList, setConnectorList] = useState<Connector[]>([]);
+  const [registry, setRegistry] = useState<ConnectorRegistryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
@@ -589,18 +733,29 @@ export default function ActionRulesPage() {
     if (!pid) return;
     setLoading(true);
     try {
-      const [ruleList, logList] = await Promise.all([
+      const [ruleList, logList, connList] = await Promise.all([
         actionRulesApi.list(pid),
         eventLogsApi.list(pid),
+        connectorsApi.list(pid),
       ]);
       setRules(ruleList);
       setLogs(logList);
+      setConnectorList(connList);
     } catch {
       addNotification({ type: 'error', title: 'Failed to load action rules' });
     } finally {
       setLoading(false);
     }
   }, [addNotification]);
+
+  // Registry is project-independent and drives which connector types support
+  // write-back; best-effort, the picker just shows nothing if it fails.
+  useEffect(() => {
+    connectorsApi
+      .getRegistry()
+      .then(setRegistry)
+      .catch(() => setRegistry([]));
+  }, []);
 
   useEffect(() => {
     if (projectId) loadForProject(projectId);
@@ -721,7 +876,7 @@ export default function ActionRulesPage() {
       <PageHeader
         title="Action Rules"
         icon={Zap}
-        description="Close the loop — automatically create tasks, escalate, notify, or tag cases when they match a condition"
+        description="Close the loop — automatically create tasks, open tickets in Jira / ServiceNow, escalate, notify, or tag cases when they match a condition"
         actions={
           <div className="flex items-center gap-2">
             <select
@@ -760,7 +915,7 @@ export default function ActionRulesPage() {
           className="mt-10"
           icon={Zap}
           title="No action rules yet"
-          description="Create a rule to automatically act on cases that match a condition — escalate stuck cases, open a task, fire a webhook, or tag them."
+          description="Create a rule to automatically act on cases that match a condition — escalate stuck cases, open a task, create a ticket in Jira / ServiceNow, fire a webhook, or tag them."
           action={
             <button className="btn-primary" onClick={openCreate}>
               <Plus size={15} />
@@ -916,9 +1071,28 @@ export default function ActionRulesPage() {
                               </td>
                               <td className="px-4 py-2">
                                 {ex.success ? (
-                                  <span className="inline-flex items-center gap-1 text-[12px] text-success">
-                                    <CheckCircle2 size={13} />
-                                    Success
+                                  <span className="inline-flex items-center gap-2 text-[12px] text-success">
+                                    <span className="inline-flex items-center gap-1">
+                                      <CheckCircle2 size={13} />
+                                      Success
+                                    </span>
+                                    {ex.details?.external_url && (
+                                      <a
+                                        href={ex.details.external_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="inline-flex items-center gap-1 text-accent hover:underline"
+                                        title={`Open in ${
+                                          ex.details.external_system ?? 'external system'
+                                        }`}
+                                      >
+                                        <ExternalLink size={12} />
+                                        {ex.details.external_id ||
+                                          ex.details.external_system ||
+                                          'View'}
+                                      </a>
+                                    )}
                                   </span>
                                 ) : (
                                   <span
@@ -955,6 +1129,8 @@ export default function ActionRulesPage() {
           <RuleForm
             initial={editing ?? undefined}
             eventLogs={logs}
+            connectors={connectorList}
+            registry={registry}
             saving={saving}
             onSave={handleSave}
             onCancel={() => {

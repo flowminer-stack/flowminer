@@ -10,6 +10,7 @@ Config keys:
     - limit: int — Max records (default: 10000)
 """
 
+import base64
 import logging
 import os
 import uuid
@@ -18,6 +19,7 @@ import httpx
 import pandas as pd
 
 from app.services.connectors.base import BaseConnector, ConnectorMeta
+from app.services.connectors.http_base import request_with_retries
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
@@ -25,7 +27,14 @@ UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/flowminer/uploads")
 
 class ServiceNowConnector(BaseConnector):
 
-    meta = ConnectorMeta(id="servicenow", label="ServiceNow", category="itsm", mapping_mode="auto")
+    meta = ConnectorMeta(
+        id="servicenow",
+        label="ServiceNow",
+        category="itsm",
+        mapping_mode="auto",
+        supports_write_back=True,
+        write_back_label="Create ServiceNow record",
+    )
 
     async def test_connection(self, config: dict) -> dict:
         try:
@@ -90,6 +99,50 @@ class ServiceNowConnector(BaseConnector):
         else:
             columns = []
         return {"tables": [{"name": table, "columns": columns}]}
+
+    async def create_record(self, config: dict, payload: dict) -> dict:
+        table = payload.get("fields", {}).get("table") or config.get("table") or "incident"
+        base = config["instance_url"].rstrip("/")
+        url = f"{base}/api/now/table/{table}"
+
+        credentials = f"{config['username']}:{config['password']}"
+        auth_header = "Basic " + base64.b64encode(credentials.encode()).decode()
+        headers = {
+            "Authorization": auth_header,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+        body: dict = {
+            "short_description": payload["title"],
+            "description": payload["description"],
+        }
+
+        priority_map = {"urgent": "1", "high": "2", "medium": "3", "low": "3"}
+        priority = payload.get("priority")
+        if priority:
+            urgency = priority_map.get(priority)
+            if urgency:
+                body["urgency"] = urgency
+
+        record_fields = payload.get("fields", {}).get("record_fields") or {}
+        body.update(record_fields)
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await request_with_retries(client, "POST", url, headers=headers, json=body)
+
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"ServiceNow create_record failed {resp.status_code}: {resp.text[:300]}"
+            )
+
+        data = resp.json()
+        r = data["result"]
+        return {
+            "external_id": r.get("number") or r.get("sys_id"),
+            "url": f"{base}/nav_to.do?uri={table}.do?sys_id={r['sys_id']}",
+            "raw": data,
+        }
 
     def get_default_column_mapping(self, config: dict) -> dict | None:
         # Default table mirrors fetch_data's default so an unconfigured

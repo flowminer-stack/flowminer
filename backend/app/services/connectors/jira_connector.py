@@ -13,6 +13,7 @@ import httpx
 import pandas as pd
 
 from app.services.connectors.base import BaseConnector, ConnectorMeta
+from app.services.connectors.http_base import request_with_retries
 from app.services.infra.url_guard import validate_public_url
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,14 @@ def _basic_auth_header(email: str, api_token: str) -> str:
 class JiraConnector(BaseConnector):
     """Connector for Jira Cloud — extracts issue status-change events."""
 
-    meta = ConnectorMeta(id="jira", label="Jira", category="itsm", mapping_mode="auto")
+    meta = ConnectorMeta(
+        id="jira",
+        label="Jira",
+        category="itsm",
+        mapping_mode="auto",
+        supports_write_back=True,
+        write_back_label="Create Jira issue",
+    )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -253,4 +261,61 @@ class JiraConnector(BaseConnector):
                     "columns": columns,
                 }
             ]
+        }
+
+    async def create_record(self, config: dict, payload: dict) -> dict:
+        """
+        Write-back: create a Jira issue from an action payload.
+
+        Required config keys: url, email, api_token, project_key
+        Payload keys used: title, description, fields (dict of connector-specific overrides),
+                           case_id, case, priority, rule_id.
+        Returns {"external_id": <issue key>, "url": <browse url>, "raw": <response json>}.
+        """
+        url_base = config["url"].rstrip("/")
+        endpoint = f"{url_base}/rest/api/3/issue"
+        headers = {
+            "Authorization": _basic_auth_header(config["email"], config["api_token"]),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        description_text = payload.get("description") or " "
+        adf = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": description_text}],
+                }
+            ],
+        }
+
+        fields_override = payload.get("fields") or {}
+        issue_fields: dict = {
+            "project": {"key": config["project_key"]},
+            "summary": (payload.get("title") or "")[:255],
+            "issuetype": {"name": fields_override.get("issue_type") or "Task"},
+            "description": adf,
+        }
+        if fields_override.get("priority_name"):
+            issue_fields["priority"] = {"name": fields_override["priority_name"]}
+
+        body = {"fields": issue_fields}
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await request_with_retries(client, "POST", endpoint, headers=headers, json=body)
+
+        if resp.status_code >= 300:
+            raise RuntimeError(
+                f"Jira create_record failed with HTTP {resp.status_code}: {resp.text[:300]}"
+            )
+
+        data = resp.json()
+        issue_key = data["key"]
+        return {
+            "external_id": issue_key,
+            "url": f"{url_base}/browse/{issue_key}",
+            "raw": data,
         }

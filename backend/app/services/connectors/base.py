@@ -44,6 +44,17 @@ class ConnectorMeta(BaseModel):
     # event log (none today). Auto-mapped connectors with this True must declare
     # a default case/activity/timestamp mapping — enforced by a contract test.
     produces_event_log: bool = True
+    # Write-back ("close the loop"): the connector can CREATE a record — an
+    # issue / ticket / incident / case — back in the source system, not just
+    # read from it. Drives the action-engine ``create_external_record`` action
+    # and the connector picker in the action-rule UI. A connector that sets this
+    # True MUST implement ``BaseConnector.create_record`` — enforced by a
+    # contract test.
+    supports_write_back: bool = False
+    write_back_label: str | None = Field(
+        default=None,
+        description="UI label for the write-back action, e.g. 'Create Jira issue'.",
+    )
     variants: dict[str, str] = Field(
         default_factory=dict,
         description="For multi-type connectors: {connector_type_id: label}. "
@@ -138,3 +149,24 @@ class BaseConnector(ABC):
         Returns: {"tables": [{"name": str, "columns": [{"name": str, "type": str}, ...]}, ...]}
         """
         pass
+
+    async def create_record(self, config: dict, payload: dict) -> dict:
+        """Write-back: create a record (issue / ticket / incident / case) in the
+        source system. Only connectors that declare
+        ``meta.supports_write_back = True`` override this.
+
+        ``payload`` keys (all supplied by the action engine):
+          * ``title``       — short summary / subject / title (already templated)
+          * ``description`` — longer body (already templated)
+          * ``priority``    — generic level ``low|medium|high|urgent`` or ``None``
+          * ``case_id``     — the process-mining case that triggered the action
+          * ``case``        — the full case snapshot dict
+          * ``fields``      — connector-specific overrides (issue_type, labels, …)
+          * ``rule_id``     — id of the firing action rule (may be ``None``)
+
+        Returns ``{"external_id": str, "url": str, "raw": dict}`` on success.
+        Raises on failure — the action engine catches it and records the error.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support write-back (create_record)"
+        )

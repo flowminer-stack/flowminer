@@ -187,6 +187,8 @@ async def list_connector_registry(
                     "category": meta.category,
                     "mapping_mode": meta.mapping_mode,
                     "supports_incremental": meta.supports_incremental,
+                    "supports_write_back": meta.supports_write_back,
+                    "write_back_label": meta.write_back_label,
                     "config_schema": schema,
                 }
             )

@@ -198,6 +198,33 @@ def _webhook_extra_payload(
     }
 
 
+class _SafeFmt(dict):
+    """format_map backing dict that leaves unknown placeholders untouched
+    (so a user typo like ``{owner}`` renders literally instead of raising)."""
+
+    def __missing__(self, key: str) -> str:  # noqa: D401
+        return "{" + key + "}"
+
+
+def _render(template: str | None, case: dict) -> str:
+    """Best-effort fill ``{case_id}``, ``{current_activity}``, ``{case_duration}``
+    etc. from the matched case snapshot. Never raises on a bad template."""
+    if not template:
+        return ""
+    ctx = _SafeFmt(
+        case_id=case.get("case_id", ""),
+        current_activity=case.get("current_activity", ""),
+        case_duration=case.get("case_duration", ""),
+        time_on_activity=case.get("time_on_activity", ""),
+        event_count=case.get("event_count", ""),
+        rework_count=case.get("rework_count", ""),
+    )
+    try:
+        return str(template).format_map(ctx)
+    except Exception:
+        return str(template)
+
+
 async def _insert_task(
     db: Any,
     *,
@@ -613,6 +640,91 @@ async def dispatch_action(
             detail["task_id"] = task_id
         except Exception as exc:
             logger.error("notify_in_app insert failed for case %s: %s", case["case_id"], exc)
+            detail["success"] = False
+            detail["error"] = str(exc)
+        return detail
+
+    if action_type == "create_external_record":
+        # Write-back / "close the loop": create a ticket / issue / incident /
+        # case in an external system via a saved, write-back-capable connector.
+        # params: {connector_id, title?, description?, priority?, fields?}
+        connector_id = params.get("connector_id")
+        title = _render(
+            params.get("title") or f"FlowMiner: case {case['case_id']} needs attention",
+            case,
+        )
+        description = _render(
+            params.get("description")
+            or "Auto-created by a FlowMiner action rule for case {case_id} "
+            "(current activity: {current_activity}, duration: {case_duration}s).",
+            case,
+        )
+        detail = {
+            "action": "create_external_record",
+            "connector_id": str(connector_id) if connector_id else None,
+            "title": title,
+            "case_id": case["case_id"],
+            "timestamp": timestamp,
+        }
+        if dry_run:
+            return detail
+        try:
+            if db is None or not connector_id:
+                raise RuntimeError(
+                    "create_external_record requires db + params.connector_id"
+                )
+            # Lazy imports — keep module import cheap and avoid cycles, matching
+            # the rest of this dispatcher.
+            from sqlalchemy import select
+            from app.models.connector import Connector
+            from app.services.connectors import get_connector
+            from app.services.infra.secret_box import decrypt_connector_config
+
+            try:
+                cid = (
+                    connector_id
+                    if isinstance(connector_id, UUID)
+                    else UUID(str(connector_id))
+                )
+            except (ValueError, AttributeError, TypeError):
+                raise RuntimeError(f"invalid connector_id: {connector_id!r}")
+
+            row = (
+                await db.execute(select(Connector).where(Connector.id == cid))
+            ).scalar_one_or_none()
+            if row is None:
+                raise RuntimeError("connector not found")
+            # A rule must not be able to write into a connector owned by another
+            # project (the connector_id is user-supplied in the rule action).
+            if project_id is not None and row.project_id != project_id:
+                raise RuntimeError("connector belongs to a different project")
+
+            conn = get_connector(row.connector_type.value)
+            if not (getattr(conn, "meta", None) and conn.meta.supports_write_back):
+                raise RuntimeError(
+                    f"connector type '{row.connector_type.value}' does not support write-back"
+                )
+
+            result = await conn.create_record(
+                decrypt_connector_config(row.config),
+                {
+                    "title": title,
+                    "description": description,
+                    "priority": params.get("priority"),
+                    "case_id": case["case_id"],
+                    "case": case,
+                    "fields": params.get("fields") or {},
+                    "rule_id": params.get("rule_id"),
+                },
+            )
+            detail["success"] = True
+            detail["external_system"] = row.connector_type.value
+            detail["external_id"] = (result or {}).get("external_id")
+            detail["external_url"] = (result or {}).get("url")
+        except Exception as exc:
+            logger.error(
+                "create_external_record failed for case %s: %s", case["case_id"], exc
+            )
             detail["success"] = False
             detail["error"] = str(exc)
         return detail
