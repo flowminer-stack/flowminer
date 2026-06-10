@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Grid3x3, Plus, Trash2, ChevronDown, ChevronRight, Search, FileText } from 'lucide-react';
 import PageHeader from '@/components/common/PageHeader';
@@ -53,24 +53,44 @@ export default function EACapabilityMapPage() {
   const [nameValue, setNameValue] = useState('');
   const nameInputRef = useRef<HTMLInputElement>(null);
 
-  const reload = () => {
-    setLoading(true);
-    Promise.all([governance.listCapabilities(), projectsApi.list()])
-      .then(async ([capData, projs]) => {
-        setCaps(capData);
+  // Capabilities (the tree) are the ONLY thing this page should block on.
+  // Event logs power KPI badges, linked-log names and the link picker — they
+  // load in the BACKGROUND so a user with many projects isn't stuck on
+  // "Loading capability map…" while N per-project log requests resolve. The
+  // old code awaited Promise.allSettled(projects.map(p => list logs)) before
+  // clearing `loading`, so the spinner stayed up for the slowest project and
+  // grew linearly with project count (there is no batch "all logs" endpoint).
+  const reloadCaps = useCallback(
+    () => governance.listCapabilities().then(setCaps),
+    [],
+  );
+
+  const loadLogs = useCallback(() => {
+    projectsApi
+      .list()
+      .then(async (projs) => {
         setProjById(new Map((projs as Project[]).map((p) => [p.id, p.name])));
         const logResults = await Promise.allSettled(
           (projs as Project[]).map((p) => logsApi.list(p.id)),
         );
-        const logs = logResults
-          .filter((r): r is PromiseFulfilledResult<EventLog[]> => r.status === 'fulfilled')
-          .flatMap((r) => r.value);
-        setAllLogs(logs);
+        setAllLogs(
+          logResults
+            .filter(
+              (r): r is PromiseFulfilledResult<EventLog[]> => r.status === 'fulfilled',
+            )
+            .flatMap((r) => r.value),
+        );
       })
-      .finally(() => setLoading(false));
-  };
+      .catch(() => {
+        /* logs are non-critical for rendering the capability tree */
+      });
+  }, []);
 
-  useEffect(reload, []);
+  useEffect(() => {
+    setLoading(true);
+    reloadCaps().finally(() => setLoading(false));
+    loadLogs();
+  }, [reloadCaps, loadLogs]);
 
   const tree = useMemo(() => buildTree(caps), [caps]);
   const logById = useMemo(
@@ -98,14 +118,14 @@ export default function EACapabilityMapPage() {
     }
     setNameTarget(null);
     setNameValue('');
-    reload();
+    reloadCaps();
   };
 
   const handleDelete = async (id: string) => {
     const ok = await confirmDialog({ title: 'Delete this capability?', message: 'This capability and all its children will be permanently removed.', confirmLabel: 'Delete capability', danger: true });
     if (!ok) return;
     await governance.deleteCapability(id);
-    reload();
+    reloadCaps();
   };
 
   const handleLinkLog = (cap: Capability) => {
@@ -119,14 +139,14 @@ export default function EACapabilityMapPage() {
       linked_event_log_ids: [...linkTarget.linked_event_log_ids, logId],
     });
     setLinkTarget(null);
-    reload();
+    reloadCaps();
   };
 
   const handleUnlinkLog = async (cap: Capability, logId: string) => {
     await governance.updateCapability(cap.id, {
       linked_event_log_ids: cap.linked_event_log_ids.filter((x) => x !== logId),
     });
-    reload();
+    reloadCaps();
   };
 
   const toggle = (id: string) => {
