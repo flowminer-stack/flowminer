@@ -1310,21 +1310,33 @@ def check_anomaly_subscriptions():
 
 @celery_app.task(name="app.workers.tasks.backup_database")
 def backup_database():
-    """Nightly pg_dump → /data/uploads/_backups/flowminer-YYYYMMDD.sql.
+    """Nightly pg_dump (custom format) → BACKUP_DIR/flowminer-YYYYMMDD-HHMMSS.dump.
 
-    Retains the last 7 backups. Production deployments should mount
-    /data/uploads/_backups to an external volume (S3, NFS, etc.) so the
-    backup survives a container crash.
+    Uses ``pg_dump -Fc`` (PostgreSQL custom format): natively compressed and
+    restorable with ``pg_restore`` — which supports parallel (``--jobs``) and
+    selective restore. The previous implementation wrote plain SQL and gzipped
+    it in Python, which only ``psql`` could replay (no parallel/selective
+    restore). Retains the last 7 dumps.
+
+    Writes to ``settings.BACKUP_DIR`` — a dedicated path (compose ``backup_data``
+    volume) rather than inside UPLOAD_DIR, so a restore of the uploads volume
+    never clobbers the dumps and vice-versa.
+
+    IMPORTANT: the dump does NOT contain ``FLOWMINER_ENCRYPTION_KEY``. Restoring
+    it onto an instance with a different key leaves every stored connector
+    credential / LLM key unreadable, with no error at boot. Back the key up
+    separately — see docs/BACKUP.md. For off-box durability, copy BACKUP_DIR to
+    object storage (see docker-compose.backup.yml / ``make backup``).
     """
     import subprocess
 
     from urllib.parse import urlparse
 
-    backup_dir = os.path.join(settings.UPLOAD_DIR, "_backups")
+    backup_dir = settings.BACKUP_DIR
     os.makedirs(backup_dir, exist_ok=True)
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    target = os.path.join(backup_dir, f"flowminer-{stamp}.sql.gz")
+    target = os.path.join(backup_dir, f"flowminer-{stamp}.dump")
 
     url = urlparse(_sync_url.replace("postgresql+psycopg2://", "postgresql://"))
     env = os.environ.copy()
@@ -1339,40 +1351,30 @@ def backup_database():
         "-d", (url.path or "/flowminer").lstrip("/"),
         "--no-owner",
         "--no-acl",
+        "-Fc",            # custom format → compressed + pg_restore-able
+        "-f", target,
     ]
 
     try:
-        with open(target + ".raw", "wb") as out:
-            proc = subprocess.run(cmd, stdout=out, stderr=subprocess.PIPE, env=env, timeout=600)
+        proc = subprocess.run(cmd, stderr=subprocess.PIPE, env=env, timeout=600)
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr.decode("utf-8", errors="replace"))
-
-        # gzip in-place
-        import gzip
-        import shutil
-
-        with open(target + ".raw", "rb") as src, gzip.open(target, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-        os.remove(target + ".raw")
     except FileNotFoundError:
         logger.warning("pg_dump not available in worker image — skipping backup")
         return {"status": "skipped", "reason": "pg_dump not installed"}
     except Exception as e:
         logger.error("Backup failed: %s", e, exc_info=True)
-        # Clean up partial files
-        for suffix in ("", ".raw"):
-            p = target + suffix
-            if os.path.exists(p):
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
+        if os.path.exists(target):
+            try:
+                os.remove(target)
+            except OSError:
+                pass
         return {"status": "error", "message": str(e)}
 
-    # Retain only the last 7 backups
+    # Retain only the last 7 dumps
     try:
         backups = sorted(
-            [f for f in os.listdir(backup_dir) if f.endswith(".sql.gz")],
+            [f for f in os.listdir(backup_dir) if f.endswith(".dump")],
             reverse=True,
         )
         for old in backups[7:]:

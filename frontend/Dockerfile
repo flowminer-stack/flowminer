@@ -27,6 +27,13 @@ COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund --prefer-offline
 
 COPY . .
+
+# Image version — release.yml passes --build-arg VERSION=<tag>. Vite
+# inlines VITE_-prefixed env vars at build time, so the SPA can show
+# the running release (import.meta.env.VITE_APP_VERSION). Defaults to
+# "dev" for source builds that don't pass the arg.
+ARG VERSION=dev
+ENV VITE_APP_VERSION=${VERSION}
 RUN npm run build
 
 

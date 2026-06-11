@@ -1,4 +1,4 @@
-.PHONY: init-env dev prod setup migrate seed clean test test-quick test-backend test-frontend localhost wait
+.PHONY: init-env dev prod setup migrate seed clean test test-quick test-backend test-frontend localhost wait backup restore-test doctor
 
 # First-run helper — generate .env with strong secrets.
 init-env:
@@ -45,6 +45,24 @@ migrate-create:
 # Seed templates
 seed:
 	curl -X POST http://localhost:8000/api/v1/templates/seed -H "Authorization: Bearer $(token)"
+
+# ── Backups & DR ─────────────────────────────────────────────────────
+# backup        — pg_dump (custom format, pg_restore-able) + tar of the
+#                 uploads volume into ./backups. Stack must be running.
+#                 NOTE: does NOT capture FLOWMINER_ENCRYPTION_KEY — store
+#                 that (and .env) separately; see docs/BACKUP.md.
+# restore-test  — verify the newest dump restores into a throwaway PG 16.
+backup:
+	./scripts/backup.sh
+
+restore-test:
+	./scripts/restore-test.sh
+
+# Preflight / health check — validate config, secrets, DB, Redis, storage,
+# and migration state. Runs inside the backend container so it sees the
+# real runtime env. Exits non-zero if anything is broken.
+doctor:
+	docker compose run --rm backend python -m app.cli doctor
 
 # Clean
 clean:

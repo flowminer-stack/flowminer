@@ -276,6 +276,128 @@ def cmd_user_deactivate(
         typer.echo(f"Deactivated {user.email}.")
 
 
+# ── Doctor (preflight / health) ──────────────────────────────────────
+
+
+@app.command("doctor")
+def cmd_doctor() -> None:
+    """Preflight check: validate config, secrets, DB, Redis, storage, and
+    migration state. Exits non-zero if anything is broken — run it before
+    `docker compose up`, after an upgrade, or in CI::
+
+        docker compose run --rm backend python -m app.cli doctor
+    """
+    import os
+
+    from app.config import _INSECURE_DEFAULTS, settings
+
+    # (level, name, detail) — level in {"OK", "WARN", "FAIL"}
+    results: list[tuple[str, str, str]] = []
+
+    def check(level: str, name: str, detail: str = "") -> None:
+        results.append((level, name, detail))
+
+    check("OK", "version", settings.APP_VERSION)
+
+    # ── Secrets ──
+    if settings.SECRET_KEY == _INSECURE_DEFAULTS["SECRET_KEY"]:
+        check("FAIL", "SECRET_KEY", "still the insecure default 'change-me-in-production'")
+    elif len(settings.SECRET_KEY) < 16:
+        check("FAIL", "SECRET_KEY", f"too short ({len(settings.SECRET_KEY)} chars; need >= 16)")
+    else:
+        check("OK", "SECRET_KEY", "set")
+
+    check("OK" if settings.DATABASE_URL else "FAIL", "DATABASE_URL",
+          "set" if settings.DATABASE_URL else "unset")
+
+    if not os.getenv("FLOWMINER_ENCRYPTION_KEY"):
+        check("WARN", "FLOWMINER_ENCRYPTION_KEY",
+              "unset — encryption falls back to a SECRET_KEY-derived key. Set an "
+              "explicit key BEFORE rotating SECRET_KEY, or every stored secret "
+              "becomes unreadable")
+    else:
+        check("OK", "FLOWMINER_ENCRYPTION_KEY", "set")
+
+    # ── Database connectivity ──
+    try:
+        from sqlalchemy import text
+
+        from app.database import sync_engine
+
+        with sync_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        check("OK", "database", "reachable")
+    except Exception as e:
+        check("FAIL", "database", f"{type(e).__name__}: {str(e)[:120]}")
+
+    # ── Redis ──
+    try:
+        import redis as _redis
+
+        _redis.from_url(settings.REDIS_URL, socket_timeout=3).ping()
+        check("OK", "redis", "reachable")
+    except Exception as e:
+        check("FAIL", "redis", f"{type(e).__name__}: {str(e)[:120]}")
+
+    # ── Storage writable ──
+    for label, path in (("upload_dir", settings.UPLOAD_DIR), ("backup_dir", settings.BACKUP_DIR)):
+        try:
+            os.makedirs(path, exist_ok=True)
+            probe = os.path.join(path, ".doctor-write-test")
+            with open(probe, "w") as fh:
+                fh.write("ok")
+            os.remove(probe)
+            check("OK", label, f"{path} writable")
+        except Exception as e:
+            check("FAIL", label, f"{path} not writable: {type(e).__name__}")
+
+    # ── Migrations: DB head vs the image's migration heads ──
+    try:
+        from pathlib import Path
+
+        from alembic.config import Config
+        from alembic.runtime.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+
+        from app.database import _sync_url, sync_engine
+
+        ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+        cfg = Config(str(ini))
+        cfg.set_main_option("sqlalchemy.url", _sync_url)
+        script_heads = set(ScriptDirectory.from_config(cfg).get_heads())
+        with sync_engine.connect() as conn:
+            db_heads = set(MigrationContext.configure(conn).get_current_heads())
+
+        if not db_heads:
+            check("WARN", "migrations", "database has no alembic stamp (fresh / not yet migrated?)")
+        elif db_heads == script_heads:
+            check("OK", "migrations", f"at head ({', '.join(sorted(script_heads)) or 'none'})")
+        elif db_heads.issubset(script_heads):
+            check("FAIL", "migrations",
+                  f"DB behind image — at {sorted(db_heads)}, head is {sorted(script_heads)}. "
+                  "Run `alembic upgrade head`")
+        else:
+            check("FAIL", "migrations",
+                  f"DB schema is NEWER than this image (DB at {sorted(db_heads)}, image knows "
+                  f"{sorted(script_heads)}). Upgrade the image or restore a matching backup")
+    except Exception as e:
+        check("WARN", "migrations", f"could not determine: {type(e).__name__}: {str(e)[:100]}")
+
+    # ── Report ──
+    icons = {"OK": "[ OK ]", "WARN": "[WARN]", "FAIL": "[FAIL]"}
+    fails = sum(1 for lvl, _, _ in results if lvl == "FAIL")
+    warns = sum(1 for lvl, _, _ in results if lvl == "WARN")
+    for lvl, name, detail in results:
+        line = f"{icons[lvl]} {name}"
+        if detail:
+            line += f": {detail}"
+        typer.echo(line)
+    typer.echo("")
+    typer.echo(f"{len(results)} checks — {fails} failed, {warns} warning(s).")
+    if fails:
+        raise typer.Exit(code=1)
+
+
 # ── Entry point ──────────────────────────────────────────────────────
 
 

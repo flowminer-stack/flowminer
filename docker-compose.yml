@@ -1,7 +1,12 @@
 # FlowMiner — production-safe default compose.
 #
 # Running `docker compose up -d` with this file gives you:
-#   * Pinned image tags so rebuilds are reproducible.
+#   * Pre-built, version-pinned images pulled from GHCR
+#     (ghcr.io/flowminer-stack/flowminer-{backend,frontend}). The tag
+#     is ${FLOWMINER_VERSION:-v0.1.0} — pin it in .env for reproducible
+#     upgrades. The recommended flow is `docker compose pull &&
+#     docker compose up -d`; the kept `build:` stanzas only matter for
+#     contributors building from source (see docker-compose.dev.yml).
 #   * Healthchecks on every service so `depends_on` actually waits.
 #   * Restart policies so a crashed service doesn't stay dead.
 #   * Bounded logging (10 MB × 3 files per service).
@@ -149,12 +154,13 @@ services:
       # modern Docker Engine support this.
       additional_contexts:
         examples: ./docs/examples
-    image: flowminer-backend:local
+    image: ghcr.io/flowminer-stack/flowminer-backend:${FLOWMINER_VERSION:-v0.1.0}
     restart: *restart_policy
     logging: *logging
     environment: *app_env
     volumes:
       - upload_data:/data/uploads
+      - backup_data:/data/backups
     expose:
       - "8000"
     depends_on:
@@ -187,12 +193,15 @@ services:
       # modern Docker Engine support this.
       additional_contexts:
         examples: ./docs/examples
-    image: flowminer-backend:local
+    image: ghcr.io/flowminer-stack/flowminer-backend:${FLOWMINER_VERSION:-v0.1.0}
     restart: *restart_policy
     logging: *logging
     environment: *app_env
     volumes:
       - upload_data:/data/uploads
+      # The nightly backup_database task runs in the worker and writes
+      # pg_dump custom-format files here (BACKUP_DIR=/data/backups).
+      - backup_data:/data/backups
     depends_on:
       db:
         condition: service_healthy
@@ -231,7 +240,7 @@ services:
       # modern Docker Engine support this.
       additional_contexts:
         examples: ./docs/examples
-    image: flowminer-backend:local
+    image: ghcr.io/flowminer-stack/flowminer-backend:${FLOWMINER_VERSION:-v0.1.0}
     restart: *restart_policy
     logging: *logging
     environment:
@@ -280,7 +289,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    image: flowminer-frontend:local
+    image: ghcr.io/flowminer-stack/flowminer-frontend:${FLOWMINER_VERSION:-v0.1.0}
     restart: *restart_policy
     logging: *logging
     expose:
@@ -312,6 +321,10 @@ volumes:
   redis_data:
     driver: local
   upload_data:
+    driver: local
+  # Database dumps from the nightly backup task — kept separate from
+  # upload_data so restoring one volume never clobbers the other.
+  backup_data:
     driver: local
 
 

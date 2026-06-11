@@ -9,8 +9,11 @@ from uuid import UUID
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.database import get_db
@@ -508,4 +511,147 @@ async def apply_timestamp_repair(
 
     return result
 
-    return event_log
+
+# ─── Data portability: raw download + XES export ───────────────────────────
+#
+# FlowMiner's anti-lock-in / sovereignty guarantee in practice: a user can
+# always get their own data back out, both verbatim (the original upload) and
+# in the IEEE-standard interchange format other process-mining tools ingest
+# (ProM, Fluxicon Disco, Apromore, Celonis, pm4py).
+
+
+def _build_xes_file(
+    file_path: str,
+    case_col: str,
+    activity_col: str,
+    timestamp_col: str,
+    resource_col: str | None,
+) -> str:
+    """Convert a standard event-log file to IEEE XES (1849-2016) and return the
+    path to a freshly-written temp .xes file.
+
+    Blocking (pandas + pm4py) — call via ``run_in_threadpool``. The caller is
+    responsible for deleting the returned temp file (we attach a BackgroundTask).
+    """
+    import tempfile
+
+    import pandas as pd
+    import pm4py
+
+    df = ingestion_service._load_raw_dataframe(
+        file_path, preserve_str_cols=[case_col, activity_col]
+    )
+    missing = [c for c in (case_col, activity_col, timestamp_col) if c not in df.columns]
+    if missing:
+        raise ValueError(f"Mapped columns not present in the file: {missing}")
+
+    # XES requires a real timestamp type for time:timestamp.
+    if not pd.api.types.is_datetime64_any_dtype(df[timestamp_col]):
+        df = df.copy()
+        df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors="coerce")
+
+    # Carry the resource through under the XES standard key so org:resource
+    # survives the round-trip into other tools.
+    if resource_col and resource_col in df.columns and resource_col != "org:resource":
+        df = df.rename(columns={resource_col: "org:resource"})
+
+    formatted = pm4py.format_dataframe(
+        df,
+        case_id=case_col,
+        activity_key=activity_col,
+        timestamp_key=timestamp_col,
+    )
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".xes")
+    os.close(fd)
+    pm4py.write_xes(formatted, tmp_path)
+    return tmp_path
+
+
+@router.get("/{event_log_id}/download")
+async def download_event_log(
+    event_log: EventLog = Depends(get_accessible_event_log),
+):
+    """Stream the ORIGINAL uploaded event-log file back to the caller, byte for
+    byte (the same CSV / XES / Parquet / OCEL the user uploaded).
+
+    This is the primitive behind data portability and GDPR Art. 20 — a user can
+    always retrieve their own data, in the exact form they provided it.
+    """
+    if not event_log.file_path or not os.path.exists(event_log.file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Event log file not found on disk",
+        )
+    filename = event_log.name or os.path.basename(event_log.file_path)
+    return FileResponse(
+        event_log.file_path,
+        filename=filename,
+        media_type="application/octet-stream",
+    )
+
+
+@router.get("/{event_log_id}/export/xes")
+async def export_event_log_xes(
+    event_log: EventLog = Depends(get_accessible_event_log),
+):
+    """Export a standard event log as IEEE XES (1849-2016) for import into ProM,
+    Fluxicon Disco, Apromore, Celonis, or pm4py.
+
+    Requires the case / activity / timestamp column mapping to be set. OCEL logs
+    are object-centric, not flat XES — download the original file via
+    ``/download`` (a dedicated OCEL 2.0 export is on the roadmap).
+    """
+    log_type = (
+        event_log.log_type.value
+        if hasattr(event_log.log_type, "value")
+        else str(event_log.log_type)
+    )
+    if log_type == "ocel":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OCEL logs are object-centric, not flat XES. Use the raw download endpoint.",
+        )
+    if not event_log.file_path or not os.path.exists(event_log.file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Event log file not found on disk",
+        )
+    if not (
+        event_log.case_id_column
+        and event_log.activity_column
+        and event_log.timestamp_column
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="XES export needs case ID, activity, and timestamp columns mapped first.",
+        )
+
+    try:
+        tmp_path = await run_in_threadpool(
+            _build_xes_file,
+            event_log.file_path,
+            event_log.case_id_column,
+            event_log.activity_column,
+            event_log.timestamp_column,
+            event_log.resource_column,
+        )
+    except Exception as e:
+        logger.exception("XES export failed for %s", event_log.id)
+        detail = (
+            "XES export failed"
+            if settings.ENV.lower() == "production"
+            else f"{type(e).__name__}: {str(e)[:200]}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=detail,
+        )
+
+    base = os.path.splitext(event_log.name or "event-log")[0]
+    return FileResponse(
+        tmp_path,
+        filename=f"{base}.xes",
+        media_type="application/xml",
+        background=BackgroundTask(os.remove, tmp_path),
+    )

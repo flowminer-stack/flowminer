@@ -18,15 +18,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Extract the semver portion of the tag (strips the leading "v").
-      # e.g. refs/tags/v0.1.0 → VERSION=0.1.0, IMAGE_TAG=v0.1.0
-      - name: Derive version
+      # Derive the version + the full set of image tags to publish.
+      #
+      # Channels (all v-prefixed so they match the docker-compose.yml
+      # reference `:${FLOWMINER_VERSION:-v0.1.0}`):
+      #   v0.1.0   exact, immutable          (always)
+      #   v0.1     latest patch of a minor   (stable releases only)
+      #   v0       latest of the 0.x series  (stable releases only)
+      #   stable   latest non-prerelease     (stable releases only)
+      #   latest   latest non-prerelease     (stable releases only)
+      #
+      # A prerelease tag (contains a hyphen, e.g. v0.2.0-rc1) publishes
+      # ONLY its exact tag, so it never moves the moving channels.
+      - name: Derive version + tags
         id: version
+        env:
+          OWNER: ${{ github.repository_owner }}
         run: |
-          RAW="${GITHUB_REF_NAME}"          # e.g. v0.1.0
+          RAW="${GITHUB_REF_NAME}"          # e.g. v0.1.0 or v0.2.0-rc1
           VERSION="${RAW#v}"                # strip leading v → 0.1.0
-          echo "version=${VERSION}"   >> "$GITHUB_OUTPUT"
-          echo "image_tag=${RAW}"     >> "$GITHUB_OUTPUT"
+          CORE="${VERSION%%-*}"             # strip prerelease → 0.1.0
+          MAJOR="${CORE%%.*}"               # 0
+          REST="${CORE#*.}"                 # 1.0
+          MINOR="${REST%%.*}"               # 1
+          PRERELEASE=""
+          case "$VERSION" in *-*) PRERELEASE="1";; esac
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${RAW}"   >> "$GITHUB_OUTPUT"
+
+          emit_tags() {
+            local image="ghcr.io/${OWNER}/$1"
+            echo "${image}:${RAW}"
+            if [ -z "$PRERELEASE" ]; then
+              echo "${image}:v${MAJOR}.${MINOR}"
+              echo "${image}:v${MAJOR}"
+              echo "${image}:stable"
+              echo "${image}:latest"
+            fi
+          }
+
+          {
+            echo "backend_tags<<EOF";  emit_tags flowminer-backend;  echo "EOF"
+            echo "frontend_tags<<EOF"; emit_tags flowminer-frontend; echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU (multi-arch emulation)
         uses: docker/setup-qemu-action@v3
@@ -51,9 +86,7 @@ jobs:
             examples=./docs/examples
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/flowminer-backend:${{ steps.version.outputs.image_tag }}
-            ghcr.io/${{ github.repository_owner }}/flowminer-backend:latest
+          tags: ${{ steps.version.outputs.backend_tags }}
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha,scope=backend
@@ -72,9 +105,7 @@ jobs:
           file: ./frontend/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/flowminer-frontend:${{ steps.version.outputs.image_tag }}
-            ghcr.io/${{ github.repository_owner }}/flowminer-frontend:latest
+          tags: ${{ steps.version.outputs.frontend_tags }}
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha,scope=frontend

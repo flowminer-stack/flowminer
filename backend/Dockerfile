@@ -61,10 +61,17 @@ RUN pip install --no-cache-dir maturin \
 # ─── Stage 2: runtime ──────────────────────────────────────────────
 FROM python:3.11.10-slim-bookworm AS runtime
 
+# Image version — threaded from the build context (release.yml passes
+# --build-arg VERSION=<tag>). Surfaced as FLOWMINER_VERSION so the app
+# config (app/config.py → APP_VERSION) reports the real release on
+# /health instead of a hardcoded constant. Defaults to "dev" for
+# source/compose builds that don't pass the arg.
+ARG VERSION=dev
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
-    PORT=8000
+    PORT=8000 \
+    FLOWMINER_VERSION=${VERSION}
 
 # Runtime-only system packages. libpq5 is the client library
 # psycopg2-binary links against. graphviz is used by pm4py to
@@ -73,17 +80,33 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # the slim Python image misses pgrep entirely and the healthcheck
 # exits 127, which Docker reports as "unhealthy" even though the
 # celery process is running fine.
+#
+# postgresql-client-16 ships pg_dump / pg_restore for the nightly
+# backup_database Celery task. It MUST match the Postgres *server*
+# major (16) — Debian bookworm's stock postgresql-client is 15, and
+# a v15 pg_dump aborts against a v16 server ("server version
+# mismatch"). So we add the official PGDG apt repo to pull the 16
+# client, then purge the repo-fetch tools to keep the runtime lean.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         graphviz \
         procps \
+        ca-certificates \
+        curl \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && apt-get purge -y --auto-remove curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1000 flowminer \
     && useradd --system --gid flowminer --uid 1000 \
         --create-home --home-dir /home/flowminer \
         --shell /usr/sbin/nologin flowminer \
-    && mkdir -p /data/uploads \
-    && chown -R flowminer:flowminer /data/uploads
+    && mkdir -p /data/uploads /data/backups \
+    && chown -R flowminer:flowminer /data/uploads /data/backups
 
 # Copy the installed venv from the builder stage.
 COPY --from=builder /opt/venv /opt/venv

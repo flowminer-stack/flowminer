@@ -13,11 +13,25 @@ FlowMiner uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **GHCR releases** — GitHub Actions workflow (`release.yml`) builds and pushes
   multi-arch (`linux/amd64`, `linux/arm64`) images to GHCR on every `v*` tag so
-  self-hosters can pull a pinned release instead of building from source.
+  self-hosters can pull a pinned release instead of building from source. Each
+  release publishes an immutable `vX.Y.Z` plus moving `vX.Y` / `vX` / `stable`
+  / `latest` channels; a prerelease (`-rc`/`-beta`) publishes only its exact tag.
 - **Pinned image tags in `docker-compose.yml`** — production compose now
-  references `ghcr.io/flowminer/backend:0.1.0` / `ghcr.io/flowminer/frontend:0.1.0`
-  rather than locally-built `:local` tags; a local-build override path is
-  preserved via `docker-compose.dev.yml`.
+  references `ghcr.io/flowminer-stack/flowminer-backend:${FLOWMINER_VERSION:-v0.1.0}`
+  / `ghcr.io/flowminer-stack/flowminer-frontend:${FLOWMINER_VERSION:-v0.1.0}`
+  rather than locally-built `:local` tags. The recommended self-host flow is
+  `docker compose pull && docker compose up -d`; the `build:` stanzas remain for
+  contributors building from source (see `docker-compose.dev.yml`).
+- **Image version surfaced on `/health`** — the running release tag is baked
+  into each image (`FLOWMINER_VERSION` build-arg) and reported by `/health`,
+  instead of a hardcoded constant that always read `0.1.0`.
+- **`pg_dump`-based backups now actually run** — the nightly `backup_database`
+  task uses `pg_dump -Fc` (custom format, `pg_restore`-compatible) into a
+  dedicated `backup_data` volume, and `postgresql-client-16` is now in the
+  backend image (previously the task silently no-op'd). Added `make backup` /
+  `make restore-test` and `python -m app.cli doctor`.
+- **Data portability / export** — raw event-log download and IEEE XES export
+  endpoints so users can take their data to other process-mining tools.
 - **CHANGELOG** — this file; Keep-a-Changelog format, updated on every release.
 - **Discrete-event simulation engine** (Simod-style) — simulate a discovered
   process model with configurable resource pools and arrival rates to predict
@@ -55,7 +69,7 @@ FlowMiner uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [0.1.0] — 2025-01-01
+## [0.1.0] — 2026-06-10
 
 Initial public release extracted from the internal monorepo.
 
@@ -75,5 +89,5 @@ Initial public release extracted from the internal monorepo.
 - SMTP alert hooks (optional).
 - Role-based access control with JWT authentication.
 
-[Unreleased]: https://github.com/flowminer/flowminer/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/flowminer/flowminer/releases/tag/v0.1.0
+[Unreleased]: https://github.com/flowminer-stack/flowminer/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/flowminer-stack/flowminer/releases/tag/v0.1.0

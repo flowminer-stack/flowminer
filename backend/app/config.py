@@ -1,7 +1,7 @@
 import warnings
 from typing import Annotated
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode
 
 
@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "/data/uploads"
     MAX_UPLOAD_SIZE: int = 500 * 1024 * 1024  # 500 MB
 
+    # Database backups — the nightly backup_database Celery task writes
+    # pg_dump custom-format files here. Kept separate from UPLOAD_DIR so a
+    # restore of one volume never clobbers the other (compose mounts the
+    # dedicated `backup_data` volume at this path).
+    BACKUP_DIR: str = "/data/backups"
+
     # CORS — NoDecode prevents pydantic-settings 2.x from trying to JSON-parse
     # the env value; our validator then splits the comma-separated form.
     CORS_ORIGINS: Annotated[list[str], NoDecode] = [
@@ -86,7 +92,13 @@ class Settings(BaseSettings):
 
     # Application metadata
     APP_NAME: str = "FlowMiner"
-    APP_VERSION: str = "0.1.0"
+    # Sourced from the FLOWMINER_VERSION env var, which the Docker images
+    # bake from the release tag (see backend/Dockerfile ARG VERSION). A
+    # *distinct* env name (not APP_VERSION) is deliberate: pydantic-settings
+    # would let a stale APP_VERSION line in a copied .env shadow the baked-in
+    # image value, so .env.example no longer ships one. Defaults to "dev"
+    # for source/compose builds that don't pass the build arg.
+    APP_VERSION: str = Field(default="dev", validation_alias="FLOWMINER_VERSION")
 
     # Demo mode — when on, the lifespan seeds a locked-down demo user +
     # preloaded event logs, exposes /api/v1/auth/demo for anonymous login,
