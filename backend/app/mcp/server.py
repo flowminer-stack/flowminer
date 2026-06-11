@@ -408,7 +408,7 @@ async def _tool_ask_natural_language(args: dict) -> list[TextContent]:
         f"Context for the event log the user is asking about:\n\n{context}\n\n"
         f"User question: {question}"
     )
-    text = llm.complete(_SYSTEM_PROMPT, user_prompt)
+    text = llm.complete(_SYSTEM_PROMPT, user_prompt, model=llm.model_for("chat"))
     return _text({"answer": text, "llm_configured": llm.is_llm_configured()})
 
 

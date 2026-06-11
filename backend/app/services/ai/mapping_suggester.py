@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 
 from app.services.ai import llm
@@ -51,7 +50,11 @@ _RESOURCE_HINTS = ("resource", "user", "owner", "assign", "agent", "clerk",
 
 
 def _mapping_model() -> str | None:
-    override = os.getenv("MAPPING_LLM_MODEL", "").strip()
+    # Column mapping is workload E: a tiny, cheap, structured classification.
+    # Honor the operator's override (system_settings ``llm.model.mapping`` or
+    # the back-compat ``MAPPING_LLM_MODEL`` env var) first, then fall back to a
+    # provider-appropriate cheap default.
+    override = llm.model_for("mapping")
     if override:
         return override
     return _MAPPING_MODEL_BY_PROVIDER.get(llm.current_provider())

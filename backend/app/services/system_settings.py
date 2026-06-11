@@ -27,7 +27,7 @@ Known keys
 ----------
 ``llm.provider``   — one of anthropic / openai / openrouter / ollama / null
 ``llm.api_key``    — the raw API key for the currently-selected provider
-``llm.model``      — provider-specific model name (e.g. ``anthropic/claude-haiku-4-5``)
+``llm.model``      — provider-specific model name (e.g. ``anthropic/claude-haiku-4.5``)
 ``llm.base_url``   — optional, used for OpenRouter / Azure / custom openai-compatible endpoints
 
 Keys that do not start with ``llm.`` are accepted but reserved for

@@ -5,7 +5,7 @@ Supports five providers and an auto-fallback order:
   2. ``openai``     — GPT via the openai SDK (Azure OpenAI also works)
   3. ``openrouter`` — OpenRouter aggregator (uses the openai SDK with a
                       custom base URL; any model name OpenRouter exposes
-                      is valid, e.g. ``anthropic/claude-haiku-4-5``,
+                      is valid, e.g. ``anthropic/claude-haiku-4.5``,
                       ``openai/gpt-4o-mini``, ``meta-llama/llama-3.1-70b``)
   4. ``ollama``     — local Ollama HTTP API (great for air-gapped)
   5. ``null``       — returns a templated response instead of calling an LLM
@@ -24,12 +24,23 @@ Environment variables:
   OPENAI_API_KEY           for the openai provider
   OPENAI_MODEL             e.g. gpt-4o-mini (default)
   OPENROUTER_API_KEY       for the openrouter provider
-  OPENROUTER_MODEL         e.g. anthropic/claude-haiku-4-5 (default)
+  OPENROUTER_MODEL         e.g. anthropic/claude-haiku-4.5 (default)
   OPENROUTER_SITE_URL      optional ``HTTP-Referer`` header OpenRouter shows
                            on its rankings page. Harmless if unset.
   OPENROUTER_APP_NAME      optional ``X-Title`` header same purpose
   OLLAMA_HOST              e.g. http://localhost:11434 (default)
   OLLAMA_MODEL             e.g. llama3.1 (default)
+
+Per-workload model overrides (optional — each falls back to the base model
+above when unset, so the default install is unchanged). They let the cheap /
+strong tiers be split per feature without changing the default chat model —
+e.g. a stronger model for code generation, a cheap nano for column-mapping:
+  FLOWMINER_LLM_MODEL_CHAT     chat + agent loop (workload A/B); defaults to base
+  FLOWMINER_LLM_MODEL_CODE     code-gen: extract-copilot SQL, text-to-BPMN (C)
+  FLOWMINER_LLM_MODEL_WRITING  grounded writing: narrate, explain-variant (D)
+  MAPPING_LLM_MODEL            column-mapping classification (E); cheap/nano
+Each also has a system_settings key (llm.model.chat / .code / .writing /
+.mapping) that wins over the env var, so the Settings UI can override them.
 """
 
 from __future__ import annotations
@@ -244,13 +255,60 @@ def _model(provider: str | None = None) -> str:
     env_key_map = {
         "anthropic": ("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         "openai": ("OPENAI_MODEL", "gpt-4o-mini"),
-        "openrouter": ("OPENROUTER_MODEL", "anthropic/claude-haiku-4-5"),
+        "openrouter": ("OPENROUTER_MODEL", "anthropic/claude-haiku-4.5"),
         "ollama": ("OLLAMA_MODEL", "llama3.1"),
     }
     env_key, default = env_key_map.get(provider, (None, ""))
     if env_key:
         return os.getenv(env_key, default)
     return default
+
+
+# Per-workload model routing. Each task maps to a (system_settings key, env var)
+# pair; resolution order is DB → env → None. ``None`` means "no override" so the
+# caller uses the base ``_model()``. This is how the cheap/strong split is wired
+# without changing the default model: e.g. point ``code`` at a strong coder and
+# ``mapping`` at a cheap nano while chat stays on the base workhorse.
+_TASK_MODEL_SETTING: dict[str, tuple[str, str]] = {
+    "chat": ("llm.model.chat", "FLOWMINER_LLM_MODEL_CHAT"),
+    "code": ("llm.model.code", "FLOWMINER_LLM_MODEL_CODE"),
+    "writing": ("llm.model.writing", "FLOWMINER_LLM_MODEL_WRITING"),
+    "mapping": ("llm.model.mapping", "MAPPING_LLM_MODEL"),
+}
+
+
+def model_for(task: str | None = None) -> str | None:
+    """Resolve the model override for a workload class, or ``None`` to use the
+    base configured model.
+
+    ``task`` is one of ``chat`` / ``code`` / ``writing`` / ``mapping`` (see
+    :data:`_TASK_MODEL_SETTING`). Returns the override model id when the operator
+    has set one (system_settings row first, then env var), else ``None`` so the
+    call site falls back to the base ``_model()``. Unknown / empty tasks return
+    ``None``. Safe to call on every request — the DB read is the same cached
+    lookup the rest of config resolution uses.
+    """
+    keys = _TASK_MODEL_SETTING.get(task or "")
+    if not keys:
+        return None
+    setting_key, env_key = keys
+    db_val = _from_system_settings(setting_key)
+    if db_val:
+        return str(db_val)
+    env_val = os.getenv(env_key, "").strip()
+    return env_val or None
+
+
+# OpenRouter provider-routing preference. ``require_parameters`` makes OpenRouter
+# only route to upstream providers that support every parameter we send (tools,
+# stream_options, response_format, …) — so a tool-call or structured request is
+# never silently downgraded to a provider that ignores it. Scoped to the
+# OpenRouter paths only; passing it to the real OpenAI API would be rejected.
+_OPENROUTER_PROVIDER_PREFS: dict = {"require_parameters": True}
+
+
+def _openrouter_extra_body() -> dict:
+    return {"provider": dict(_OPENROUTER_PROVIDER_PREFS)}
 
 
 def is_llm_configured() -> bool:
@@ -285,35 +343,40 @@ def complete(
 ) -> str:
     """Synchronous single-shot completion. Returns the model's text.
 
-    ``model`` optionally overrides the configured model for the openai /
-    openrouter providers (e.g. force a cheap ``gpt-4.1-nano`` for a small
-    structured-extraction call regardless of the app's main LLM model). It is
-    ignored for anthropic / ollama, whose configured model is used.
+    ``model`` optionally overrides the configured model for this one call (e.g.
+    force a cheap ``gpt-4.1-nano`` for a small structured-extraction task, or a
+    stronger coder for SQL generation, regardless of the app's main LLM model).
+    Use :func:`model_for` to resolve a per-workload override. Honored on every
+    provider; the value must be an id valid for the configured provider (an
+    OpenRouter slug for openrouter, a bare model id for anthropic / openai /
+    ollama). ``None`` uses the base configured model.
     """
     p = _provider()
     if p == "null" or not is_llm_configured():
         return _null_complete(system, user)
     try:
         if p == "anthropic":
-            return _anthropic_complete(system, user, temperature=temperature)
+            return _anthropic_complete(system, user, temperature=temperature, model=model)
         if p == "openai":
             return _openai_complete(system, user, temperature=temperature, model=model)
         if p == "openrouter":
             return _openrouter_complete(system, user, temperature=temperature, model=model)
         if p == "ollama":
-            return _ollama_complete(system, user, temperature=temperature)
+            return _ollama_complete(system, user, temperature=temperature, model=model)
     except Exception as e:
         logger.warning("LLM provider %s failed (%s) — falling back to null provider", p, e)
     return _null_complete(system, user)
 
 
-def _anthropic_complete(system: str, user: str, temperature: float) -> str:
+def _anthropic_complete(
+    system: str, user: str, temperature: float, model: str | None = None
+) -> str:
     try:
         import anthropic
     except ImportError as e:
         raise LLMError("anthropic SDK not installed") from e
 
-    model = _model("anthropic")
+    model = model or _model("anthropic")
     client = anthropic.Anthropic(api_key=_api_key("anthropic"))
     msg = client.messages.create(
         model=model,
@@ -381,14 +444,17 @@ def _openrouter_complete(
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
+        extra_body=_openrouter_extra_body(),
     )
     _record_token_usage(_extract_total_tokens(getattr(resp, "usage", None)))
     return resp.choices[0].message.content or ""
 
 
-def _ollama_complete(system: str, user: str, temperature: float) -> str:
+def _ollama_complete(
+    system: str, user: str, temperature: float, model: str | None = None
+) -> str:
     host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-    model = os.getenv("OLLAMA_MODEL", "llama3.1")
+    model = model or os.getenv("OLLAMA_MODEL", "llama3.1")
     with httpx.Client(timeout=120.0) as client:
         resp = client.post(
             f"{host}/api/chat",
@@ -429,11 +495,14 @@ def _null_complete(system: str, user: str) -> str:
 # ─── Streaming completion (for chat UI) ──────────────────────────────────
 
 
-async def stream(system: str, user: str, *, temperature: float = 0.2) -> AsyncIterator[str]:
+async def stream(
+    system: str, user: str, *, temperature: float = 0.2, model: str | None = None
+) -> AsyncIterator[str]:
     """Async generator yielding text chunks as the model produces them.
 
-    Falls back to yielding the full null-provider response in a single
-    chunk if streaming isn't available.
+    ``model`` optionally overrides the configured model for this call (see
+    :func:`complete`). Falls back to yielding the full null-provider response
+    in a single chunk if streaming isn't available.
     """
     p = _provider()
     if p == "null" or not is_llm_configured():
@@ -442,19 +511,19 @@ async def stream(system: str, user: str, *, temperature: float = 0.2) -> AsyncIt
 
     try:
         if p == "anthropic":
-            async for chunk in _anthropic_stream(system, user, temperature):
+            async for chunk in _anthropic_stream(system, user, temperature, model):
                 yield chunk
             return
         if p == "openai":
-            async for chunk in _openai_stream(system, user, temperature):
+            async for chunk in _openai_stream(system, user, temperature, model):
                 yield chunk
             return
         if p == "openrouter":
-            async for chunk in _openrouter_stream(system, user, temperature):
+            async for chunk in _openrouter_stream(system, user, temperature, model):
                 yield chunk
             return
         if p == "ollama":
-            async for chunk in _ollama_stream(system, user, temperature):
+            async for chunk in _ollama_stream(system, user, temperature, model):
                 yield chunk
             return
     except Exception as e:
@@ -462,13 +531,15 @@ async def stream(system: str, user: str, *, temperature: float = 0.2) -> AsyncIt
     yield _null_complete(system, user)
 
 
-async def _anthropic_stream(system: str, user: str, temperature: float) -> AsyncIterator[str]:
+async def _anthropic_stream(
+    system: str, user: str, temperature: float, model: str | None = None
+) -> AsyncIterator[str]:
     try:
         import anthropic
     except ImportError:
         yield _null_complete(system, user)
         return
-    model = _model("anthropic")
+    model = model or _model("anthropic")
     client = anthropic.AsyncAnthropic(api_key=_api_key("anthropic"))
     async with client.messages.stream(
         model=model,
@@ -486,13 +557,15 @@ async def _anthropic_stream(system: str, user: str, temperature: float) -> Async
             logger.debug("anthropic stream usage capture failed: %s", e)
 
 
-async def _openai_stream(system: str, user: str, temperature: float) -> AsyncIterator[str]:
+async def _openai_stream(
+    system: str, user: str, temperature: float, model: str | None = None
+) -> AsyncIterator[str]:
     try:
         from openai import AsyncOpenAI
     except ImportError:
         yield _null_complete(system, user)
         return
-    model = _model("openai")
+    model = model or _model("openai")
     client = AsyncOpenAI(api_key=_api_key("openai"))
     stream = await client.chat.completions.create(
         model=model,
@@ -514,14 +587,16 @@ async def _openai_stream(system: str, user: str, temperature: float) -> AsyncIte
             yield delta
 
 
-async def _openrouter_stream(system: str, user: str, temperature: float) -> AsyncIterator[str]:
+async def _openrouter_stream(
+    system: str, user: str, temperature: float, model: str | None = None
+) -> AsyncIterator[str]:
     """Streaming via the openai SDK pointed at OpenRouter."""
     try:
         from openai import AsyncOpenAI
     except ImportError:
         yield _null_complete(system, user)
         return
-    model = _model("openrouter")
+    model = model or _model("openrouter")
     client = AsyncOpenAI(
         api_key=_api_key("openrouter"),
         base_url="https://openrouter.ai/api/v1",
@@ -536,6 +611,7 @@ async def _openrouter_stream(system: str, user: str, temperature: float) -> Asyn
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
+        extra_body=_openrouter_extra_body(),
     )
     async for chunk in stream:
         if getattr(chunk, "usage", None):
@@ -545,9 +621,11 @@ async def _openrouter_stream(system: str, user: str, temperature: float) -> Asyn
             yield delta
 
 
-async def _ollama_stream(system: str, user: str, temperature: float) -> AsyncIterator[str]:
+async def _ollama_stream(
+    system: str, user: str, temperature: float, model: str | None = None
+) -> AsyncIterator[str]:
     host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-    model = os.getenv("OLLAMA_MODEL", "llama3.1")
+    model = model or os.getenv("OLLAMA_MODEL", "llama3.1")
     async with httpx.AsyncClient(timeout=120.0) as client:
         async with client.stream(
             "POST",
@@ -619,12 +697,15 @@ def call_with_tools(
     temperature: float = 0.2,
     max_turns: int = 5,
     tool_runner=None,
+    model: str | None = None,
 ) -> dict:
     """Run an agent loop with tool use (synchronous, provider-agnostic).
 
     ``tools`` is a list of tool schemas in Anthropic's tool-use format
     (name, description, input_schema). ``tool_runner`` is a function
     ``(name, args) -> result_dict`` that actually executes the tool.
+    ``model`` optionally overrides the configured model for this run (see
+    :func:`complete`).
 
     Routes to the Anthropic Messages tool-use API for the anthropic
     provider, and to the OpenAI-compatible function-calling API for the
@@ -646,11 +727,13 @@ def call_with_tools(
         return _anthropic_call_with_tools(
             system, user, tools,
             temperature=temperature, max_turns=max_turns, tool_runner=tool_runner,
+            model=model,
         )
     if p in ("openai", "openrouter"):
         return _openai_call_with_tools(
             system, user, tools,
             temperature=temperature, max_turns=max_turns, tool_runner=tool_runner,
+            model=model,
         )
 
     # ollama / anything else: no server-side tool loop available.
@@ -674,6 +757,7 @@ def _anthropic_call_with_tools(
     temperature: float,
     max_turns: int,
     tool_runner,
+    model: str | None = None,
 ) -> dict:
     p = "anthropic"
     try:
@@ -681,7 +765,7 @@ def _anthropic_call_with_tools(
     except ImportError:
         return {"text": _null_complete(system, user), "tool_calls": [], "turns": 0, "provider": p}
 
-    model = _model("anthropic")
+    model = model or _model("anthropic")
     client = anthropic.Anthropic(api_key=_api_key("anthropic"))
 
     messages = [{"role": "user", "content": user}]
@@ -749,6 +833,7 @@ def _openai_call_with_tools(
     temperature: float,
     max_turns: int,
     tool_runner,
+    model: str | None = None,
 ) -> dict:
     """Synchronous OpenAI-style function-calling agent loop.
 
@@ -765,14 +850,16 @@ def _openai_call_with_tools(
 
     if p == "openai":
         client = OpenAI(api_key=_api_key("openai"))
-        model = _model("openai")
+        model = model or _model("openai")
+        extra_body = None
     else:  # openrouter
         client = OpenAI(
             api_key=_api_key("openrouter"),
             base_url="https://openrouter.ai/api/v1",
             default_headers=_openrouter_default_headers() or None,
         )
-        model = _model("openrouter")
+        model = model or _model("openrouter")
+        extra_body = _openrouter_extra_body()
 
     oai_tools = _anthropic_tools_to_openai(tools)
     messages: list[dict] = [
@@ -787,6 +874,7 @@ def _openai_call_with_tools(
             temperature=temperature,
             tools=oai_tools,
             messages=messages,
+            extra_body=extra_body,
         )
         _record_token_usage(_extract_total_tokens(getattr(resp, "usage", None)))
 
@@ -882,6 +970,7 @@ async def stream_with_tools(
     *,
     temperature: float = 0.2,
     max_turns: int = 5,
+    model: str | None = None,
 ):
     """Async generator that runs a tool-use loop while streaming.
 
@@ -925,14 +1014,16 @@ async def stream_with_tools(
 
     if p == "openai":
         client = AsyncOpenAI(api_key=_api_key("openai"))
-        model = _model("openai")
+        model = model or _model("openai")
+        extra_body = None
     else:  # openrouter
         client = AsyncOpenAI(
             api_key=_api_key("openrouter"),
             base_url="https://openrouter.ai/api/v1",
             default_headers=_openrouter_default_headers() or None,
         )
-        model = _model("openrouter")
+        model = model or _model("openrouter")
+        extra_body = _openrouter_extra_body()
 
     messages: list[dict] = [
         {"role": "system", "content": system},
@@ -947,6 +1038,7 @@ async def stream_with_tools(
             messages=messages,
             stream=True,
             stream_options={"include_usage": True},
+            extra_body=extra_body,
         )
 
         # Assemble the response as it streams in. Text chunks flow

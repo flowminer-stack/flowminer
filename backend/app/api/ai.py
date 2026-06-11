@@ -316,13 +316,18 @@ async def ai_chat(
         f"User question: {body.question}"
     )
 
+    # Chat + agent loop is workload A — route to the chat/agent workhorse
+    # model if the operator configured one (else the base model). Resolved
+    # once here and reused across the stream / non-stream paths below.
+    chat_model = llm.model_for("chat")
+
     if not body.stream:
         with llm.usage_context(
             user=current_user,
             resource_id=str(body.event_log_id),
             resource_type="event_log",
         ):
-            text = llm.complete(_SYSTEM_PROMPT, user_prompt)
+            text = llm.complete(_SYSTEM_PROMPT, user_prompt, model=chat_model)
         return {"answer": text, "llm_configured": llm.is_llm_configured()}
 
     # For tool use the user prompt stays the same, but we beef up the
@@ -415,6 +420,7 @@ async def ai_chat(
                     _tool_runner,
                     temperature=0.2,
                     max_turns=5,
+                    model=chat_model,
                 ):
                     kind = event.get("kind")
                     if kind == "text":
@@ -454,7 +460,9 @@ async def ai_chat(
             resource_type="event_log",
         ):
             try:
-                async for chunk in llm.stream(_SYSTEM_PROMPT, user_prompt):
+                async for chunk in llm.stream(
+                    _SYSTEM_PROMPT, user_prompt, model=chat_model
+                ):
                     yield json.dumps({"type": "chunk", "text": chunk}) + "\n"
                 yield json.dumps({"type": "done"}) + "\n"
             except Exception as e:
@@ -719,7 +727,8 @@ async def ai_narrate(
         resource_id=str(event_log_id),
         resource_type="event_log",
     ):
-        text = llm.complete(system, user_prompt)
+        # Report narration is grounded writing (workload D).
+        text = llm.complete(system, user_prompt, model=llm.model_for("writing"))
     return {"markdown": text, "llm_configured": llm.is_llm_configured()}
 
 
@@ -781,7 +790,10 @@ async def ai_suggest_best_practice(
         resource_id=str(event_log_id),
         resource_type="event_log",
     ):
-        text = llm.complete(system, user_prompt, temperature=0.1)
+        # Best-practice ranking returns structured JSON (workload B): chat model.
+        text = llm.complete(
+            system, user_prompt, temperature=0.1, model=llm.model_for("chat")
+        )
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:

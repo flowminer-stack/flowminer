@@ -74,7 +74,11 @@ async def ai_text_to_bpmn(
         "include the bpmndi diagram section so the result is renderable."
     )
     with llm.usage_context(user=_current_user, resource_type=None):
-        xml = llm.complete(sys_prompt, body.description, temperature=0.1)
+        # Code-gen workload (C): route to the configured code model if set.
+        xml = llm.complete(
+            sys_prompt, body.description, temperature=0.1,
+            model=llm.model_for("code"),
+        )
 
     # Strip markdown fences if the model wrapped the output
     stripped = xml.strip()
@@ -218,6 +222,8 @@ async def ai_agent_run(
             temperature=0.2,
             max_turns=5,
             tool_runner=_tool_runner,
+            # Agent loop (workload A): the chat/agent workhorse model.
+            model=llm.model_for("chat"),
         )
     return result
 
@@ -518,8 +524,10 @@ async def ai_explain_variant(
         resource_id=str(body.event_log_id),
         resource_type="event_log",
     ):
+        # Grounded writing workload (D): route to the writing model if set.
         text = await _asyncio.to_thread(
-            llm.complete, system, user_prompt, temperature=0.2
+            llm.complete, system, user_prompt,
+            temperature=0.2, model=llm.model_for("writing"),
         )
 
     return ExplainVariantResponse(
@@ -680,8 +688,10 @@ async def ai_explain(
 
     try:
         with llm.usage_context(user=current_user, resource_type=None):
+            # Inline explain is structured JSON (workload B): same model as chat.
             raw = await _asyncio.to_thread(
-                llm.complete, _EXPLAIN_SYSTEM, user_prompt, temperature=0.2
+                llm.complete, _EXPLAIN_SYSTEM, user_prompt,
+                temperature=0.2, model=llm.model_for("chat"),
             )
     except Exception as e:
         logger.warning("ai_explain: LLM call failed for kind=%s: %s", kind, e)
@@ -882,11 +892,13 @@ async def ai_extract_log(
     # Call the LLM in a thread (complete() is synchronous)
     try:
         with llm.usage_context(user=_current_user, resource_type=None):
+            # Extraction copilot emits SQL/pandas (workload C): code model.
             raw = await _asyncio.to_thread(
                 llm.complete,
                 _EXTRACT_SYSTEM_PROMPT,
                 full_user_msg,
                 temperature=0.2,
+                model=llm.model_for("code"),
             )
     except Exception as e:
         logger.warning("extract-log LLM call failed: %s", e)
