@@ -48,6 +48,11 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 
+class ActivateRequest(BaseModel):
+    token: str = Field(..., description="Raw single-use activation token from the email link")
+    password: str = Field(..., min_length=1, description="Password to set (policy enforced server-side)")
+
+
 class TokenPayload(BaseModel):
     sub: str
     exp: int

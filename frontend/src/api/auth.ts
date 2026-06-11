@@ -19,6 +19,14 @@ export const auth = {
     return response.data;
   },
 
+  // Activate a pending account (e.g. the bootstrap admin) via the emailed
+  // single-use token, setting the initial password. Returns a JWT so the SPA
+  // can sign the user straight in.
+  activate: async (token: string, password: string): Promise<Token> => {
+    const response = await api.post<Token>('/auth/activate', { token, password });
+    return response.data;
+  },
+
   getMe: async (): Promise<User> => {
     const response = await api.get<User>('/auth/me');
     return response.data;

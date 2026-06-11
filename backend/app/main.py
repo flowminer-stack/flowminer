@@ -61,6 +61,18 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("sample-data seed failed — continuing anyway")
 
+    # Bootstrap-admin-from-env (idempotent). Creates the first admin in a
+    # pending state when FLOWMINER_BOOTSTRAP_ADMIN_EMAIL/_TOKEN_HASH are set and
+    # no admin exists. Best-effort: a failure here never blocks startup.
+    try:
+        from app.database import async_session
+        from app.services.bootstrap_admin import bootstrap_admin_from_env
+
+        async with async_session() as session:
+            await bootstrap_admin_from_env(session)
+    except Exception:
+        logger.exception("bootstrap-admin failed — continuing anyway")
+
     yield
     # Shutdown (cleanup if needed)
 
@@ -148,6 +160,7 @@ app.add_middleware(SlowAPIMiddleware)
 
 _routers: list[tuple[str, str, list[str]]] = [
     ("app.api.auth", "/api/v1/auth", ["auth"]),
+    ("app.api.system", "/api/v1/system", ["system"]),
     ("app.api.users", "/api/v1/users", ["users"]),
     ("app.api.projects", "/api/v1/projects", ["projects"]),
     ("app.api.event_logs", "/api/v1/event-logs", ["event-logs"]),

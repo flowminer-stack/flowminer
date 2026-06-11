@@ -119,6 +119,20 @@ class Settings(BaseSettings):
     # longer needed.
     SEED_SAMPLE_DATA_ON_FIRST_BOOT: bool = False
 
+    # Bootstrap-admin-from-env. When BOOTSTRAP_ADMIN_EMAIL and
+    # BOOTSTRAP_TOKEN_HASH are both set and no admin user exists yet, the
+    # lifespan creates that admin in a *pending* state (inactive, unverified)
+    # with the supplied single-use activation-token hash. The operator (or the
+    # managed-cloud control plane) holds the raw token and emails the
+    # /activate?token=… link. Only the hash is ever read here — never logged.
+    # This replaces the old "register-then-promote-via-SQL" bootstrap and the
+    # (false) docs claim of a seeded admin@flowminer.io/admin account.
+    BOOTSTRAP_ADMIN_EMAIL: str = Field(default="", validation_alias="FLOWMINER_BOOTSTRAP_ADMIN_EMAIL")
+    BOOTSTRAP_TOKEN_HASH: str = Field(default="", validation_alias="FLOWMINER_BOOTSTRAP_TOKEN_HASH")
+    BOOTSTRAP_TOKEN_EXPIRES_HOURS: int = Field(
+        default=168, validation_alias="FLOWMINER_BOOTSTRAP_TOKEN_EXPIRES_HOURS"
+    )
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

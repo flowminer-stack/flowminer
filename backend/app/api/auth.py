@@ -1,7 +1,9 @@
 """
-Authentication router: registration, login, and current-user retrieval.
+Authentication router: registration, login, activation, and current-user retrieval.
 """
 
+import hashlib
+import hmac
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -14,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import User, UserRole
-from app.schemas.user import Token, UserCreate, UserLogin, UserResponse
+from app.schemas.user import ActivateRequest, Token, UserCreate, UserLogin, UserResponse
 from app.api.deps import create_access_token, get_current_active_user, oauth2_scheme
 from app.services.infra.password_policy import assert_strong_password
 from app.services.infra.rate_limit import limiter
@@ -83,6 +85,56 @@ async def register(
     await db.refresh(user)
 
     return user
+
+
+@router.post("/activate", response_model=Token)
+@limiter.limit("5/minute")
+async def activate(
+    request: Request,
+    body: ActivateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Activate a pending account via a single-use, expiring token.
+
+    Created by the bootstrap-admin-from-env flow (or any operator who sets a
+    user's activation_token_hash). Validates the token, enforces the password
+    policy, sets the password, marks the user active + verified, burns the
+    token, and returns a JWT so the SPA can sign the user straight in.
+    """
+    token_hash = hashlib.sha256(body.token.encode()).hexdigest()
+    result = await db.execute(
+        select(User).where(User.activation_token_hash == token_hash)
+    )
+    user = result.scalar_one_or_none()
+
+    invalid = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Invalid or expired activation link.",
+    )
+    # Lookup is by hash; the constant-time compare is defense-in-depth.
+    if user is None or not user.activation_token_hash or not hmac.compare_digest(
+        user.activation_token_hash, token_hash
+    ):
+        raise invalid
+
+    expires = user.activation_token_expires_at
+    if expires is None:
+        raise invalid
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires <= datetime.now(timezone.utc):
+        raise invalid
+
+    assert_strong_password(body.password, hint_fields=(user.email, user.full_name))
+
+    user.password_hash = _hash_password(body.password)
+    user.is_active = True
+    user.email_verified = True
+    user.activation_token_hash = None  # single-use
+    user.activation_token_expires_at = None
+    await db.commit()
+
+    return Token(access_token=create_access_token({"sub": str(user.id)}))
 
 
 @router.post("/login", response_model=Token)

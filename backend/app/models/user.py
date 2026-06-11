@@ -30,6 +30,12 @@ class User(Base):
     # Whether the user has completed email verification. Default True so
     # existing accounts don't get locked out by the new flow.
     email_verified = Column(Boolean, default=True, nullable=False, server_default="true")
+    # Pending-activation support (managed-cloud bootstrap + self-host operators):
+    # a user can be created inactive with a hashed, single-use, expiring
+    # activation token. POST /auth/activate sets the password and clears these.
+    # Only the SHA-256 hash of the raw token is ever stored.
+    activation_token_hash = Column(String, nullable=True, index=True)
+    activation_token_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

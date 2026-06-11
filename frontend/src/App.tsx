@@ -9,6 +9,7 @@ import LoadingSpinner from '@/components/common/LoadingSpinner';
 // Login / onboarding stay eager (small, used on first paint).
 import LoginPage from '@/pages/LoginPage';
 import RegisterPage from '@/pages/RegisterPage';
+import ActivatePage from '@/pages/ActivatePage';
 
 const ProjectsPage = lazy(() => import('@/pages/ProjectsPage'));
 const ProjectDetailPage = lazy(() => import('@/pages/ProjectDetailPage'));
@@ -201,6 +202,9 @@ export default function App() {
             </PublicRoute>
           }
         />
+
+        {/* Account activation via emailed token (works signed in or out) */}
+        <Route path="/activate" element={<ActivatePage />} />
 
         {/* Shared dashboard (public access) */}
         <Route path="/dashboards/shared/:shareToken" element={<SharedDashboardPage />} />
